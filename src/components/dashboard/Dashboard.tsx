@@ -63,54 +63,60 @@ const mockDiffs = [
   }
 ];
 
+// Define the allowed test result status values
+type TestStatus = 'pass' | 'fail';
+
 const mockTestResults = [
   {
     name: 'LoginButton.test.tsx - renders correctly',
-    status: 'pass' as const,
+    status: 'pass' as TestStatus,
     duration: 45
   },
   {
     name: 'LoginButton.test.tsx - opens modal on click',
-    status: 'pass' as const,
+    status: 'pass' as TestStatus,
     duration: 62
   },
   {
     name: 'LoginModal.test.tsx - handles form submission',
-    status: 'pass' as const,
+    status: 'pass' as TestStatus,
     duration: 78
   }
 ];
+
+// Define the allowed update types
+type UpdateType = 'jira' | 'github' | 'system';
 
 const mockUpdates = [
   {
     timestamp: '2025-04-25T14:30:15Z',
     message: 'Updated JIRA ticket DEMO-123 status to "In Progress"',
-    type: 'jira'
+    type: 'jira' as UpdateType
   },
   {
     timestamp: '2025-04-25T14:32:45Z',
     message: 'Created branch fix/DEMO-123-safari-login-button',
-    type: 'github'
+    type: 'github' as UpdateType
   },
   {
     timestamp: '2025-04-25T14:35:12Z',
     message: 'Committed changes: Fix Safari compatibility issue in LoginButton',
-    type: 'github'
+    type: 'github' as UpdateType
   },
   {
     timestamp: '2025-04-25T14:36:30Z',
     message: 'Created pull request #45: Fix Safari login button issue (DEMO-123)',
-    type: 'github'
+    type: 'github' as UpdateType
   },
   {
     timestamp: '2025-04-25T14:37:05Z',
     message: 'Added comment to DEMO-123 with PR link and fix description',
-    type: 'jira'
+    type: 'jira' as UpdateType
   },
   {
     timestamp: '2025-04-25T14:37:30Z',
     message: 'Updated JIRA ticket DEMO-123 status to "Fixed"',
-    type: 'jira'
+    type: 'jira' as UpdateType
   }
 ];
 
