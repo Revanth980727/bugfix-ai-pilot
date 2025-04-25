@@ -1,10 +1,13 @@
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import logging
 import os
 from datetime import datetime
+from env import verify_env_vars, GITHUB_TOKEN, JIRA_TOKEN, JIRA_USER, JIRA_URL
+
+# Verify environment variables on startup
+verify_env_vars()
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +39,11 @@ active_tickets = {}
 
 @app.get("/")
 async def root():
-    return {"message": "BugFix AI Pilot API is running"}
+    return {
+        "message": "BugFix AI Pilot API is running",
+        "github_configured": bool(GITHUB_TOKEN),
+        "jira_configured": all([JIRA_TOKEN, JIRA_USER, JIRA_URL])
+    }
 
 @app.post("/tickets/process")
 async def process_ticket(request: TicketRequest):
