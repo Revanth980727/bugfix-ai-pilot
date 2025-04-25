@@ -3,43 +3,36 @@
 
 An autonomous AI tool that fixes bugs in your codebase by analyzing JIRA tickets and generating code fixes.
 
-## Architecture
+## Prerequisites
 
-BugFix AI Pilot consists of four specialized AI agents:
+Before running this application, you'll need:
 
-1. **Planner Agent**: Analyzes JIRA tickets and identifies affected code areas
-2. **Developer Agent**: Generates code fixes using GPT-4
-3. **QA Agent**: Runs tests to validate the fixes
-4. **Communicator Agent**: Updates JIRA tickets and creates GitHub PRs
-
-## Features
-
-- Runs entirely locally via Docker Compose
-- Connects to JIRA Cloud or Server
-- Uses GPT-4 via OpenAI API
-- Creates GitHub pull requests with fixes
-- Retries failed fixes up to 4 times
-- Escalates to human review when necessary
+1. A [Supabase](https://supabase.com) account (free tier works)
+2. JIRA API credentials (API token and domain)
+3. GitHub personal access token
+4. OpenAI API key
 
 ## Setup Instructions
 
 1. Clone this repository:
-   ```
+   ```bash
    git clone https://github.com/yourusername/bugfix-ai-pilot.git
    cd bugfix-ai-pilot
    ```
 
-2. Create a `.env` file with your API credentials:
-   ```
-   OPENAI_API_KEY=your_openai_key_here
-   JIRA_API_TOKEN=your_jira_api_token
-   JIRA_USER=your_jira_email
-   JIRA_URL=https://your-company.atlassian.net
-   GITHUB_TOKEN=your_github_personal_access_token
-   ```
+2. Connect to Supabase:
+   - Create a new Supabase project
+   - Click the green Supabase button in your Lovable project
+   - Follow the connection process
+   - Store your API credentials in Supabase secrets:
+     - OPENAI_API_KEY
+     - JIRA_API_TOKEN
+     - JIRA_USER
+     - JIRA_URL
+     - GITHUB_TOKEN
 
-3. Start the containers:
-   ```
+3. Start the application:
+   ```bash
    docker-compose up -d
    ```
 
@@ -47,29 +40,55 @@ BugFix AI Pilot consists of four specialized AI agents:
 
 ## Development
 
-### Frontend
+### Frontend (React + TypeScript)
 
-The frontend is built with React and can be run separately for development:
-
-```
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-### Backend
+### Backend (Python + FastAPI)
 
-The backend and agent services are built with Python and can be run separately:
-
-```
+```bash
 cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-## Extending the System
+### Agent Services
 
-To add support for additional testing frameworks or version control systems, check the extension guides in the documentation.
+Each agent (Planner, Developer, QA, Communicator) runs in its own container:
+
+```bash
+docker-compose up planner developer qa communicator
+```
+
+## Architecture
+
+The application consists of:
+
+1. Frontend: React + TypeScript dashboard
+2. Backend: FastAPI server coordinating agents
+3. Agent Services:
+   - Planner: Analyzes JIRA tickets
+   - Developer: Generates fixes
+   - QA: Validates changes
+   - Communicator: Updates JIRA/GitHub
+
+## Security Notes
+
+- Never commit API keys or secrets to the repository
+- Use Supabase to manage all sensitive credentials
+- Enable appropriate access controls in JIRA and GitHub
+
+## Troubleshooting
+
+If you encounter issues:
+1. Check Supabase connection status
+2. Verify API credentials in Supabase secrets
+3. Check Docker container logs
+4. Ensure all required ports are available
 
 ## License
 
