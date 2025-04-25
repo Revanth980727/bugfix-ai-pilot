@@ -24,25 +24,40 @@ Before running this application, you'll need:
    cd bugfix-ai-pilot
    ```
 
-2. Install dependencies:
+2. Set up your environment variables:
    ```bash
+   cd backend
+   cp .env.example .env
+   ```
+   Edit the `.env` file with your API credentials:
+   - `GITHUB_TOKEN`: Your GitHub personal access token
+   - `JIRA_TOKEN`: Your JIRA API token
+   - `JIRA_USER`: Your JIRA email address
+   - `JIRA_URL`: Your JIRA instance URL
+
+3. Install dependencies:
+   ```bash
+   # Backend
+   cd backend
+   pip install -r requirements.txt
+   
+   # Frontend
+   cd ../
    npm install
    ```
 
-3. Start the application:
+4. Start the application:
    ```bash
+   # Start the backend
+   cd backend
+   uvicorn main:app --reload
+   
+   # In another terminal, start the frontend
+   cd frontend
    npm run dev
    ```
 
-4. Open http://localhost:3000 in your browser
-
-5. Enter your API credentials in the settings form
-   - GitHub personal access token
-   - JIRA API token
-   - JIRA user email
-   - JIRA domain URL
-
-Your credentials will be stored securely in your browser's local storage.
+5. Open http://localhost:3000 in your browser
 
 ## Development
 
@@ -53,19 +68,26 @@ npm install
 npm run dev
 ```
 
+### Backend (FastAPI)
+
+```bash
+cd backend
+uvicorn main:app --reload
+```
+
 ## Security Notes
 
-- API credentials are stored in your browser's local storage
-- Never commit API keys or tokens to the repository
-- Clear your browser's local storage to remove stored credentials
+- Never commit your `.env` file to version control
+- Keep your API tokens secure and rotate them regularly
+- Store your API keys only in the backend `.env` file
 
 ## Troubleshooting
 
 If you encounter issues:
-1. Verify your API credentials are correct
+1. Verify your API credentials in the backend `.env` file are correct
 2. Check that your GitHub token has the required permissions
 3. Ensure your JIRA domain URL is correct and accessible
-4. Clear browser storage and re-enter credentials if needed
+4. Check the backend logs for detailed error messages
 
 ## License
 
