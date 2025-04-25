@@ -1,73 +1,76 @@
-# Welcome to your Lovable project
 
-## Project info
+# BugFix AI Pilot
 
-**URL**: https://lovable.dev/projects/765428bc-a1ba-4c69-add8-ef7f7f1b820b
+An autonomous AI tool that fixes bugs in your codebase by analyzing JIRA tickets and generating code fixes.
 
-## How can I edit this code?
+## Architecture
 
-There are several ways of editing your application.
+BugFix AI Pilot consists of four specialized AI agents:
 
-**Use Lovable**
+1. **Planner Agent**: Analyzes JIRA tickets and identifies affected code areas
+2. **Developer Agent**: Generates code fixes using GPT-4
+3. **QA Agent**: Runs tests to validate the fixes
+4. **Communicator Agent**: Updates JIRA tickets and creates GitHub PRs
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/765428bc-a1ba-4c69-add8-ef7f7f1b820b) and start prompting.
+## Features
 
-Changes made via Lovable will be committed automatically to this repo.
+- Runs entirely locally via Docker Compose
+- Connects to JIRA Cloud or Server
+- Uses GPT-4 via OpenAI API
+- Creates GitHub pull requests with fixes
+- Retries failed fixes up to 4 times
+- Escalates to human review when necessary
 
-**Use your preferred IDE**
+## Setup Instructions
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+1. Clone this repository:
+   ```
+   git clone https://github.com/yourusername/bugfix-ai-pilot.git
+   cd bugfix-ai-pilot
+   ```
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+2. Create a `.env` file with your API credentials:
+   ```
+   OPENAI_API_KEY=your_openai_key_here
+   JIRA_API_TOKEN=your_jira_api_token
+   JIRA_USER=your_jira_email
+   JIRA_URL=https://your-company.atlassian.net
+   GITHUB_TOKEN=your_github_personal_access_token
+   ```
 
-Follow these steps:
+3. Start the containers:
+   ```
+   docker-compose up -d
+   ```
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+4. Access the dashboard at http://localhost:3000
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## Development
 
-# Step 3: Install the necessary dependencies.
-npm i
+### Frontend
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+The frontend is built with React and can be run separately for development:
+
+```
+cd frontend
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+### Backend
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+The backend and agent services are built with Python and can be run separately:
 
-**Use GitHub Codespaces**
+```
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## Extending the System
 
-## What technologies are used for this project?
+To add support for additional testing frameworks or version control systems, check the extension guides in the documentation.
 
-This project is built with:
+## License
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/765428bc-a1ba-4c69-add8-ef7f7f1b820b) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+MIT

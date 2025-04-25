@@ -1,0 +1,89 @@
+
+version: '3.9'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:80"
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - frontend_build:/app/build
+    depends_on:
+      - backend
+    networks:
+      - bugfix_network
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+      - JIRA_USER=${JIRA_USER}
+      - JIRA_URL=${JIRA_URL}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+    volumes:
+      - ./code_repo:/app/code_repo
+      - ./logs:/app/logs
+    networks:
+      - bugfix_network
+
+  planner:
+    build:
+      context: ./agents/planner
+    volumes:
+      - ./code_repo:/app/code_repo
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - backend
+    networks:
+      - bugfix_network
+
+  developer:
+    build:
+      context: ./agents/developer
+    volumes:
+      - ./code_repo:/app/code_repo
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - backend
+    networks:
+      - bugfix_network
+
+  qa:
+    build:
+      context: ./agents/qa
+    volumes:
+      - ./code_repo:/app/code_repo
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - backend
+    networks:
+      - bugfix_network
+
+  communicator:
+    build:
+      context: ./agents/communicator
+    environment:
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+      - JIRA_USER=${JIRA_USER}
+      - JIRA_URL=${JIRA_URL}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+    depends_on:
+      - backend
+    networks:
+      - bugfix_network
+
+networks:
+  bugfix_network:
+
+volumes:
+  frontend_build:
