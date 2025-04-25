@@ -1,7 +1,7 @@
 
 # BugFix AI Backend
 
-FastAPI backend service that coordinates the AI agents.
+FastAPI backend service that coordinates the bug fix workflow.
 
 ## Setup
 
@@ -10,9 +10,7 @@ FastAPI backend service that coordinates the AI agents.
    pip install -r requirements.txt
    ```
 
-2. Ensure Supabase connection is configured with required secrets
-
-3. Run the server:
+2. Run the server:
    ```bash
    uvicorn main:app --reload
    ```
@@ -21,4 +19,4 @@ FastAPI backend service that coordinates the AI agents.
 
 Once running, visit http://localhost:8000/docs for the OpenAPI documentation.
 
-See root README for complete setup instructions.
+The backend service expects API credentials to be passed in the request headers from the frontend application.

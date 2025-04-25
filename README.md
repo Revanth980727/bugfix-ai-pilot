@@ -7,10 +7,14 @@ An autonomous AI tool that fixes bugs in your codebase by analyzing JIRA tickets
 
 Before running this application, you'll need:
 
-1. A [Supabase](https://supabase.com) account (free tier works)
-2. JIRA API credentials (API token and domain)
-3. GitHub personal access token
-4. OpenAI API key
+1. A GitHub personal access token with repo permissions
+   - Go to GitHub Settings > Developer Settings > Personal Access Tokens
+   - Generate a new token with 'repo' scope
+
+2. JIRA API credentials
+   - Go to https://id.atlassian.com/manage-profile/security/api-tokens
+   - Create an API token
+   - Note your Atlassian account email and JIRA domain URL
 
 ## Setup Instructions
 
@@ -20,75 +24,48 @@ Before running this application, you'll need:
    cd bugfix-ai-pilot
    ```
 
-2. Connect to Supabase:
-   - Create a new Supabase project
-   - Click the green Supabase button in your Lovable project
-   - Follow the connection process
-   - Store your API credentials in Supabase secrets:
-     - OPENAI_API_KEY
-     - JIRA_API_TOKEN
-     - JIRA_USER
-     - JIRA_URL
-     - GITHUB_TOKEN
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
 
 3. Start the application:
    ```bash
-   docker-compose up -d
+   npm run dev
    ```
 
-4. Access the dashboard at http://localhost:3000
+4. Open http://localhost:3000 in your browser
+
+5. Enter your API credentials in the settings form
+   - GitHub personal access token
+   - JIRA API token
+   - JIRA user email
+   - JIRA domain URL
+
+Your credentials will be stored securely in your browser's local storage.
 
 ## Development
 
 ### Frontend (React + TypeScript)
 
 ```bash
-cd frontend
 npm install
 npm run dev
 ```
 
-### Backend (Python + FastAPI)
-
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
-
-### Agent Services
-
-Each agent (Planner, Developer, QA, Communicator) runs in its own container:
-
-```bash
-docker-compose up planner developer qa communicator
-```
-
-## Architecture
-
-The application consists of:
-
-1. Frontend: React + TypeScript dashboard
-2. Backend: FastAPI server coordinating agents
-3. Agent Services:
-   - Planner: Analyzes JIRA tickets
-   - Developer: Generates fixes
-   - QA: Validates changes
-   - Communicator: Updates JIRA/GitHub
-
 ## Security Notes
 
-- Never commit API keys or secrets to the repository
-- Use Supabase to manage all sensitive credentials
-- Enable appropriate access controls in JIRA and GitHub
+- API credentials are stored in your browser's local storage
+- Never commit API keys or tokens to the repository
+- Clear your browser's local storage to remove stored credentials
 
 ## Troubleshooting
 
 If you encounter issues:
-1. Check Supabase connection status
-2. Verify API credentials in Supabase secrets
-3. Check Docker container logs
-4. Ensure all required ports are available
+1. Verify your API credentials are correct
+2. Check that your GitHub token has the required permissions
+3. Ensure your JIRA domain URL is correct and accessible
+4. Clear browser storage and re-enter credentials if needed
 
 ## License
 
