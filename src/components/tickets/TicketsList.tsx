@@ -12,18 +12,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { LogViewer } from '../logs/LogViewer';
 import { cn } from '@/lib/utils';
-
-interface Ticket {
-  id: string;
-  title: string;
-  status: string;
-  stage: 'planning' | 'development' | 'qa' | 'pr-opened' | 'escalated' | 'completed';
-  prUrl?: string;
-  updatedAt: string;
-}
+import { TicketListItem } from '@/hooks/useDashboardState';
 
 interface TicketsListProps {
-  tickets: Ticket[];
+  tickets: TicketListItem[];
   searchQuery: string;
   filterStatus: string | null;
 }

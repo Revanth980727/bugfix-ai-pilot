@@ -10,10 +10,19 @@ import { useCommunicatorAgent } from './useCommunicatorAgent';
 
 export type AgentStatus = 'idle' | 'working' | 'success' | 'error' | 'waiting';
 
+export interface TicketListItem {
+  id: string;
+  title: string;
+  status: string;
+  stage: 'planning' | 'development' | 'qa' | 'pr-opened' | 'escalated' | 'completed';
+  prUrl?: string;
+  updatedAt: string;
+}
+
 export function useDashboardState() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeTicket, setActiveTicket] = useState<Ticket | null>(null);
-  const [ticketsList, setTicketsList] = useState(mockTicketsList);
+  const [ticketsList, setTicketsList] = useState<TicketListItem[]>(mockTicketsList);
   
   const planner = usePlannerAgent();
   const developer = useDeveloperAgent();
@@ -42,7 +51,7 @@ export function useDashboardState() {
       setTicketsList(prev => 
         prev.map(ticket => 
           ticket.id === ticketId 
-            ? { ...ticket, stage: 'planning', status: 'in-progress' } 
+            ? { ...ticket, stage: 'planning' as const, status: 'in-progress' } 
             : ticket
         )
       );
@@ -65,7 +74,7 @@ export function useDashboardState() {
                 setTicketsList(prev => 
                   prev.map(ticket => 
                     ticket.id === activeTicket.id 
-                      ? { ...ticket, stage: 'pr-opened', status: 'success' } 
+                      ? { ...ticket, stage: 'pr-opened' as const, status: 'success' } 
                       : ticket
                   )
                 );

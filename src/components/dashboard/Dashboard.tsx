@@ -75,102 +75,105 @@ export function Dashboard() {
         </div>
       </div>
       
-      <TabsContent value="current" className="mt-0">
-        <div className="grid gap-6 md:grid-cols-2">
+      {/* Important: All TabsContent components must be within the same Tabs component as their corresponding TabsTrigger */}
+      <Tabs value={view} onValueChange={(v) => setView(v as 'current' | 'list')} className="mt-0">
+        <TabsContent value="current">
+          <div className="grid gap-6 md:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Fix Bug</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <TicketForm onSubmit={handleTicketSubmit} isProcessing={isProcessing} />
+              </CardContent>
+            </Card>
+            
+            <TicketInfo ticket={activeTicket} />
+          </div>
+          
+          <Separator />
+          
+          <div className="grid gap-6 md:grid-cols-2">
+            <PlannerAgent 
+              status={plannerStatus} 
+              progress={plannerProgress}
+              analysis={plannerAnalysis}
+            />
+            
+            <DeveloperAgent 
+              status={developerStatus} 
+              progress={developerProgress}
+              attempt={1}
+              maxAttempts={4}
+              diffs={diffs}
+            />
+          </div>
+          
+          <div className="grid gap-6 md:grid-cols-2">
+            <QAAgent 
+              status={qaStatus} 
+              progress={qaProgress}
+              testResults={testResults}
+              summary={testResults ? {
+                total: testResults.length,
+                passed: testResults.filter(t => t.status === 'pass').length,
+                failed: testResults.filter(t => t.status === 'fail').length,
+                duration: testResults.reduce((acc, curr) => acc + curr.duration, 0)
+              } : undefined}
+            />
+            
+            <CommunicatorAgent 
+              status={communicatorStatus} 
+              progress={communicatorProgress}
+              updates={updates}
+              prUrl={updates ? "https://github.com/org/repo/pull/45" : undefined}
+              jiraUrl={updates ? "https://jira.company.com/browse/DEMO-123" : undefined}
+            />
+          </div>
+        </TabsContent>
+        
+        <TabsContent value="list">
           <Card>
-            <CardHeader>
-              <CardTitle>Fix Bug</CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle>Tickets</CardTitle>
+              <div className="flex space-x-2">
+                <div className="relative">
+                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search tickets..."
+                    className="pl-8 w-[200px]"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <div className="relative">
+                  <Filter className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <select
+                    className="h-10 pl-8 pr-4 rounded-md border border-input bg-background text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                    value={filterStatus || ''}
+                    onChange={(e) => setFilterStatus(e.target.value || null)}
+                  >
+                    <option value="">All Status</option>
+                    <option value="planning">Planning</option>
+                    <option value="development">Development</option>
+                    <option value="qa">QA</option>
+                    <option value="pr-opened">PR Opened</option>
+                    <option value="escalated">Escalated</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
-              <TicketForm onSubmit={handleTicketSubmit} isProcessing={isProcessing} />
+              <TicketsList 
+                tickets={ticketsList} 
+                searchQuery={searchQuery}
+                filterStatus={filterStatus}
+              />
             </CardContent>
           </Card>
-          
-          <TicketInfo ticket={activeTicket} />
-        </div>
-        
-        <Separator />
-        
-        <div className="grid gap-6 md:grid-cols-2">
-          <PlannerAgent 
-            status={plannerStatus} 
-            progress={plannerProgress}
-            analysis={plannerAnalysis}
-          />
-          
-          <DeveloperAgent 
-            status={developerStatus} 
-            progress={developerProgress}
-            attempt={1}
-            maxAttempts={4}
-            diffs={diffs}
-          />
-        </div>
-        
-        <div className="grid gap-6 md:grid-cols-2">
-          <QAAgent 
-            status={qaStatus} 
-            progress={qaProgress}
-            testResults={testResults}
-            summary={testResults ? {
-              total: testResults.length,
-              passed: testResults.filter(t => t.status === 'pass').length,
-              failed: testResults.filter(t => t.status === 'fail').length,
-              duration: testResults.reduce((acc, curr) => acc + curr.duration, 0)
-            } : undefined}
-          />
-          
-          <CommunicatorAgent 
-            status={communicatorStatus} 
-            progress={communicatorProgress}
-            updates={updates}
-            prUrl={updates ? "https://github.com/org/repo/pull/45" : undefined}
-            jiraUrl={updates ? "https://jira.company.com/browse/DEMO-123" : undefined}
-          />
-        </div>
-      </TabsContent>
-      
-      <TabsContent value="list" className="mt-0">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle>Tickets</CardTitle>
-            <div className="flex space-x-2">
-              <div className="relative">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search tickets..."
-                  className="pl-8 w-[200px]"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
-              <div className="relative">
-                <Filter className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <select
-                  className="h-10 pl-8 pr-4 rounded-md border border-input bg-background text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                  value={filterStatus || ''}
-                  onChange={(e) => setFilterStatus(e.target.value || null)}
-                >
-                  <option value="">All Status</option>
-                  <option value="planning">Planning</option>
-                  <option value="development">Development</option>
-                  <option value="qa">QA</option>
-                  <option value="pr-opened">PR Opened</option>
-                  <option value="escalated">Escalated</option>
-                  <option value="completed">Completed</option>
-                </select>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <TicketsList 
-              tickets={ticketsList} 
-              searchQuery={searchQuery}
-              filterStatus={filterStatus}
-            />
-          </CardContent>
-        </Card>
-      </TabsContent>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
