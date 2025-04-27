@@ -3,104 +3,166 @@ import { Ticket, PlannerAnalysis, CodeDiff, TestResult, Update } from '../types/
 
 export const mockTicket: Ticket = {
   id: 'DEMO-123',
-  title: 'Login button not working on Safari browser',
-  description: 'Users have reported that the login button on the homepage does not respond to clicks when using Safari on macOS. This issue does not occur in Chrome or Firefox. Steps to reproduce:\n1. Open the homepage in Safari\n2. Click on the login button\n3. Nothing happens\n\nExpected: Login modal should appear.',
+  title: 'Fix login button not working',
+  description: 'When clicking on the login button, nothing happens. Expected behavior is to show login modal.',
   status: 'Open',
   priority: 'High',
   reporter: 'John Doe',
-  assignee: null,
-  created: '2025-04-23T10:30:00Z',
-  updated: '2025-04-24T08:15:00Z',
+  assignee: 'AI Bot',
+  created: '2023-04-01T10:30:00Z',
+  updated: '2023-04-01T11:45:00Z'
 };
 
 export const mockPlannerAnalysis: PlannerAnalysis = {
   affectedFiles: [
-    'src/components/auth/LoginButton.tsx',
-    'src/components/auth/LoginModal.tsx',
-    'src/hooks/useAuth.ts'
+    'src/components/auth/LoginButton.js',
+    'src/components/modals/LoginModal.js'
   ],
-  rootCause: 'The event handler for the login button uses a non-Safari compatible feature. Specifically, it uses the "once" option in the event listener which is not supported in older Safari versions.',
-  suggestedApproach: '1. Modify the LoginButton component to use a standard onClick handler instead of the addEventListener with "once" option.\n2. Ensure the event propagation is manually stopped if needed.\n3. Add a polyfill for older Safari versions that might still be in use.'
+  rootCause: 'The event handler for the login button click is not correctly bound to the component context. This causes the handler to lose reference to the component state and methods when clicked.',
+  suggestedApproach: 'Use React.useCallback hook to properly bind the event handler, ensuring it has access to the correct context and dependencies. Also verify that the modal context is properly imported and used.'
 };
 
 export const mockDiffs: CodeDiff[] = [
   {
-    filename: 'src/components/auth/LoginButton.tsx',
-    diff: `@@ -15,11 +15,9 @@
- 
+    filename: 'src/components/auth/LoginButton.js',
+    diff: `@@ -15,7 +15,7 @@
  const LoginButton = () => {
-   const { openLoginModal } = useAuth();
--  const buttonRef = useRef<HTMLButtonElement>(null);
+   const { showModal } = useContext(ModalContext);
+ 
+-  const handleClick = () => {
++  const handleClick = useCallback(() => {
+     showModal('login');
+-  };
++  }, [showModal]);`,
+    linesAdded: 2,
+    linesRemoved: 2
+  },
+  {
+    filename: 'src/components/modals/LoginModal.js',
+    diff: `@@ -8,7 +8,7 @@
+ export const LoginModal = ({ isOpen, onClose }) => {
+   const { login } = useAuth();
    
--  useEffect(() => {
--    buttonRef.current?.addEventListener('click', openLoginModal, { once: true });
--  }, []);
-+  const handleClick = () => {
-+    openLoginModal();
-+  };
-   
-   return (
-     <button
-@@ -27,7 +25,7 @@
-       className="btn btn-primary"
--      ref={buttonRef}
-+      onClick={handleClick}
-     >
-       Login
-     </button>`,
-    linesAdded: 4,
-    linesRemoved: 7
+-  const handleSubmit = (event) => {
++  const handleSubmit = useCallback((event) => {
+     event.preventDefault();
+     const { username, password } = event.target.elements;
+     login(username.value, password.value);
+@@ -18,5 +18,5 @@
+       {/* Modal content */}
+     </div>
+   );
+-};
++}, [login, onClose]);`,
+    linesAdded: 5,
+    linesRemoved: 3
   }
 ];
 
 export const mockTestResults: TestResult[] = [
   {
-    name: 'LoginButton.test.tsx - renders correctly',
+    name: 'LoginButton should render correctly',
     status: 'pass',
     duration: 45
   },
   {
-    name: 'LoginButton.test.tsx - opens modal on click',
-    status: 'pass',
-    duration: 62
-  },
-  {
-    name: 'LoginModal.test.tsx - handles form submission',
+    name: 'LoginButton should show modal when clicked',
     status: 'pass',
     duration: 78
+  },
+  {
+    name: 'LoginModal should handle form submission',
+    status: 'pass',
+    duration: 120
+  },
+  {
+    name: 'Login flow should work end-to-end',
+    status: 'pass',
+    duration: 350
   }
 ];
 
 export const mockUpdates: Update[] = [
   {
-    timestamp: '2025-04-25T14:30:15Z',
-    message: 'Updated JIRA ticket DEMO-123 status to "In Progress"',
+    timestamp: '2023-04-01T14:30:00Z',
+    message: 'Analysis complete: identified issue in login button event binding',
+    type: 'system'
+  },
+  {
+    timestamp: '2023-04-01T14:35:00Z',
+    message: 'Generated code changes for 2 files',
+    type: 'system'
+  },
+  {
+    timestamp: '2023-04-01T14:40:00Z',
+    message: 'All tests passing after code changes',
+    type: 'system'
+  },
+  {
+    timestamp: '2023-04-01T14:45:00Z',
+    message: 'Created pull request #45',
+    type: 'github'
+  },
+  {
+    timestamp: '2023-04-01T14:46:00Z',
+    message: 'Updated ticket DEMO-123 with PR link',
     type: 'jira'
   },
   {
-    timestamp: '2025-04-25T14:32:45Z',
-    message: 'Created branch fix/DEMO-123-safari-login-button',
-    type: 'github'
-  },
-  {
-    timestamp: '2025-04-25T14:35:12Z',
-    message: 'Committed changes: Fix Safari compatibility issue in LoginButton',
-    type: 'github'
-  },
-  {
-    timestamp: '2025-04-25T14:36:30Z',
-    message: 'Created pull request #45: Fix Safari login button issue (DEMO-123)',
-    type: 'github'
-  },
-  {
-    timestamp: '2025-04-25T14:37:05Z',
-    message: 'Added comment to DEMO-123 with PR link and fix description',
-    type: 'jira'
-  },
-  {
-    timestamp: '2025-04-25T14:37:30Z',
-    message: 'Updated JIRA ticket DEMO-123 status to "Fixed"',
+    timestamp: '2023-04-01T14:47:00Z',
+    message: 'Set ticket status to "In Review"',
     type: 'jira'
   }
 ];
 
+// Mock tickets list for the dashboard
+export const mockTicketsList = [
+  {
+    id: 'DEMO-123',
+    title: 'Fix login button not working',
+    status: 'in-progress',
+    stage: 'planning',
+    prUrl: undefined,
+    updatedAt: '2023-04-01T11:45:00Z'
+  },
+  {
+    id: 'BUG-456',
+    title: 'Fix crash on product page',
+    status: 'failed',
+    stage: 'escalated',
+    prUrl: undefined,
+    updatedAt: '2023-04-05T10:16:01Z'
+  },
+  {
+    id: 'FEAT-789',
+    title: 'Add user profile settings',
+    status: 'success',
+    stage: 'pr-opened',
+    prUrl: 'https://github.com/org/repo/pull/42',
+    updatedAt: '2023-03-28T15:22:30Z'
+  },
+  {
+    id: 'DEMO-124',
+    title: 'Fix pagination on search results',
+    status: 'success',
+    stage: 'completed',
+    prUrl: 'https://github.com/org/repo/pull/41',
+    updatedAt: '2023-03-25T09:15:45Z'
+  },
+  {
+    id: 'BUG-457',
+    title: 'Fix image loading on mobile devices',
+    status: 'in-progress',
+    stage: 'development',
+    prUrl: undefined,
+    updatedAt: '2023-04-06T08:30:12Z'
+  },
+  {
+    id: 'FEAT-790',
+    title: 'Implement dark mode',
+    status: 'in-progress',
+    stage: 'qa',
+    prUrl: undefined,
+    updatedAt: '2023-04-04T16:45:33Z'
+  }
+];

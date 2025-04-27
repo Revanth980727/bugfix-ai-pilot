@@ -1,6 +1,8 @@
 
 import logging
 import asyncio
+import os
+import json
 from datetime import datetime
 from typing import Dict, Any
 from jira_utils import update_jira_ticket
@@ -23,6 +25,10 @@ async def process_ticket(ticket: Dict[str, Any]):
     ticket_id = ticket["ticket_id"]
     
     try:
+        # Create log directory for this ticket if it doesn't exist
+        ticket_log_dir = f"logs/{ticket_id}"
+        os.makedirs(ticket_log_dir, exist_ok=True)
+        
         # Initialize ticket in active_tickets
         active_tickets[ticket_id] = {
             "ticket_id": ticket_id,
@@ -53,7 +59,25 @@ async def process_ticket(ticket: Dict[str, Any]):
         logger.info(f"Sending ticket {ticket_id} to Planner agent")
         await update_jira_ticket(ticket_id, "", "Planner analyzing bug")
         
+        # Log input to planner
+        with open(f"{ticket_log_dir}/planner_input.json", 'w') as f:
+            json.dump(ticket, f, indent=2)
+        
         planner_analysis = await call_planner_agent(ticket)
+        
+        # Log output from planner
+        if planner_analysis:
+            with open(f"{ticket_log_dir}/planner_output.json", 'w') as f:
+                json.dump(planner_analysis, f, indent=2)
+        else:
+            # Log error
+            error_log = {
+                "timestamp": datetime.now().isoformat(),
+                "message": "Planner analysis failed"
+            }
+            with open(f"{ticket_log_dir}/planner_errors.json", 'a') as f:
+                f.write(json.dumps(error_log) + "\n")
+            
         if not planner_analysis:
             active_tickets[ticket_id]["status"] = "error"
             await update_jira_ticket(
@@ -84,8 +108,32 @@ async def process_ticket(ticket: Dict[str, Any]):
                     f"Developer generating revised patch (attempt {current_attempt}/{max_attempts})"
                 )
             
+            # Log input to developer
+            developer_input = {
+                "ticket_id": ticket_id,
+                "plannerAnalysis": planner_analysis,
+                "attempt": current_attempt,
+                "maxAttempts": max_attempts
+            }
+            with open(f"{ticket_log_dir}/developer_input.json", 'w') as f:
+                json.dump(developer_input, f, indent=2)
+            
             # Call Developer
             developer_response = await call_developer_agent(planner_analysis, current_attempt)
+            
+            # Log output from developer
+            if developer_response:
+                with open(f"{ticket_log_dir}/developer_output.json", 'w') as f:
+                    json.dump(developer_response, f, indent=2)
+            else:
+                # Log error
+                error_log = {
+                    "timestamp": datetime.now().isoformat(),
+                    "message": "Developer patch generation failed"
+                }
+                with open(f"{ticket_log_dir}/developer_errors.json", 'a') as f:
+                    f.write(json.dumps(error_log) + "\n")
+                
             if not developer_response:
                 active_tickets[ticket_id]["status"] = "error"
                 await update_jira_ticket(
@@ -101,7 +149,29 @@ async def process_ticket(ticket: Dict[str, Any]):
             logger.info(f"Sending ticket {ticket_id} to QA agent (attempt {current_attempt})")
             await update_jira_ticket(ticket_id, "", "QA testing fix")
             
+            # Log input to QA
+            qa_input = {
+                "ticket_id": ticket_id,
+                "diffs": developer_response["diffs"]
+            }
+            with open(f"{ticket_log_dir}/qa_input.json", 'w') as f:
+                json.dump(qa_input, f, indent=2)
+            
             qa_response = await call_qa_agent(developer_response)
+            
+            # Log output from QA
+            if qa_response:
+                with open(f"{ticket_log_dir}/qa_output.json", 'w') as f:
+                    json.dump(qa_response, f, indent=2)
+            else:
+                # Log error
+                error_log = {
+                    "timestamp": datetime.now().isoformat(),
+                    "message": "QA testing failed"
+                }
+                with open(f"{ticket_log_dir}/qa_errors.json", 'a') as f:
+                    f.write(json.dumps(error_log) + "\n")
+            
             if not qa_response:
                 active_tickets[ticket_id]["status"] = "error"
                 await update_jira_ticket(
@@ -136,6 +206,14 @@ async def process_ticket(ticket: Dict[str, Any]):
                     "",
                     f"Fix failed after {max_attempts} attempts. Escalated to human reviewer."
                 )
+                
+                # Log error for max attempts reached
+                error_log = {
+                    "timestamp": datetime.now().isoformat(),
+                    "message": f"Max attempts ({max_attempts}) reached without successful fix"
+                }
+                with open(f"{ticket_log_dir}/qa_errors.json", 'a') as f:
+                    f.write(json.dumps(error_log) + "\n")
             else:
                 await update_jira_ticket(
                     ticket_id,
@@ -147,12 +225,38 @@ async def process_ticket(ticket: Dict[str, Any]):
         
         # Step 5: Communicator
         logger.info(f"Sending ticket {ticket_id} to Communicator agent")
+        
+        # Log input to communicator
+        communicator_input = {
+            "ticket_id": ticket_id,
+            "diffs": developer_response["diffs"],
+            "test_results": qa_response["test_results"],
+            "commit_message": developer_response["commit_message"],
+            "qa_passed": qa_passed,
+            "attempts": current_attempt
+        }
+        with open(f"{ticket_log_dir}/communicator_input.json", 'w') as f:
+            json.dump(communicator_input, f, indent=2)
+        
         communicator_response = await call_communicator_agent(
             ticket_id,
             developer_response["diffs"],
             qa_response["test_results"],
             developer_response["commit_message"]
         )
+        
+        # Log output from communicator
+        if communicator_response:
+            with open(f"{ticket_log_dir}/communicator_output.json", 'w') as f:
+                json.dump(communicator_response, f, indent=2)
+        else:
+            # Log error
+            error_log = {
+                "timestamp": datetime.now().isoformat(),
+                "message": "Communicator failed to deploy fix"
+            }
+            with open(f"{ticket_log_dir}/communicator_errors.json", 'a') as f:
+                f.write(json.dumps(error_log) + "\n")
         
         if communicator_response:
             active_tickets[ticket_id]["communicator_result"] = communicator_response
@@ -167,10 +271,28 @@ async def process_ticket(ticket: Dict[str, Any]):
                 "BugFix AI: Failed to deploy the fix. Escalating to human review."
             )
             
+        # Collate all logs for this ticket
+        from controller import collate_logs
+        collate_logs(ticket_id)
+            
     except Exception as e:
         logger.error(f"Error processing ticket {ticket_id}: {str(e)}")
         active_tickets[ticket_id]["status"] = "error"
         active_tickets[ticket_id]["error"] = str(e)
+        
+        # Log error
+        error_log = {
+            "timestamp": datetime.now().isoformat(),
+            "message": f"Unhandled exception: {str(e)}",
+            "stacktrace": logging.traceback.format_exc()
+        }
+        
+        try:
+            with open(f"{ticket_log_dir}/processor_errors.json", 'a') as f:
+                f.write(json.dumps(error_log) + "\n")
+        except:
+            logger.error(f"Failed to write error to log file for ticket {ticket_id}")
+        
         await update_jira_ticket(
             ticket_id,
             "",
