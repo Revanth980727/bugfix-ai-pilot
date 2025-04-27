@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -8,6 +7,9 @@ from typing import List, Dict, Any, Optional, Literal
 import httpx
 from jira import JIRA
 import asyncio
+from slack_sdk.web.async_client import AsyncWebClient
+import aiosmtplib
+from email.mime.text import MIMEText
 import sys
 
 # Add the backend directory to path to import utilities
@@ -36,6 +38,13 @@ JIRA_TOKEN = os.getenv('JIRA_TOKEN')
 JIRA_USER = os.getenv('JIRA_USER')
 JIRA_URL = os.getenv('JIRA_URL')
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+SLACK_TOKEN = os.getenv('SLACK_TOKEN')
+SLACK_CHANNEL = os.getenv('SLACK_CHANNEL')
+SMTP_HOST = os.getenv('SMTP_HOST')
+SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+SMTP_USER = os.getenv('SMTP_USER')
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
+NOTIFICATION_EMAIL = os.getenv('NOTIFICATION_EMAIL')
 
 app = FastAPI(title="BugFix AI Communicator Agent")
 
@@ -78,19 +87,60 @@ class DeployResponse(BaseModel):
     timestamp: str = datetime.now().isoformat()
     success: bool
 
-async def update_jira_ticket(ticket_id: str, status: str, comment: str, pr_url: Optional[str] = None) -> bool:
-    """Update a JIRA ticket status and add a comment"""
+async def send_slack_notification(message: str) -> bool:
+    """Send a notification to Slack"""
+    if not SLACK_TOKEN or not SLACK_CHANNEL:
+        return False
+        
     try:
-        # Initialize JIRA client
+        client = AsyncWebClient(token=SLACK_TOKEN)
+        await client.chat_postMessage(
+            channel=SLACK_CHANNEL,
+            text=message
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error sending Slack notification: {str(e)}")
+        return False
+
+async def send_email_notification(subject: str, body: str) -> bool:
+    """Send an email notification"""
+    if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD, NOTIFICATION_EMAIL]):
+        return False
+        
+    try:
+        message = MIMEText(body)
+        message["Subject"] = subject
+        message["From"] = SMTP_USER
+        message["To"] = NOTIFICATION_EMAIL
+        
+        smtp = aiosmtplib.SMTP(hostname=SMTP_HOST, port=SMTP_PORT, use_tls=True)
+        await smtp.connect()
+        await smtp.login(SMTP_USER, SMTP_PASSWORD)
+        await smtp.send_message(message)
+        await smtp.quit()
+        return True
+    except Exception as e:
+        logger.error(f"Error sending email notification: {str(e)}")
+        return False
+
+async def update_jira_with_custom_fields(
+    ticket_id: str, 
+    status: str,
+    comment: str,
+    needs_review: bool,
+    pr_url: Optional[str] = None
+) -> bool:
+    """Update JIRA ticket with status, comment, and custom fields"""
+    try:
         auth = (JIRA_USER, JIRA_TOKEN)
         jira_instance = JIRA(server=JIRA_URL, basic_auth=auth)
         
         # Add comment
         jira_instance.add_comment(ticket_id, comment)
         
-        # Update status if needed
+        # Update status
         if status:
-            # Get available transitions
             transitions = jira_instance.transitions(ticket_id)
             transition_id = None
             
@@ -98,17 +148,29 @@ async def update_jira_ticket(ticket_id: str, status: str, comment: str, pr_url: 
                 if status.lower() in t['name'].lower():
                     transition_id = t['id']
                     break
-            
+                    
             if transition_id:
                 jira_instance.transition_issue(ticket_id, transition_id)
         
-        # Add PR link as a remote link if provided
+        # Update custom fields
+        fields = {}
+        
+        # Add custom field for human review if configured
+        review_field = os.getenv('JIRA_NEEDS_REVIEW_FIELD')
+        if review_field:
+            fields[review_field] = needs_review
+            
+        # Add PR link if provided
         if pr_url:
             jira_instance.add_simple_link(ticket_id, {
                 'url': pr_url,
                 'title': 'GitHub Pull Request'
             })
-        
+            
+        # Update fields if any were set
+        if fields:
+            jira_instance.issue(ticket_id).update(fields=fields)
+            
         return True
     except Exception as e:
         logger.error(f"Error updating JIRA ticket {ticket_id}: {str(e)}")
@@ -145,6 +207,7 @@ async def deploy_fix(request: DeployRequest):
         # Calculate test statistics
         passed_tests = sum(1 for test in request.test_results if test.status == "pass")
         total_tests = len(request.test_results)
+        all_tests_passed = passed_tests == total_tests
         
         # Create branch and commit changes if GitHub token is available
         if GITHUB_TOKEN:
@@ -272,71 +335,89 @@ async def deploy_fix(request: DeployRequest):
                             )
                         )
         
-        # Update JIRA ticket
-        if all([JIRA_TOKEN, JIRA_USER, JIRA_URL]):
+        if all_tests_passed:
+            # Update JIRA with success status
+            jira_comment = f"""
+            BugFix AI: Fix successful.
+            
+            Test Results: {passed_tests}/{total_tests} tests passed
+            Changes made: {request.commit_message}
+            """
+            
+            if pr_url:
+                jira_comment += f"\nPull Request: {pr_url}"
+                
+            await update_jira_with_custom_fields(
+                request.ticket_id,
+                "Done",
+                jira_comment,
+                needs_review=False,
+                pr_url=pr_url
+            )
+            
             updates.append(
                 Update(
                     timestamp=datetime.now().isoformat(),
-                    message=f"Updating JIRA ticket {request.ticket_id}",
+                    message="JIRA ticket updated with success status",
+                    type="jira"
+                )
+            )
+        else:
+            # Handle test failures
+            success = False
+            failed_tests = [test for test in request.test_results if test.status == "fail"]
+            
+            # Update JIRA with failure status
+            jira_comment = f"""
+            BugFix AI: Fix requires human review.
+            
+            Test Results: {passed_tests}/{total_tests} tests passed
+            Failed Tests:
+            {chr(10).join(f'- {test.name}: {test.error_message}' for test in failed_tests)}
+            """
+            
+            await update_jira_with_custom_fields(
+                request.ticket_id,
+                "Needs Review",
+                jira_comment,
+                needs_review=True
+            )
+            
+            updates.append(
+                Update(
+                    timestamp=datetime.now().isoformat(),
+                    message="JIRA ticket updated with failure status",
                     type="jira"
                 )
             )
             
-            # Determine QA result message
-            qa_result = "successful" if passed_tests == total_tests else "failed"
-            qa_summary = f"QA tests: {passed_tests}/{total_tests} passed"
+            # Send notifications for human review needed
+            notification_message = f"BugFix AI: Ticket {request.ticket_id} requires human review. {passed_tests}/{total_tests} tests passed."
             
-            # Build detailed comment
-            comment = f"""
-            BugFix AI: Fix {qa_result}.
-            
-            {qa_summary}
-            
-            Summary of changes:
-            - {request.commit_message}
-            - Files modified: {len(request.diffs)}
-            - Total lines added: {sum(diff.lines_added for diff in request.diffs)}
-            - Total lines removed: {sum(diff.lines_removed for diff in request.diffs)}
-            """
-            
-            if pr_url:
-                comment += f"\nPull Request: {pr_url}"
-            
-            # Update JIRA with status and comment
-            status = "Done" if passed_tests == total_tests else "In Progress"
-            jira_update_successful = await update_jira_ticket(
-                request.ticket_id, 
-                status, 
-                comment,
-                pr_url
-            )
-            
-            if jira_update_successful:
+            # Send Slack notification if configured
+            if SLACK_TOKEN:
+                await send_slack_notification(notification_message)
                 updates.append(
                     Update(
                         timestamp=datetime.now().isoformat(),
-                        message=f"JIRA ticket {request.ticket_id} updated successfully",
-                        type="jira"
+                        message="Sent Slack notification for human review",
+                        type="system"
                     )
                 )
-            else:
+            
+            # Send email notification if configured
+            if all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD, NOTIFICATION_EMAIL]):
+                await send_email_notification(
+                    f"Human Review Required - Ticket {request.ticket_id}",
+                    notification_message
+                )
                 updates.append(
                     Update(
                         timestamp=datetime.now().isoformat(),
-                        message=f"Failed to update JIRA ticket {request.ticket_id}",
-                        type="jira"
+                        message="Sent email notification for human review",
+                        type="system"
                     )
                 )
-                success = False
-        
-        # Final deployment status
-        updates.append(
-            Update(
-                timestamp=datetime.now().isoformat(),
-                message="Deployment completed successfully" if success else "Deployment completed with issues",
-                type="system"
-            )
-        )
         
         return DeployResponse(
             ticket_id=request.ticket_id,
