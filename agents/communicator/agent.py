@@ -32,6 +32,11 @@ if not github_utils_path.exists():
 if github_utils_path.exists():
     spec = importlib.util.spec_from_file_location("github_utils", str(github_utils_path))
     github_utils = importlib.util.module_from_spec(spec)
+    
+    # Create a simple env module with GITHUB_TOKEN for github_utils.py
+    env_module = type('EnvModule', (), {'GITHUB_TOKEN': os.environ.get('GITHUB_TOKEN')})
+    sys.modules['env'] = env_module
+    
     spec.loader.exec_module(github_utils)
     create_branch = github_utils.create_branch
     commit_changes = github_utils.commit_changes

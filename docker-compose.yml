@@ -30,6 +30,9 @@ services:
       - JIRA_TOKEN=${JIRA_TOKEN}
       - JIRA_USER=${JIRA_USER}
       - JIRA_URL=${JIRA_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    env_file:
+      - ./.env
     volumes:
       - ./logs:/app/logs
       - ./code_repo:/app/code_repo
@@ -48,6 +51,8 @@ services:
       - "8001:8001"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+    env_file:
+      - ./.env
     volumes:
       - ./code_repo:/app/code_repo
       - ./logs:/app/logs/planner
@@ -61,6 +66,8 @@ services:
       - "8002:8002"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+    env_file:
+      - ./.env
     volumes:
       - ./code_repo:/app/code_repo
       - ./logs:/app/logs/developer
@@ -75,6 +82,8 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TEST_COMMAND=${TEST_COMMAND:-pytest}
+    env_file:
+      - ./.env
     volumes:
       - ./code_repo:/app/code_repo
       - ./logs:/app/logs/qa
@@ -83,8 +92,7 @@ services:
 
   communicator:
     build:
-      context: .
-      dockerfile: ./agents/communicator/Dockerfile
+      context: ./agents/communicator
     ports:
       - "8004:8004"
     environment:
@@ -98,6 +106,9 @@ services:
       - EMAIL_PASSWORD=${EMAIL_PASSWORD:-""}
       - SLACK_TOKEN=${SLACK_TOKEN:-""}
       - SLACK_CHANNEL=${SLACK_CHANNEL:-""}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    env_file:
+      - ./.env
     volumes:
       - ./logs:/app/logs/communicator
       - ./backend:/app/backend

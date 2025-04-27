@@ -4,7 +4,12 @@ import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from github import Github, GithubException
-from env import GITHUB_TOKEN
+
+# Try importing GITHUB_TOKEN from env.py if it exists, otherwise use environment variable
+try:
+    from env import GITHUB_TOKEN
+except ImportError:
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
