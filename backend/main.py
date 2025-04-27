@@ -1,12 +1,14 @@
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import logging
 import os
 from datetime import datetime
 import httpx
+import asyncio
 from env import verify_env_vars, GITHUB_TOKEN, JIRA_TOKEN, JIRA_USER, JIRA_URL
+import controller
 
 # Verify environment variables on startup
 verify_env_vars()
@@ -42,9 +44,6 @@ class AgentStatus(BaseModel):
     details: Optional[Dict[str, Any]] = None
     timestamp: str = datetime.now().isoformat()
 
-# Store active tickets and their status
-active_tickets = {}
-
 @app.get("/")
 async def root():
     return {
@@ -54,53 +53,62 @@ async def root():
     }
 
 @app.post("/tickets/process")
-async def process_ticket(request: TicketRequest):
+async def process_ticket(request: TicketRequest, background_tasks: BackgroundTasks):
     ticket_id = request.ticket_id
     
     # Check if ticket is already being processed
-    if ticket_id in active_tickets:
-        return {"message": f"Ticket {ticket_id} is already being processed", "status": active_tickets[ticket_id]}
+    if ticket_id in controller.active_tickets:
+        return {"message": f"Ticket {ticket_id} is already being processed", "status": controller.active_tickets[ticket_id]}
     
-    # Initialize ticket processing status
-    active_tickets[ticket_id] = {
-        "ticket_id": ticket_id,
-        "jira_instance": request.jira_instance,
-        "status": "initializing",
-        "started_at": datetime.now().isoformat(),
-        "agents": {
-            "planner": {"status": "pending", "progress": 0},
-            "developer": {"status": "pending", "progress": 0},
-            "qa": {"status": "pending", "progress": 0},
-            "communicator": {"status": "pending", "progress": 0}
-        },
-        "current_attempt": 0,
-        "max_attempts": 4
-    }
+    # Get ticket details from JIRA
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            auth = (JIRA_USER, JIRA_TOKEN)
+            response = await client.get(
+                f"{JIRA_URL}/rest/api/3/issue/{ticket_id}",
+                params={"fields": "summary,description,created"},
+                auth=auth
+            )
+            
+            if response.status_code != 200:
+                raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found in JIRA")
+                
+            issue = response.json()
+            ticket = {
+                "ticket_id": ticket_id,
+                "title": issue["fields"]["summary"],
+                "description": issue["fields"]["description"],
+                "created": issue["fields"]["created"]
+            }
+    except Exception as e:
+        logger.error(f"Error fetching ticket {ticket_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching ticket: {str(e)}")
     
-    logger.info(f"Started processing ticket {ticket_id}")
+    # Start processing in the background
+    background_tasks.add_task(controller.process_ticket, ticket)
     
-    # In a real implementation, this would trigger the agent workflow
-    # Instead, we'll just return the initial status
-    return {"message": f"Started processing ticket {ticket_id}", "status": active_tickets[ticket_id]}
+    # Return initial status
+    return {"message": f"Started processing ticket {ticket_id}", "status": "initializing"}
 
 @app.get("/tickets/{ticket_id}")
 async def get_ticket_status(ticket_id: str):
-    if ticket_id not in active_tickets:
+    if ticket_id not in controller.active_tickets:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
-    return active_tickets[ticket_id]
+    return controller.active_tickets[ticket_id]
 
 @app.get("/tickets")
 async def list_active_tickets():
-    return list(active_tickets.values())
+    return list(controller.active_tickets.values())
 
 @app.post("/agents/{agent_id}/update")
 async def update_agent_status(agent_id: str, status: AgentStatus):
     ticket_id = status.details.get("ticket_id") if status.details else None
-    if not ticket_id or ticket_id not in active_tickets:
+    if not ticket_id or ticket_id not in controller.active_tickets:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
     # Update agent status
-    active_tickets[ticket_id]["agents"][agent_id] = {
+    controller.active_tickets[ticket_id]["agents"] = controller.active_tickets[ticket_id].get("agents", {})
+    controller.active_tickets[ticket_id]["agents"][agent_id] = {
         "status": status.status,
         "progress": status.progress,
         "details": status.details,
@@ -132,6 +140,12 @@ async def check_agents_health():
                 health[agent] = {"status": "error", "message": str(e)}
     
     return health
+
+@app.on_event("startup")
+async def startup_event():
+    # Start the controller in a background task
+    asyncio.create_task(controller.run_controller())
+    logger.info("Controller started and running in background")
 
 if __name__ == "__main__":
     import uvicorn
