@@ -1,6 +1,6 @@
 
 import { useState, useCallback } from 'react';
-import { Ticket } from '../types/ticket';
+import { Ticket, TestResult } from '../types/ticket';
 import { toast } from '@/components/ui/sonner';
 import { mockTicket, mockPlannerAnalysis, mockDiffs, mockTestResults, mockUpdates, mockTicketsList } from '../data/mockData';
 import { usePlannerAgent } from './usePlannerAgent';

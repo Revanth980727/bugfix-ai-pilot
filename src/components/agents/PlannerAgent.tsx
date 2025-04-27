@@ -3,9 +3,10 @@ import React from 'react';
 import { AgentCard } from './AgentCard';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { AgentStatus } from '@/hooks/useDashboardState';
 
 interface PlannerAgentProps {
-  status: 'idle' | 'working' | 'success' | 'error' | 'waiting';
+  status: AgentStatus;
   progress?: number;
   analysis?: {
     affectedFiles?: string[];

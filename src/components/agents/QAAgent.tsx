@@ -1,20 +1,13 @@
-
 import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { CheckCircle, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-interface TestResult {
-  name: string;
-  status: 'pass' | 'fail';
-  duration: number;
-  output?: string;
-  errorMessage?: string;
-}
+import { AgentStatus } from '@/hooks/useDashboardState';
+import { TestResult } from '@/types/ticket';
 
 interface QAAgentProps {
-  status: 'idle' | 'working' | 'success' | 'error' | 'waiting';
+  status: AgentStatus;
   progress?: number;
   testResults?: TestResult[];
   summary?: {

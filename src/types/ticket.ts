@@ -30,6 +30,8 @@ export interface TestResult {
   name: string;
   status: TestStatus;
   duration: number;
+  errorMessage?: string;
+  output?: string;
 }
 
 export type UpdateType = 'jira' | 'github' | 'system';
@@ -39,4 +41,3 @@ export interface Update {
   message: string;
   type: UpdateType;
 }
-

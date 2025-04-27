@@ -5,6 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { AgentStatus } from '@/hooks/useDashboardState';
 
 interface FileDiff {
   filename: string;
@@ -14,7 +15,7 @@ interface FileDiff {
 }
 
 interface DeveloperAgentProps {
-  status: 'idle' | 'working' | 'success' | 'error' | 'waiting';
+  status: AgentStatus;
   progress?: number;
   attempt?: number;
   maxAttempts?: number;

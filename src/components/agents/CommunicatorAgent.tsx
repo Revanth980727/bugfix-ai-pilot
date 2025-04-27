@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -6,15 +5,11 @@ import { Button } from '@/components/ui/button';
 import { GitPullRequest, MessageSquare, Github } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
-
-interface Update {
-  timestamp: string;
-  message: string;
-  type: 'jira' | 'github' | 'system';
-}
+import { AgentStatus } from '@/hooks/useDashboardState';
+import { Update } from '@/types/ticket';
 
 interface CommunicatorAgentProps {
-  status: 'idle' | 'working' | 'success' | 'error' | 'waiting';
+  status: AgentStatus;
   progress?: number;
   updates?: Update[];
   prUrl?: string;
