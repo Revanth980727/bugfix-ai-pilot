@@ -1,3 +1,4 @@
+
 version: '3.9'
 
 services:
@@ -25,11 +26,6 @@ services:
       - DEVELOPER_URL=http://developer:8002
       - QA_URL=http://qa:8003
       - COMMUNICATOR_URL=http://communicator:8004
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - JIRA_TOKEN=${JIRA_TOKEN}
-      - JIRA_USER=${JIRA_USER}
-      - JIRA_URL=${JIRA_URL}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
     env_file:
       - ./.env
     volumes:

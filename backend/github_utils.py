@@ -4,24 +4,30 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from github import Github, GithubException
 
-# Try importing GITHUB_TOKEN from env.py if it exists, otherwise use environment variable
-try:
-    from env import GITHUB_TOKEN
-except ImportError:
-    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("github-utils")
 
 def authenticate_github():
     """Authenticate with GitHub using the personal access token"""
-    if not GITHUB_TOKEN:
+    # Get the GitHub token from environment variables first
+    github_token = os.environ.get("GITHUB_TOKEN")
+    
+    # If not found in environment, try importing from env.py if it exists
+    if not github_token:
+        try:
+            from env import GITHUB_TOKEN
+            github_token = GITHUB_TOKEN
+        except ImportError:
+            logger.error("GitHub token not found. Please set GITHUB_TOKEN environment variable.")
+            return None
+        
+    if not github_token:
         logger.error("GitHub token not found. Please set GITHUB_TOKEN environment variable.")
         return None
         
     try:
-        github_client = Github(GITHUB_TOKEN)
+        github_client = Github(github_token)
         # Test the connection
         user = github_client.get_user()
         logger.info(f"Authenticated as GitHub user: {user.login}")
