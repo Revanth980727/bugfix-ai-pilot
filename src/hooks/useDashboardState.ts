@@ -22,7 +22,7 @@ export interface TicketListItem {
 export function useDashboardState() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeTicket, setActiveTicket] = useState<Ticket | null>(null);
-  const [ticketsList, setTicketsList] = useState<TicketListItem[]>(mockTicketsList);
+  const [ticketsList, setTicketsList] = useState<TicketListItem[]>(mockTicketsList as TicketListItem[]);
   
   const planner = usePlannerAgent();
   const developer = useDeveloperAgent();
