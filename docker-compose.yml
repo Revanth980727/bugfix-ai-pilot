@@ -32,6 +32,7 @@ services:
       - JIRA_URL=${JIRA_URL}
     volumes:
       - ./logs:/app/logs
+      - ./code_repo:/app/code_repo
     depends_on:
       - planner
       - developer
@@ -49,6 +50,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ./code_repo:/app/code_repo
+      - ./logs:/app/logs/planner
     networks:
       - bugfix_network
 
@@ -61,6 +63,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ./code_repo:/app/code_repo
+      - ./logs:/app/logs/developer
     networks:
       - bugfix_network
 
@@ -71,8 +74,10 @@ services:
       - "8003:8003"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TEST_COMMAND=${TEST_COMMAND:-pytest}
     volumes:
       - ./code_repo:/app/code_repo
+      - ./logs:/app/logs/qa
     networks:
       - bugfix_network
 
@@ -86,6 +91,14 @@ services:
       - JIRA_TOKEN=${JIRA_TOKEN}
       - JIRA_USER=${JIRA_USER}
       - JIRA_URL=${JIRA_URL}
+      - EMAIL_HOST=${EMAIL_HOST:-""}
+      - EMAIL_PORT=${EMAIL_PORT:-587}
+      - EMAIL_USER=${EMAIL_USER:-""}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-""}
+      - SLACK_TOKEN=${SLACK_TOKEN:-""}
+      - SLACK_CHANNEL=${SLACK_CHANNEL:-""}
+    volumes:
+      - ./logs:/app/logs/communicator
     networks:
       - bugfix_network
 
