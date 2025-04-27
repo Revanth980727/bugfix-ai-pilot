@@ -4,13 +4,13 @@ version: '3.9'
 services:
   frontend:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
       - "3000:80"
     environment:
       - NODE_ENV=production
-    volumes:
-      - frontend_build:/app/build
+      - VITE_API_URL=http://localhost:8000
     depends_on:
       - backend
     networks:
@@ -22,63 +22,70 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+      - PLANNER_URL=http://planner:8001
+      - DEVELOPER_URL=http://developer:8002
+      - QA_URL=http://qa:8003
+      - COMMUNICATOR_URL=http://communicator:8004
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - JIRA_TOKEN=${JIRA_TOKEN}
       - JIRA_USER=${JIRA_USER}
       - JIRA_URL=${JIRA_URL}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
     volumes:
-      - ./code_repo:/app/code_repo
       - ./logs:/app/logs
+    depends_on:
+      - planner
+      - developer
+      - qa
+      - communicator
     networks:
       - bugfix_network
 
   planner:
     build:
       context: ./agents/planner
-    volumes:
-      - ./code_repo:/app/code_repo
+    ports:
+      - "8001:8001"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-    depends_on:
-      - backend
+    volumes:
+      - ./code_repo:/app/code_repo
     networks:
       - bugfix_network
 
   developer:
     build:
       context: ./agents/developer
-    volumes:
-      - ./code_repo:/app/code_repo
+    ports:
+      - "8002:8002"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-    depends_on:
-      - backend
+    volumes:
+      - ./code_repo:/app/code_repo
     networks:
       - bugfix_network
 
   qa:
     build:
       context: ./agents/qa
-    volumes:
-      - ./code_repo:/app/code_repo
+    ports:
+      - "8003:8003"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-    depends_on:
-      - backend
+    volumes:
+      - ./code_repo:/app/code_repo
     networks:
       - bugfix_network
 
   communicator:
     build:
       context: ./agents/communicator
+    ports:
+      - "8004:8004"
     environment:
-      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - JIRA_TOKEN=${JIRA_TOKEN}
       - JIRA_USER=${JIRA_USER}
       - JIRA_URL=${JIRA_URL}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-    depends_on:
-      - backend
     networks:
       - bugfix_network
 
@@ -86,4 +93,5 @@ networks:
   bugfix_network:
 
 volumes:
-  frontend_build:
+  code_repo:
+  logs:

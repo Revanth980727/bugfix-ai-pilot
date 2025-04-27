@@ -1,9 +1,11 @@
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import logging
 import os
 from datetime import datetime
+import httpx
 from env import verify_env_vars, GITHUB_TOKEN, JIRA_TOKEN, JIRA_USER, JIRA_URL
 
 # Verify environment variables on startup
@@ -22,6 +24,12 @@ logging.basicConfig(
 logger = logging.getLogger("bugfix-ai")
 
 app = FastAPI(title="BugFix AI Pilot")
+
+# Agent service URLs
+PLANNER_URL = os.getenv("PLANNER_URL", "http://planner:8001")
+DEVELOPER_URL = os.getenv("DEVELOPER_URL", "http://developer:8002")
+QA_URL = os.getenv("QA_URL", "http://qa:8003")
+COMMUNICATOR_URL = os.getenv("COMMUNICATOR_URL", "http://communicator:8004")
 
 class TicketRequest(BaseModel):
     ticket_id: str
@@ -102,6 +110,28 @@ async def update_agent_status(agent_id: str, status: AgentStatus):
     logger.info(f"Updated {agent_id} status for ticket {ticket_id}: {status.status}")
     
     return {"message": f"Updated {agent_id} status for ticket {ticket_id}"}
+
+@app.get("/agents/health")
+async def check_agents_health():
+    """Check the health of all agent services."""
+    health = {}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for agent, url in [
+            ("planner", PLANNER_URL),
+            ("developer", DEVELOPER_URL),
+            ("qa", QA_URL),
+            ("communicator", COMMUNICATOR_URL)
+        ]:
+            try:
+                response = await client.get(f"{url}/")
+                health[agent] = {
+                    "status": "healthy" if response.status_code == 200 else "unhealthy",
+                    "details": response.json() if response.status_code == 200 else None
+                }
+            except Exception as e:
+                health[agent] = {"status": "error", "message": str(e)}
+    
+    return health
 
 if __name__ == "__main__":
     import uvicorn
