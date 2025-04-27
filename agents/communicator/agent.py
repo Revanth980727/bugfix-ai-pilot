@@ -8,6 +8,21 @@ from typing import List, Dict, Any, Optional, Literal
 import httpx
 from jira import JIRA
 import asyncio
+import sys
+
+# Add the backend directory to path to import utilities
+sys.path.insert(0, '/app/backend')
+try:
+    from github_utils import create_branch, commit_changes, create_pull_request
+except ImportError:
+    # For local development when not in Docker
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("github_utils", "../backend/github_utils.py")
+    github_utils = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(github_utils)
+    create_branch = github_utils.create_branch
+    commit_changes = github_utils.commit_changes
+    create_pull_request = github_utils.create_pull_request
 
 # Configure logging
 logging.basicConfig(
@@ -131,35 +146,131 @@ async def deploy_fix(request: DeployRequest):
         passed_tests = sum(1 for test in request.test_results if test.status == "pass")
         total_tests = len(request.test_results)
         
-        # In a real implementation, this would create a PR using GitHub API
-        # For now, we'll simulate it
+        # Create branch and commit changes if GitHub token is available
         if GITHUB_TOKEN:
-            updates.append(
-                Update(
-                    timestamp=datetime.now().isoformat(),
-                    message=f"Creating branch bugfix/{request.ticket_id}",
-                    type="github"
-                )
-            )
+            # Create branch name using convention bugfix/{ticket-id}
+            branch_name = request.branch_name or f"bugfix/{request.ticket_id}"
             
             updates.append(
                 Update(
                     timestamp=datetime.now().isoformat(),
-                    message=f"Committing changes: {request.commit_message}",
+                    message=f"Creating branch {branch_name}",
                     type="github"
                 )
             )
             
-            updates.append(
-                Update(
-                    timestamp=datetime.now().isoformat(),
-                    message=f"Creating pull request for {request.ticket_id}",
-                    type="github"
+            # Create branch
+            created_branch = create_branch(request.repository, request.ticket_id)
+            if not created_branch:
+                updates.append(
+                    Update(
+                        timestamp=datetime.now().isoformat(),
+                        message=f"Failed to create branch {branch_name}",
+                        type="github"
+                    )
                 )
-            )
-            
-            # Mock PR URL that would be returned by GitHub API
-            pr_url = f"https://github.com/org/{request.repository}/pull/123"
+                success = False
+            else:
+                updates.append(
+                    Update(
+                        timestamp=datetime.now().isoformat(),
+                        message=f"Successfully created branch {branch_name}",
+                        type="github"
+                    )
+                )
+                
+                # Prepare file changes from diffs
+                file_changes = []
+                for diff in request.diffs:
+                    # In a real implementation, this would apply the diff to the file
+                    # For now, we'll simulate by creating a mock content
+                    file_changes.append({
+                        'filename': diff.filename,
+                        'content': f"// Updated content for {diff.filename}\n// Diff: {diff.diff}"
+                    })
+                
+                # Commit changes
+                updates.append(
+                    Update(
+                        timestamp=datetime.now().isoformat(),
+                        message=f"Committing changes: {request.commit_message}",
+                        type="github"
+                    )
+                )
+                
+                commit_success = commit_changes(
+                    request.repository,
+                    branch_name,
+                    file_changes,
+                    request.commit_message
+                )
+                
+                if not commit_success:
+                    updates.append(
+                        Update(
+                            timestamp=datetime.now().isoformat(),
+                            message="Failed to commit changes",
+                            type="github"
+                        )
+                    )
+                    success = False
+                else:
+                    updates.append(
+                        Update(
+                            timestamp=datetime.now().isoformat(),
+                            message="Successfully committed changes",
+                            type="github"
+                        )
+                    )
+                    
+                    # Create PR
+                    updates.append(
+                        Update(
+                            timestamp=datetime.now().isoformat(),
+                            message=f"Creating pull request for {request.ticket_id}",
+                            type="github"
+                        )
+                    )
+                    
+                    # Prepare PR description
+                    description = f"""
+                    Bug fix for {request.ticket_id}
+                    
+                    Changes:
+                    - {request.commit_message}
+                    - Files modified: {len(request.diffs)}
+                    - Lines added: {sum(diff.lines_added for diff in request.diffs)}
+                    - Lines removed: {sum(diff.lines_removed for diff in request.diffs)}
+                    
+                    Test results:
+                    - Passed: {passed_tests}/{total_tests}
+                    """
+                    
+                    pr_url = create_pull_request(
+                        request.repository,
+                        branch_name,
+                        request.ticket_id,
+                        request.commit_message,
+                        description
+                    )
+                    
+                    if not pr_url:
+                        updates.append(
+                            Update(
+                                timestamp=datetime.now().isoformat(),
+                                message="Failed to create pull request",
+                                type="github"
+                            )
+                        )
+                        success = False
+                    else:
+                        updates.append(
+                            Update(
+                                timestamp=datetime.now().isoformat(),
+                                message=f"Pull request created: {pr_url}",
+                                type="github"
+                            )
+                        )
         
         # Update JIRA ticket
         if all([JIRA_TOKEN, JIRA_USER, JIRA_URL]):

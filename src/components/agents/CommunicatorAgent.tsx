@@ -3,8 +3,9 @@ import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
-import { GitPullRequest, MessageSquare } from 'lucide-react';
+import { GitPullRequest, MessageSquare, Github } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
+import { useToast } from '@/components/ui/use-toast';
 
 interface Update {
   timestamp: string;
@@ -21,6 +22,20 @@ interface CommunicatorAgentProps {
 }
 
 export function CommunicatorAgent({ status, progress, updates, prUrl, jiraUrl }: CommunicatorAgentProps) {
+  const { toast } = useToast();
+  
+  const handleButtonClick = (url: string, type: string) => {
+    if (url) {
+      window.open(url, '_blank');
+    } else {
+      toast({
+        title: `No ${type} URL available`,
+        description: `The ${type} URL is not available for this ticket.`,
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <AgentCard title="Communicator" type="communicator" status={status} progress={progress}>
       {status === 'idle' && !updates && (
@@ -46,13 +61,23 @@ export function CommunicatorAgent({ status, progress, updates, prUrl, jiraUrl }:
           {(prUrl || jiraUrl) && (
             <div className="flex gap-2">
               {prUrl && (
-                <Button variant="secondary" size="sm" className="flex items-center gap-1">
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  className="flex items-center gap-1"
+                  onClick={() => handleButtonClick(prUrl, 'PR')}
+                >
                   <GitPullRequest className="h-4 w-4" />
                   View PR
                 </Button>
               )}
               {jiraUrl && (
-                <Button variant="outline" size="sm" className="flex items-center gap-1">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="flex items-center gap-1"
+                  onClick={() => handleButtonClick(jiraUrl, 'JIRA')}
+                >
                   <MessageSquare className="h-4 w-4" />
                   JIRA Ticket
                 </Button>
@@ -68,15 +93,18 @@ export function CommunicatorAgent({ status, progress, updates, prUrl, jiraUrl }:
                 update.type === 'jira' ? 'text-blue-400' : 
                 update.type === 'github' ? 'text-purple-400' : 'text-gray-400';
               
+              const icon = 
+                update.type === 'jira' ? <MessageSquare className="h-4 w-4" /> : 
+                update.type === 'github' ? <Github className="h-4 w-4" /> : 
+                '💬';
+              
               return (
                 <div key={index} className="flex gap-2 mb-2 text-sm">
                   <div className="text-muted-foreground text-xs whitespace-nowrap">
                     {new Date(update.timestamp).toLocaleTimeString()}
                   </div>
                   <div className={`${iconColor} w-4 flex-shrink-0`}>
-                    {update.type === 'jira' && '🔄'}
-                    {update.type === 'github' && '🔀'}
-                    {update.type === 'system' && '💬'}
+                    {icon}
                   </div>
                   <div className="flex-1">{update.message}</div>
                 </div>
