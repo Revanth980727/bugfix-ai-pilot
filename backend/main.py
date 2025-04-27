@@ -44,6 +44,11 @@ class AgentStatus(BaseModel):
     details: Optional[Dict[str, Any]] = None
     timestamp: str = datetime.now().isoformat()
 
+class JiraTicketFilter(BaseModel):
+    statuses: List[str] = ["To Do"]
+    labels: List[str] = ["Bug"]
+    max_results: int = 10
+
 @app.get("/")
 async def root():
     return {
@@ -66,7 +71,7 @@ async def process_ticket(request: TicketRequest, background_tasks: BackgroundTas
             auth = (JIRA_USER, JIRA_TOKEN)
             response = await client.get(
                 f"{JIRA_URL}/rest/api/3/issue/{ticket_id}",
-                params={"fields": "summary,description,created"},
+                params={"fields": "summary,description,created,acceptanceCriteria,attachments,status,priority,reporter,assignee"},
                 auth=auth
             )
             
@@ -74,11 +79,30 @@ async def process_ticket(request: TicketRequest, background_tasks: BackgroundTas
                 raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found in JIRA")
                 
             issue = response.json()
+            
+            # Extract acceptance criteria from custom field if available
+            acceptance_criteria = issue["fields"].get("acceptanceCriteria", "")
+            
+            # Extract any attachments
+            attachments = []
+            for attachment in issue["fields"].get("attachments", []):
+                attachments.append({
+                    "filename": attachment["filename"],
+                    "content_url": attachment["content"],
+                    "mime_type": attachment["mimeType"]
+                })
+            
             ticket = {
                 "ticket_id": ticket_id,
                 "title": issue["fields"]["summary"],
-                "description": issue["fields"]["description"],
-                "created": issue["fields"]["created"]
+                "description": issue["fields"].get("description", ""),
+                "created": issue["fields"]["created"],
+                "acceptance_criteria": acceptance_criteria,
+                "attachments": attachments,
+                "status": issue["fields"]["status"]["name"],
+                "priority": issue["fields"]["priority"]["name"],
+                "reporter": issue["fields"]["reporter"]["displayName"],
+                "assignee": issue["fields"].get("assignee", {}).get("displayName", "Unassigned")
             }
     except Exception as e:
         logger.error(f"Error fetching ticket {ticket_id}: {str(e)}")
@@ -99,6 +123,73 @@ async def get_ticket_status(ticket_id: str):
 @app.get("/tickets")
 async def list_active_tickets():
     return list(controller.active_tickets.values())
+
+@app.get("/jira/tickets")
+async def get_jira_tickets(filters: JiraTicketFilter = None):
+    """Get tickets from JIRA with optional filtering"""
+    if not filters:
+        filters = JiraTicketFilter()
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            auth = (JIRA_USER, JIRA_TOKEN)
+            
+            # Build JQL query
+            jql_parts = []
+            
+            if filters.labels:
+                label_query = " OR ".join([f'labels = "{label}"' for label in filters.labels])
+                jql_parts.append(f"({label_query})")
+            
+            if filters.statuses:
+                status_query = " OR ".join([f'status = "{status}"' for status in filters.statuses])
+                jql_parts.append(f"({status_query})")
+            
+            jql_query = " AND ".join(jql_parts) if jql_parts else ""
+            
+            response = await client.get(
+                f"{JIRA_URL}/rest/api/3/search",
+                params={
+                    "jql": jql_query, 
+                    "fields": "summary,description,created,status,priority,reporter,assignee,labels", 
+                    "maxResults": filters.max_results
+                },
+                auth=auth
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch JIRA tickets: {response.status_code} - {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code, 
+                    detail=f"Failed to fetch tickets from JIRA: {response.text}"
+                )
+                
+            data = response.json()
+            tickets = []
+            
+            for issue in data.get("issues", []):
+                ticket_id = issue["key"]
+                
+                ticket = {
+                    "id": ticket_id,
+                    "title": issue["fields"]["summary"],
+                    "description": issue["fields"].get("description", ""),
+                    "status": issue["fields"]["status"]["name"],
+                    "priority": issue["fields"]["priority"]["name"],
+                    "reporter": issue["fields"]["reporter"]["displayName"],
+                    "assignee": issue["fields"].get("assignee", {}).get("displayName", "Unassigned"),
+                    "created": issue["fields"]["created"],
+                    "updated": issue["fields"].get("updated", issue["fields"]["created"]),
+                    "labels": issue["fields"].get("labels", []),
+                    "in_progress": ticket_id in controller.active_tickets
+                }
+                
+                tickets.append(ticket)
+                
+            return tickets
+    except Exception as e:
+        logger.error(f"Error fetching JIRA tickets: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching tickets: {str(e)}")
 
 @app.post("/agents/{agent_id}/update")
 async def update_agent_status(agent_id: str, status: AgentStatus):

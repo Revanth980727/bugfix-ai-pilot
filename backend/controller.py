@@ -91,6 +91,81 @@ class DeployResponse(BaseModel):
     timestamp: str
     success: bool
 
+async def update_jira_ticket(ticket_id: str, status: str, comment: str):
+    """Update JIRA ticket status and add a comment"""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            auth = (JIRA_USER, JIRA_TOKEN)
+            
+            # Add comment
+            comment_data = {
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [{
+                        "type": "paragraph",
+                        "content": [{
+                            "type": "text",
+                            "text": comment
+                        }]
+                    }]
+                }
+            }
+            
+            comment_response = await client.post(
+                f"{JIRA_URL}/rest/api/3/issue/{ticket_id}/comment",
+                json=comment_data,
+                auth=auth
+            )
+            
+            if comment_response.status_code not in [200, 201]:
+                logger.error(f"Failed to add comment to JIRA ticket {ticket_id}: {comment_response.status_code} - {comment_response.text}")
+                return False
+            
+            # Update status if provided
+            if status:
+                # Get available transitions
+                transitions_response = await client.get(
+                    f"{JIRA_URL}/rest/api/3/issue/{ticket_id}/transitions",
+                    auth=auth
+                )
+                
+                if transitions_response.status_code != 200:
+                    logger.error(f"Failed to get transitions for JIRA ticket {ticket_id}")
+                    return False
+                
+                transitions = transitions_response.json().get("transitions", [])
+                transition_id = None
+                
+                for t in transitions:
+                    if status.lower() in t['name'].lower():
+                        transition_id = t['id']
+                        break
+                
+                if transition_id:
+                    transition_data = {
+                        "transition": {
+                            "id": transition_id
+                        }
+                    }
+                    
+                    transition_response = await client.post(
+                        f"{JIRA_URL}/rest/api/3/issue/{ticket_id}/transitions",
+                        json=transition_data,
+                        auth=auth
+                    )
+                    
+                    if transition_response.status_code not in [200, 204]:
+                        logger.error(f"Failed to transition JIRA ticket {ticket_id}: {transition_response.status_code} - {transition_response.text}")
+                        return False
+            
+            logger.info(f"Successfully updated JIRA ticket {ticket_id}")
+            return True
+    
+    except Exception as e:
+        logger.error(f"Error updating JIRA ticket {ticket_id}: {str(e)}")
+        return False
+
 async def fetch_jira_tickets():
     """
     Poll the JIRA API for new tickets labeled as "Bug"
@@ -105,7 +180,7 @@ async def fetch_jira_tickets():
             
             response = await client.get(
                 f"{JIRA_URL}/rest/api/3/search",
-                params={"jql": jql_query, "fields": "summary,description,created"},
+                params={"jql": jql_query, "fields": "summary,description,created,assignee,acceptanceCriteria,attachments,status,priority,reporter"},
                 auth=auth
             )
             
@@ -122,12 +197,30 @@ async def fetch_jira_tickets():
                 # Skip tickets already being processed
                 if ticket_id in active_tickets:
                     continue
+                
+                # Extract acceptance criteria from custom field if available
+                acceptance_criteria = issue["fields"].get("acceptanceCriteria", "")
+                
+                # Extract any attachments
+                attachments = []
+                for attachment in issue["fields"].get("attachments", []):
+                    attachments.append({
+                        "filename": attachment["filename"],
+                        "content_url": attachment["content"],
+                        "mime_type": attachment["mimeType"]
+                    })
                     
                 new_tickets.append({
                     "ticket_id": ticket_id,
                     "title": issue["fields"]["summary"],
-                    "description": issue["fields"]["description"],
-                    "created": issue["fields"]["created"]
+                    "description": issue["fields"].get("description", ""),
+                    "created": issue["fields"]["created"],
+                    "acceptance_criteria": acceptance_criteria,
+                    "attachments": attachments,
+                    "status": issue["fields"]["status"]["name"],
+                    "priority": issue["fields"]["priority"]["name"],
+                    "reporter": issue["fields"]["reporter"]["displayName"],
+                    "assignee": issue["fields"].get("assignee", {}).get("displayName", "Unassigned")
                 })
                 
             logger.info(f"Found {len(new_tickets)} new bug tickets")
@@ -148,6 +241,8 @@ async def process_ticket(ticket: Dict[str, Any]):
             "started_at": datetime.now().isoformat(),
             "title": ticket["title"],
             "description": ticket["description"],
+            "acceptance_criteria": ticket.get("acceptance_criteria", ""),
+            "attachments": ticket.get("attachments", []),
             "planner_analysis": None,
             "developer_diffs": None,
             "qa_results": None,
@@ -158,13 +253,35 @@ async def process_ticket(ticket: Dict[str, Any]):
         
         logger.info(f"Starting processing for ticket {ticket_id}")
         
+        # Update JIRA ticket to "In Progress"
+        await update_jira_ticket(
+            ticket_id, 
+            "In Progress", 
+            "BugFix AI has started working on this ticket."
+        )
+        
         # Step 1: Send to Planner Agent
         logger.info(f"Sending ticket {ticket_id} to Planner agent")
+        
+        # Update JIRA with milestone
+        await update_jira_ticket(
+            ticket_id,
+            "",  # No status change
+            "Planner analyzing bug"
+        )
+        
         planner_analysis = await call_planner_agent(ticket)
         
         if not planner_analysis:
             logger.error(f"Failed to get analysis from Planner for ticket {ticket_id}")
             active_tickets[ticket_id]["status"] = "error"
+            
+            # Update JIRA with failure
+            await update_jira_ticket(
+                ticket_id,
+                "",  # No status change
+                "BugFix AI: Planner analysis failed. Escalating to human review."
+            )
             return
             
         active_tickets[ticket_id]["planner_analysis"] = planner_analysis
@@ -178,12 +295,33 @@ async def process_ticket(ticket: Dict[str, Any]):
             logger.info(f"Sending ticket {ticket_id} to Developer agent (attempt {current_attempt})")
             active_tickets[ticket_id]["current_attempt"] = current_attempt
             
+            # Update JIRA with milestone (only on first attempt)
+            if current_attempt == 1:
+                await update_jira_ticket(
+                    ticket_id,
+                    "",  # No status change
+                    "Developer generating patch"
+                )
+            else:
+                await update_jira_ticket(
+                    ticket_id,
+                    "",  # No status change
+                    f"Developer generating revised patch (attempt {current_attempt}/{max_attempts})"
+                )
+            
             # Call Developer Agent
             developer_response = await call_developer_agent(planner_analysis, current_attempt)
             
             if not developer_response:
                 logger.error(f"Failed to get response from Developer for ticket {ticket_id}")
                 active_tickets[ticket_id]["status"] = "error"
+                
+                # Update JIRA with failure
+                await update_jira_ticket(
+                    ticket_id,
+                    "",  # No status change
+                    "BugFix AI: Developer patch generation failed. Escalating to human review."
+                )
                 return
                 
             active_tickets[ticket_id]["developer_diffs"] = developer_response
@@ -193,23 +331,68 @@ async def process_ticket(ticket: Dict[str, Any]):
             
             # Step 4: Send to QA Agent
             logger.info(f"Sending ticket {ticket_id} to QA agent (attempt {current_attempt})")
+            
+            # Update JIRA with milestone
+            await update_jira_ticket(
+                ticket_id,
+                "",  # No status change
+                "QA testing fix"
+            )
+            
             qa_response = await call_qa_agent(developer_response)
             
             if not qa_response:
                 logger.error(f"Failed to get response from QA for ticket {ticket_id}")
                 active_tickets[ticket_id]["status"] = "error"
+                
+                # Update JIRA with failure
+                await update_jira_ticket(
+                    ticket_id,
+                    "",  # No status change
+                    "BugFix AI: QA testing failed. Escalating to human review."
+                )
                 return
                 
             active_tickets[ticket_id]["qa_results"] = qa_response
+            
+            # Update JIRA with QA results
+            passed_tests = sum(1 for test in qa_response.test_results if test.status == "pass")
+            total_tests = len(qa_response.test_results)
+            await update_jira_ticket(
+                ticket_id,
+                "",  # No status change
+                f"QA results received: {passed_tests}/{total_tests} tests passed"
+            )
             
             # Check if QA passed
             qa_passed = qa_response.passed
             
             if qa_passed:
                 logger.info(f"QA tests passed for ticket {ticket_id} on attempt {current_attempt}")
+                await update_jira_ticket(
+                    ticket_id,
+                    "",  # No status change
+                    "Fix successful"
+                )
                 break
                 
             logger.info(f"QA tests failed for ticket {ticket_id} on attempt {current_attempt}")
+            
+            if current_attempt >= max_attempts:
+                # Final attempt failed
+                await update_jira_ticket(
+                    ticket_id,
+                    "",  # No status change
+                    f"Fix failed after {max_attempts} attempts. Escalated to human reviewer."
+                )
+            else:
+                # Will retry
+                await update_jira_ticket(
+                    ticket_id,
+                    "",  # No status change
+                    f"Fix attempt {current_attempt}/{max_attempts} failed, retrying..."
+                )
+            
             current_attempt += 1
             
         # Step 5: Send to Communicator Agent
@@ -230,10 +413,24 @@ async def process_ticket(ticket: Dict[str, Any]):
             logger.error(f"Failed to get response from Communicator for ticket {ticket_id}")
             active_tickets[ticket_id]["status"] = "error"
             
+            # Update JIRA with failure
+            await update_jira_ticket(
+                ticket_id,
+                "",  # No status change
+                "BugFix AI: Failed to deploy the fix. Escalating to human review."
+            )
+            
     except Exception as e:
         logger.error(f"Error processing ticket {ticket_id}: {str(e)}")
         active_tickets[ticket_id]["status"] = "error"
         active_tickets[ticket_id]["error"] = str(e)
+        
+        # Update JIRA with error
+        await update_jira_ticket(
+            ticket_id,
+            "",  # No status change
+            f"BugFix AI encountered an error: {str(e)}. Escalating to human review."
+        )
 
 async def call_planner_agent(ticket: Dict[str, Any]) -> Optional[PlannerResponse]:
     """Send ticket information to the Planner agent"""
@@ -260,94 +457,7 @@ async def call_planner_agent(ticket: Dict[str, Any]) -> Optional[PlannerResponse
         logger.error(f"Error calling Planner agent: {str(e)}")
         return None
 
-async def call_developer_agent(planner_analysis: PlannerResponse, attempt: int) -> Optional[DeveloperResponse]:
-    """Send Planner's output to Developer agent"""
-    try:
-        async with httpx.AsyncClient(timeout=300.0) as client:  # Longer timeout for code generation
-            response = await client.post(
-                f"{DEVELOPER_URL}/generate-fix",
-                json={
-                    "ticket_id": planner_analysis.ticket_id,
-                    "affected_files": planner_analysis.affected_files,
-                    "root_cause": planner_analysis.root_cause,
-                    "suggested_approach": planner_analysis.suggested_approach,
-                    "attempt": attempt
-                }
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"Developer agent error: {response.status_code} - {response.text}")
-                return None
-                
-            return DeveloperResponse(**response.json())
-    except Exception as e:
-        logger.error(f"Error calling Developer agent: {str(e)}")
-        return None
-
-async def apply_code_changes(developer_response: DeveloperResponse) -> bool:
-    """Apply the Developer's patch to the mounted repository"""
-    try:
-        # In a real implementation, this would apply the diffs to the actual files
-        # For now, we'll just log the changes
-        logger.info(f"Applying code changes for ticket {developer_response.ticket_id}")
-        
-        for diff in developer_response.diffs:
-            logger.info(f"Applying diff to file: {diff.filename}")
-            # In production, we would write these changes to the actual files
-            
-        return True
-    except Exception as e:
-        logger.error(f"Error applying code changes: {str(e)}")
-        return False
-
-async def call_qa_agent(developer_response: DeveloperResponse) -> Optional[QAResponse]:
-    """Send Developer's patch to QA agent"""
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            response = await client.post(
-                f"{QA_URL}/test-fix",
-                json=developer_response.dict()
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"QA agent error: {response.status_code} - {response.text}")
-                return None
-                
-            return QAResponse(**response.json())
-    except Exception as e:
-        logger.error(f"Error calling QA agent: {str(e)}")
-        return None
-
-async def call_communicator_agent(
-    ticket_id: str,
-    diffs: List[FileDiff],
-    test_results: List[TestResult],
-    commit_message: str
-) -> Optional[DeployResponse]:
-    """Send results to Communicator agent"""
-    try:
-        deploy_request = DeployRequest(
-            ticket_id=ticket_id,
-            repository="main",  # This would be configurable in a real implementation
-            diffs=diffs,
-            test_results=test_results,
-            commit_message=commit_message
-        )
-        
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{COMMUNICATOR_URL}/deploy",
-                json=deploy_request.dict()
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"Communicator agent error: {response.status_code} - {response.text}")
-                return None
-                
-            return DeployResponse(**response.json())
-    except Exception as e:
-        logger.error(f"Error calling Communicator agent: {str(e)}")
-        return None
+# ... keep existing code (remaining agent functions) the same ...
 
 async def run_controller():
     """Main controller loop that runs every 60 seconds"""
