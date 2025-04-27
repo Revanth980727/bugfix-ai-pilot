@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -11,20 +12,9 @@ from slack_sdk.web.async_client import AsyncWebClient
 import aiosmtplib
 from email.mime.text import MIMEText
 import sys
-
-# Add the backend directory to path to import utilities
-sys.path.insert(0, '/app/backend')
-try:
-    from github_utils import create_branch, commit_changes, create_pull_request
-except ImportError:
-    # For local development when not in Docker
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("github_utils", "../backend/github_utils.py")
-    github_utils = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(github_utils)
-    create_branch = github_utils.create_branch
-    commit_changes = github_utils.commit_changes
-    create_pull_request = github_utils.create_pull_request
+import importlib.util
+from pathlib import Path
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -32,6 +22,32 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("communicator-agent")
+
+# Load github_utils directly from the file
+github_utils_path = Path("/app/backend/github_utils.py")
+if not github_utils_path.exists():
+    # Look in parent directory for local development
+    github_utils_path = Path(__file__).parent.parent.parent / "backend" / "github_utils.py"
+
+if github_utils_path.exists():
+    spec = importlib.util.spec_from_file_location("github_utils", str(github_utils_path))
+    github_utils = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(github_utils)
+    create_branch = github_utils.create_branch
+    commit_changes = github_utils.commit_changes
+    create_pull_request = github_utils.create_pull_request
+else:
+    logger.error(f"Could not find github_utils.py at {github_utils_path}")
+    # Provide stub functions to prevent crashes
+    def create_branch(*args, **kwargs):
+        logger.error("github_utils not available: create_branch called")
+        return None
+    def commit_changes(*args, **kwargs):
+        logger.error("github_utils not available: commit_changes called")
+        return False
+    def create_pull_request(*args, **kwargs):
+        logger.error("github_utils not available: create_pull_request called")
+        return None
 
 # Get environment variables
 JIRA_TOKEN = os.getenv('JIRA_TOKEN')
@@ -48,44 +64,7 @@ NOTIFICATION_EMAIL = os.getenv('NOTIFICATION_EMAIL')
 
 app = FastAPI(title="BugFix AI Communicator Agent")
 
-class FileDiff(BaseModel):
-    filename: str
-    diff: str
-    lines_added: int
-    lines_removed: int
-
-class TestResult(BaseModel):
-    name: str
-    status: Literal["pass", "fail"]
-    duration: int
-    output: Optional[str] = None
-    error_message: Optional[str] = None
-
-class QAResponse(BaseModel):
-    ticket_id: str
-    passed: bool
-    test_results: List[TestResult]
-
-class DeployRequest(BaseModel):
-    ticket_id: str
-    repository: str
-    branch_name: Optional[str] = None
-    diffs: List[FileDiff]
-    test_results: List[TestResult]
-    commit_message: str
-
-class Update(BaseModel):
-    timestamp: str
-    message: str
-    type: Literal["jira", "github", "system"]
-
-class DeployResponse(BaseModel):
-    ticket_id: str
-    pr_url: Optional[str] = None
-    jira_url: Optional[str] = None
-    updates: List[Update]
-    timestamp: str = datetime.now().isoformat()
-    success: bool
+# ... keep existing code (model class definitions for FileDiff, TestResult, QAResponse, etc)
 
 async def send_slack_notification(message: str) -> bool:
     """Send a notification to Slack"""
@@ -176,6 +155,47 @@ async def update_jira_with_custom_fields(
         logger.error(f"Error updating JIRA ticket {ticket_id}: {str(e)}")
         return False
 
+# ... keep existing code (API endpoints and implementation)
+
+class FileDiff(BaseModel):
+    filename: str
+    diff: str
+    lines_added: int
+    lines_removed: int
+
+class TestResult(BaseModel):
+    name: str
+    status: Literal["pass", "fail"]
+    duration: int
+    output: Optional[str] = None
+    error_message: Optional[str] = None
+
+class QAResponse(BaseModel):
+    ticket_id: str
+    passed: bool
+    test_results: List[TestResult]
+
+class DeployRequest(BaseModel):
+    ticket_id: str
+    repository: str
+    branch_name: Optional[str] = None
+    diffs: List[FileDiff]
+    test_results: List[TestResult]
+    commit_message: str
+
+class Update(BaseModel):
+    timestamp: str
+    message: str
+    type: Literal["jira", "github", "system"]
+
+class DeployResponse(BaseModel):
+    ticket_id: str
+    pr_url: Optional[str] = None
+    jira_url: Optional[str] = None
+    updates: List[Update]
+    timestamp: str = datetime.now().isoformat()
+    success: bool
+
 @app.get("/")
 async def root():
     return {
@@ -195,6 +215,8 @@ async def deploy_fix(request: DeployRequest):
     jira_url = f"{JIRA_URL}/browse/{request.ticket_id}" if JIRA_URL else None
     
     try:
+        # ... keep existing code (deployment process implementation)
+        
         # Start deployment process
         updates.append(
             Update(

@@ -83,7 +83,8 @@ services:
 
   communicator:
     build:
-      context: ./agents/communicator
+      context: .
+      dockerfile: ./agents/communicator/Dockerfile
     ports:
       - "8004:8004"
     environment:
@@ -99,6 +100,7 @@ services:
       - SLACK_CHANNEL=${SLACK_CHANNEL:-""}
     volumes:
       - ./logs:/app/logs/communicator
+      - ./backend:/app/backend
     networks:
       - bugfix_network
 
