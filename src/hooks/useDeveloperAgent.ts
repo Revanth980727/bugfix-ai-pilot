@@ -10,8 +10,9 @@ export function useDeveloperAgent() {
   const [attempt, setAttempt] = useState(1);
   const maxAttempts = 4;
 
-  const simulateWork = (onComplete: () => void, mockDiffs: CodeDiff[]) => {
+  const simulateWork = (onComplete: () => void, mockDiffs: CodeDiff[], currentAttempt: number = 1) => {
     setStatus('working');
+    setAttempt(currentAttempt);
     
     const interval = setInterval(() => {
       setProgress(prev => {
@@ -25,6 +26,10 @@ export function useDeveloperAgent() {
         return Math.min(prev + 2, 100);
       });
     }, 100);
+  };
+
+  const simulateFailure = () => {
+    setStatus('error');
   };
 
   const reset = () => {
@@ -41,6 +46,7 @@ export function useDeveloperAgent() {
     attempt,
     maxAttempts,
     simulateWork,
+    simulateFailure,
     reset
   };
 }

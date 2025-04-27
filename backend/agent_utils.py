@@ -34,13 +34,17 @@ async def call_planner_agent(ticket: Dict[str, Any]):
         logger.error(f"Error calling Planner agent: {str(e)}")
         return None
 
-async def call_developer_agent(planner_analysis: Dict[str, Any], attempt: int):
+async def call_developer_agent(planner_analysis: Dict[str, Any], attempt: int, context: Dict[str, Any] = None):
     """Send planner analysis to Developer agent"""
     try:
         payload = {
             "analysis": planner_analysis,
             "attempt": attempt
         }
+        
+        # Add context information (like previous QA results) if available
+        if context:
+            payload["context"] = context
         
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
@@ -101,4 +105,3 @@ async def call_communicator_agent(ticket_id: str, diffs: List[Dict[str, Any]],
     except Exception as e:
         logger.error(f"Error calling Communicator agent: {str(e)}")
         return None
-

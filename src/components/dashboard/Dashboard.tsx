@@ -41,7 +41,9 @@ export function Dashboard() {
     updates,
     handleTicketSubmit,
     ticketsList,
-    fetchTickets
+    fetchTickets,
+    currentAttempt,
+    maxAttempts
   } = useDashboardState();
 
   // Poll for ticket updates every 10 seconds
@@ -103,8 +105,8 @@ export function Dashboard() {
             <DeveloperAgent 
               status={developerStatus} 
               progress={developerProgress}
-              attempt={1}
-              maxAttempts={4}
+              attempt={currentAttempt}
+              maxAttempts={maxAttempts}
               diffs={diffs}
             />
           </div>

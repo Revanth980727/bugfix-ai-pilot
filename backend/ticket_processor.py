@@ -12,6 +12,7 @@ from agent_utils import (
     call_qa_agent,
     call_communicator_agent
 )
+from env import MAX_RETRIES
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -43,7 +44,7 @@ async def process_ticket(ticket: Dict[str, Any]):
             "qa_results": None,
             "communicator_result": None,
             "current_attempt": 1,
-            "max_attempts": 4
+            "max_attempts": MAX_RETRIES
         }
         
         logger.info(f"Starting processing for ticket {ticket_id}")
@@ -91,11 +92,10 @@ async def process_ticket(ticket: Dict[str, Any]):
         
         # Step 2-4: Developer-QA Loop
         current_attempt = 1
-        max_attempts = 4
         qa_passed = False
         
-        while current_attempt <= max_attempts and not qa_passed:
-            logger.info(f"Sending ticket {ticket_id} to Developer agent (attempt {current_attempt})")
+        while current_attempt <= MAX_RETRIES and not qa_passed:
+            logger.info(f"Sending ticket {ticket_id} to Developer agent (attempt {current_attempt}/{MAX_RETRIES})")
             active_tickets[ticket_id]["current_attempt"] = current_attempt
             
             # Update JIRA
@@ -105,31 +105,44 @@ async def process_ticket(ticket: Dict[str, Any]):
                 await update_jira_ticket(
                     ticket_id,
                     "",
-                    f"Developer generating revised patch (attempt {current_attempt}/{max_attempts})"
+                    f"Developer generating revised patch (attempt {current_attempt}/{MAX_RETRIES})"
                 )
+            
+            # On retry, include previous QA results for context
+            developer_context = {
+                "previousAttempts": []
+            }
+            
+            if current_attempt > 1 and active_tickets[ticket_id].get("qa_results"):
+                developer_context["previousAttempts"].append({
+                    "attempt": current_attempt - 1,
+                    "qaResults": active_tickets[ticket_id]["qa_results"]
+                })
             
             # Log input to developer
             developer_input = {
                 "ticket_id": ticket_id,
                 "plannerAnalysis": planner_analysis,
                 "attempt": current_attempt,
-                "maxAttempts": max_attempts
+                "maxAttempts": MAX_RETRIES,
+                "context": developer_context
             }
-            with open(f"{ticket_log_dir}/developer_input.json", 'w') as f:
+            
+            with open(f"{ticket_log_dir}/developer_input_{current_attempt}.json", 'w') as f:
                 json.dump(developer_input, f, indent=2)
             
             # Call Developer
-            developer_response = await call_developer_agent(planner_analysis, current_attempt)
+            developer_response = await call_developer_agent(planner_analysis, current_attempt, developer_context)
             
             # Log output from developer
             if developer_response:
-                with open(f"{ticket_log_dir}/developer_output.json", 'w') as f:
+                with open(f"{ticket_log_dir}/developer_output_{current_attempt}.json", 'w') as f:
                     json.dump(developer_response, f, indent=2)
             else:
                 # Log error
                 error_log = {
                     "timestamp": datetime.now().isoformat(),
-                    "message": "Developer patch generation failed"
+                    "message": f"Developer patch generation failed on attempt {current_attempt}"
                 }
                 with open(f"{ticket_log_dir}/developer_errors.json", 'a') as f:
                     f.write(json.dumps(error_log) + "\n")
@@ -139,7 +152,7 @@ async def process_ticket(ticket: Dict[str, Any]):
                 await update_jira_ticket(
                     ticket_id,
                     "",
-                    "BugFix AI: Developer patch generation failed. Escalating to human review."
+                    f"BugFix AI: Developer patch generation failed on attempt {current_attempt}. Escalating to human review."
                 )
                 return
                 
@@ -147,27 +160,28 @@ async def process_ticket(ticket: Dict[str, Any]):
             
             # Call QA
             logger.info(f"Sending ticket {ticket_id} to QA agent (attempt {current_attempt})")
-            await update_jira_ticket(ticket_id, "", "QA testing fix")
+            await update_jira_ticket(ticket_id, "", f"QA testing fix (attempt {current_attempt})")
             
             # Log input to QA
             qa_input = {
                 "ticket_id": ticket_id,
-                "diffs": developer_response["diffs"]
+                "diffs": developer_response["diffs"],
+                "attempt": current_attempt
             }
-            with open(f"{ticket_log_dir}/qa_input.json", 'w') as f:
+            with open(f"{ticket_log_dir}/qa_input_{current_attempt}.json", 'w') as f:
                 json.dump(qa_input, f, indent=2)
             
             qa_response = await call_qa_agent(developer_response)
             
             # Log output from QA
             if qa_response:
-                with open(f"{ticket_log_dir}/qa_output.json", 'w') as f:
+                with open(f"{ticket_log_dir}/qa_output_{current_attempt}.json", 'w') as f:
                     json.dump(qa_response, f, indent=2)
             else:
                 # Log error
                 error_log = {
                     "timestamp": datetime.now().isoformat(),
-                    "message": "QA testing failed"
+                    "message": f"QA testing failed on attempt {current_attempt}"
                 }
                 with open(f"{ticket_log_dir}/qa_errors.json", 'a') as f:
                     f.write(json.dumps(error_log) + "\n")
@@ -177,7 +191,7 @@ async def process_ticket(ticket: Dict[str, Any]):
                 await update_jira_ticket(
                     ticket_id,
                     "",
-                    "BugFix AI: QA testing failed. Escalating to human review."
+                    f"BugFix AI: QA testing failed on attempt {current_attempt}. Escalating to human review."
                 )
                 return
                 
@@ -189,7 +203,7 @@ async def process_ticket(ticket: Dict[str, Any]):
             await update_jira_ticket(
                 ticket_id,
                 "",
-                f"QA results received: {passed_tests}/{total_tests} tests passed"
+                f"QA results for attempt {current_attempt}: {passed_tests}/{total_tests} tests passed"
             )
             
             qa_passed = qa_response["passed"]
@@ -200,17 +214,17 @@ async def process_ticket(ticket: Dict[str, Any]):
             
             logger.info(f"QA tests failed for ticket {ticket_id} on attempt {current_attempt}")
             
-            if current_attempt >= max_attempts:
+            if current_attempt >= MAX_RETRIES:
                 await update_jira_ticket(
                     ticket_id,
                     "",
-                    f"Fix failed after {max_attempts} attempts. Escalated to human reviewer."
+                    f"Fix failed after {MAX_RETRIES} attempts. Escalated to human reviewer."
                 )
                 
                 # Log error for max attempts reached
                 error_log = {
                     "timestamp": datetime.now().isoformat(),
-                    "message": f"Max attempts ({max_attempts}) reached without successful fix"
+                    "message": f"Max attempts ({MAX_RETRIES}) reached without successful fix"
                 }
                 with open(f"{ticket_log_dir}/qa_errors.json", 'a') as f:
                     f.write(json.dumps(error_log) + "\n")
@@ -218,12 +232,23 @@ async def process_ticket(ticket: Dict[str, Any]):
                 await update_jira_ticket(
                     ticket_id,
                     "",
-                    f"Fix attempt {current_attempt}/{max_attempts} failed, retrying..."
+                    f"Fix attempt {current_attempt}/{MAX_RETRIES} failed, retrying..."
                 )
             
             current_attempt += 1
         
-        # Step 5: Communicator
+        # If all attempts failed, escalate
+        if not qa_passed:
+            active_tickets[ticket_id]["status"] = "escalated"
+            await update_jira_ticket(
+                ticket_id,
+                "Needs Review",
+                f"BugFix AI: All {MAX_RETRIES} fix attempts failed. This ticket requires human attention.",
+                {"needs_human_review": True}
+            )
+            return
+        
+        # Step 5: Communicator for successful fix
         logger.info(f"Sending ticket {ticket_id} to Communicator agent")
         
         # Log input to communicator
@@ -312,4 +337,3 @@ async def cleanup_old_tickets():
                 
     for ticket_id in tickets_to_remove:
         del active_tickets[ticket_id]
-

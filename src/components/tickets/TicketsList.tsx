@@ -10,9 +10,10 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { LogViewer } from '../logs/LogViewer';
+import { LogViewer } from '@/components/logs/LogViewer';
 import { cn } from '@/lib/utils';
 import { TicketListItem } from '@/hooks/useDashboardState';
+import { EscalationBadge } from './EscalationBadge';
 
 interface TicketsListProps {
   tickets: TicketListItem[];
@@ -41,7 +42,7 @@ export function TicketsList({ tickets, searchQuery, filterStatus }: TicketsListP
   
   const getStatusBadgeVariant = (status: string) => {
     if (status === 'success') return "default";
-    if (status === 'in-progress') return "outline"; 
+    if (status === 'in-progress' || status.includes('attempt')) return "outline"; 
     if (status === 'failed' || status === 'escalated') return "destructive";
     return "secondary";
   };
@@ -78,7 +79,12 @@ export function TicketsList({ tickets, searchQuery, filterStatus }: TicketsListP
             {filteredTickets.map((ticket) => (
               <React.Fragment key={ticket.id}>
                 <TableRow className={cn(expandedLogs === ticket.id && "border-b-0")}>
-                  <TableCell className="font-medium">{ticket.id}</TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      {ticket.id}
+                      <EscalationBadge needsReview={!!ticket.needsReview} />
+                    </div>
+                  </TableCell>
                   <TableCell>{ticket.title}</TableCell>
                   <TableCell>{getStageBadge(ticket.stage)}</TableCell>
                   <TableCell>
