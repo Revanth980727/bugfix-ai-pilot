@@ -2,13 +2,14 @@
 import React, { ReactNode } from 'react';
 import { AgentStatus } from './AgentStatus';
 import { cn } from '@/lib/utils';
+import { AgentStatus as AgentStatusType } from '@/hooks/useDashboardState';
 
 type AgentType = 'planner' | 'developer' | 'qa' | 'communicator';
 
 interface AgentCardProps {
   title: string;
   type: AgentType;
-  status: 'idle' | 'working' | 'success' | 'error' | 'waiting';
+  status: AgentStatusType;
   progress?: number;
   children: ReactNode;
 }

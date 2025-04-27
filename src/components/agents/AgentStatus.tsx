@@ -1,12 +1,13 @@
 
 import React from 'react';
 import { cn } from '@/lib/utils';
+import { AgentStatus as AgentStatusType } from '@/hooks/useDashboardState';
 
 type AgentType = 'planner' | 'developer' | 'qa' | 'communicator';
 
 interface AgentStatusProps {
   type: AgentType;
-  status: 'idle' | 'working' | 'success' | 'error' | 'waiting';
+  status: AgentStatusType;
   progress?: number;
 }
 
@@ -24,6 +25,7 @@ export function AgentStatus({ type, status, progress = 0 }: AgentStatusProps) {
     success: 'bg-green-600',
     error: 'bg-red-600',
     waiting: 'bg-yellow-600',
+    escalated: 'bg-purple-600',
   };
 
   const statusText = {
@@ -32,6 +34,7 @@ export function AgentStatus({ type, status, progress = 0 }: AgentStatusProps) {
     success: 'Success',
     error: 'Error',
     waiting: 'Waiting',
+    escalated: 'Escalated',
   };
 
   return (
