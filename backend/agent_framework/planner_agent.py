@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-from .agent_base import Agent
+from .agent_base import Agent, AgentStatus
 
 class PlannerAgent(Agent):
     def __init__(self):
@@ -12,64 +12,98 @@ class PlannerAgent(Agent):
         self.output_dir = os.path.join(os.path.dirname(__file__), "planner_outputs")
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def _extract_files(self, text: str) -> List[str]:
-        """Extract potential filenames from text using common extensions"""
-        file_pattern = r'(?:^|\s)([a-zA-Z0-9_\-./]+\.(?:py|js|tsx?|jsx|css|html))(?:$|\s)'
-        return list(set(re.findall(file_pattern, text)))
-
-    def _extract_modules(self, text: str) -> List[str]:
-        """Extract potential module names from text"""
-        module_pattern = r'(?:^|\s)(?:from\s+|import\s+)([a-zA-Z0-9_\.]+)(?:$|\s)'
-        modules = re.findall(module_pattern, text)
-        # Also look for React component names (PascalCase)
-        component_pattern = r'\b([A-Z][a-zA-Z0-9]+(?:Component|Service|Hook|Utils?|Helper))\b'
-        components = re.findall(component_pattern, text)
-        return list(set(modules + components))
-
-    def _extract_functions(self, text: str) -> List[str]:
-        """Extract potential function or class names from text"""
-        # Look for function calls or definitions
-        func_pattern = r'\b(?:def\s+|class\s+|function\s+)([a-zA-Z0-9_]+)\b'
-        functions = re.findall(func_pattern, text)
-        # Look for camelCase method names
-        method_pattern = r'\b([a-z][a-zA-Z0-9]+(?:Function|Method|Handler|Callback))\b'
-        methods = re.findall(method_pattern, text)
-        return list(set(functions + methods))
-
-    def _extract_errors(self, text: str) -> List[str]:
-        """Extract potential error messages from text"""
-        # Look for typical error patterns
-        error_patterns = [
-            r'Error:\s+([^\n]+)',
-            r'Exception:\s+([^\n]+)',
-            r'Traceback[^:]*:\s+([^\n]+)',
-            r'Failed[^:]*:\s+([^\n]+)'
-        ]
-        errors = []
-        for pattern in error_patterns:
-            errors.extend(re.findall(pattern, text, re.IGNORECASE))
-        return list(set(errors))
-
-    def _generate_summary(self, title: str, description: str, 
-                         files: List[str], modules: List[str], 
-                         functions: List[str], errors: List[str]) -> str:
-        """Generate a concise summary of the analysis"""
-        summary_parts = []
+    def _create_planning_prompt(self, ticket_id: str, title: str, description: str) -> str:
+        """Create a structured prompt for GPT to analyze the bug ticket"""
+        return f"""
+        You are a senior software developer analyzing a bug ticket. Your task is to extract key information from this ticket.
         
-        if errors:
-            summary_parts.append(f"Error(s) identified: {errors[0]}")
+        Your response must be valid parsable JSON. No prose or extra text.
         
-        if files:
-            summary_parts.append(f"Affects {len(files)} file(s)")
+        Respond ONLY in the following strict JSON format:
+        {{
+            "bug_summary": "Brief one or two sentence summary of the bug",
+            "affected_files": ["file1.py", "module2.js", ...],
+            "error_type": "TypeError or other appropriate error classification"
+        }}
+        
+        Here's the bug ticket:
+        
+        Ticket ID: {ticket_id}
+        Title: {title}
+        
+        Description:
+        {description}
+        """
+
+    def _extract_first_sentences(self, text: str, max_sentences: int = 2) -> str:
+        """Extract the first 1-2 sentences from text for fallback summary"""
+        # Simple sentence splitting by common endings
+        sentence_endings = r'(?<=[.!?])\s+'
+        sentences = re.split(sentence_endings, text.strip())
+        selected = sentences[:min(max_sentences, len(sentences))]
+        return ' '.join(selected).strip()
+
+    def _validate_gpt_response(self, response: str) -> tuple[bool, Optional[Dict[str, Any]], str]:
+        """
+        Validate the GPT response against our expected format
+        Returns: (is_valid, parsed_json, error_message)
+        """
+        if not response:
+            return False, None, "Empty response"
             
-        if modules:
-            summary_parts.append(f"Involves {len(modules)} module(s)")
+        # Extract JSON if wrapped in backticks or text
+        json_content = response
+        json_match = re.search(r'```(?:json)?\s*({.*?})\s*```', response, re.DOTALL)
+        if json_match:
+            json_content = json_match.group(1)
+        else:
+            # Try to find JSON object in free text
+            json_match = re.search(r'({.*})', response, re.DOTALL)
+            if json_match:
+                json_content = json_match.group(1)
+        
+        try:
+            data = json.loads(json_content)
             
-        if functions:
-            summary_parts.append(f"Touches {len(functions)} function(s)")
+            # Check required fields
+            required_fields = ["bug_summary", "affected_files", "error_type"]
+            for field in required_fields:
+                if field not in data:
+                    return False, None, f"Missing required field: {field}"
+                    
+            # Validate field types
+            if not isinstance(data["bug_summary"], str):
+                return False, None, "bug_summary must be a string"
+                
+            if not isinstance(data["affected_files"], list):
+                return False, None, "affected_files must be a list"
+                
+            if not isinstance(data["error_type"], str):
+                return False, None, "error_type must be a string"
+                
+            return True, data, "Valid JSON"
             
-        summary = " | ".join(summary_parts) if summary_parts else "No specific technical context identified"
-        return f"Bug: {title}. {summary}"
+        except json.JSONDecodeError as e:
+            return False, None, f"JSON parse error: {str(e)}"
+        except Exception as e:
+            return False, None, f"Validation error: {str(e)}"
+
+    def _generate_fallback_output(self, ticket_id: str, description: str) -> Dict[str, Any]:
+        """Generate fallback output when GPT response fails validation"""
+        self.log(f"Generating fallback output for ticket {ticket_id}")
+        
+        # Extract first 1-2 sentences for bug summary
+        bug_summary = self._extract_first_sentences(description)
+        if len(bug_summary) > 150:  # Truncate if too long
+            bug_summary = bug_summary[:147] + "..."
+            
+        return {
+            "ticket_id": ticket_id,
+            "bug_summary": bug_summary,
+            "affected_files": [],
+            "error_type": "Unknown",
+            "using_fallback": True
+        }
 
     def _save_output(self, ticket_id: str, output_data: Dict[str, Any]) -> None:
         """Save the analysis output to a JSON file"""
@@ -79,52 +113,84 @@ class PlannerAgent(Agent):
             json.dump(output_data, f, indent=2)
         self.log(f"Analysis output saved to {filepath}")
 
+    def _query_gpt(self, prompt: str) -> str:
+        """
+        Query GPT-4 with the given prompt
+        This is a placeholder - in a real implementation, this would call OpenAI API
+        """
+        try:
+            import openai
+            
+            # Get OpenAI API key from environment
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                self.log("Missing OpenAI API key")
+                raise EnvironmentError("Missing OPENAI_API_KEY environment variable")
+                
+            openai.api_key = api_key
+            
+            response = openai.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a senior software developer tasked with analyzing bug tickets and extracting structured information."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=2000
+            )
+            return response.choices[0].message.content
+                
+        except Exception as e:
+            self.log(f"Error querying GPT-4: {str(e)}")
+            raise
+
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze ticket and plan approach"""
+        """Analyze ticket and extract structured information"""
         self.log("Starting ticket analysis")
         
         ticket_id = input_data.get("ticket_id", "")
         title = input_data.get("title", "")
         description = input_data.get("description", "")
-        full_text = f"{title}\n{description}"
         
         try:
-            # Extract relevant information
-            files = self._extract_files(full_text)
-            self.log(f"Found {len(files)} potential affected files")
+            # Create prompt for GPT
+            prompt = self._create_planning_prompt(ticket_id, title, description)
             
-            modules = self._extract_modules(full_text)
-            self.log(f"Found {len(modules)} potential affected modules")
+            # Get analysis from GPT
+            self.log(f"Sending ticket {ticket_id} to GPT for analysis")
+            gpt_response = self._query_gpt(prompt)
             
-            functions = self._extract_functions(full_text)
-            self.log(f"Found {len(functions)} potential affected functions")
+            # Validate GPT response
+            is_valid, parsed_data, error_message = self._validate_gpt_response(gpt_response)
             
-            errors = self._extract_errors(full_text)
-            self.log(f"Found {len(errors)} potential error patterns")
-            
-            # Generate analysis output
-            output = {
-                "ticket_id": ticket_id,
-                "affected_files": files,
-                "affected_modules": modules,
-                "affected_functions": functions,
-                "errors_identified": errors,
-                "summary": self._generate_summary(title, description, files, modules, functions, errors),
-                "timestamp": datetime.now().isoformat()
-            }
+            if is_valid and parsed_data:
+                # Add additional metadata to the output
+                output = {
+                    "ticket_id": ticket_id,
+                    "bug_summary": parsed_data["bug_summary"],
+                    "affected_files": parsed_data["affected_files"],
+                    "error_type": parsed_data["error_type"],
+                    "using_fallback": False
+                }
+                
+                self.log(f"[PlannerAgent] Parsed ticket {ticket_id} | Valid JSON received | Bug Summary: \"{parsed_data['bug_summary']}\"")
+            else:
+                # Use fallback if validation fails
+                self.log(f"[PlannerAgent] Fallback triggered for {ticket_id} | Reason: {error_message}")
+                output = self._generate_fallback_output(ticket_id, description)
             
             # Save output for debugging/inspection
             self._save_output(ticket_id, output)
             
-            self.log("Analysis completed successfully")
+            self.log("Analysis completed")
             return output
             
         except Exception as e:
             error_msg = f"Error during ticket analysis: {str(e)}"
             self.log(error_msg)
-            return {
-                "ticket_id": ticket_id,
-                "error": error_msg,
-                "timestamp": datetime.now().isoformat()
-            }
-
+            
+            # Even in case of exception, return structured output
+            fallback_output = self._generate_fallback_output(ticket_id, description)
+            self._save_output(ticket_id, fallback_output)
+            
+            return fallback_output

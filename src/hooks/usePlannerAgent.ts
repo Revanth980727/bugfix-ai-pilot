@@ -25,6 +25,33 @@ export function usePlannerAgent() {
     }, 100);
   };
 
+  // Add a function to simulate fallbacks for testing
+  const simulateWorkWithFallback = (onComplete: () => void) => {
+    setStatus('working');
+    
+    // Create fallback analysis
+    const fallbackAnalysis: PlannerAnalysis = {
+      ticket_id: "FALLBACK-123",
+      bug_summary: "First sentence of the description. Second sentence of the description.",
+      affected_files: [],
+      error_type: "Unknown",
+      using_fallback: true
+    };
+    
+    const interval = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          setStatus('success');
+          setAnalysis(fallbackAnalysis);
+          onComplete();
+          return 100;
+        }
+        return Math.min(prev + 1, 100);
+      });
+    }, 100);
+  };
+
   const reset = () => {
     setStatus('idle');
     setProgress(0);
@@ -36,6 +63,7 @@ export function usePlannerAgent() {
     progress,
     analysis,
     simulateWork,
+    simulateWorkWithFallback,
     reset
   };
 }

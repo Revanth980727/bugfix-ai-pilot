@@ -35,9 +35,23 @@ def test_planner_agent():
         logger.info(f"\nPlanner status: {planner.status}")
         logger.info(f"Analysis result: {result}")
         
+        # Also test fallback functionality by forcing an invalid response
+        logger.info("\nTesting fallback functionality:")
+        
+        # Create a test version of the planner that returns invalid JSON
+        class TestPlannerWithForcedFailure(PlannerAgent):
+            def _query_gpt(self, prompt: str) -> str:
+                # Return invalid JSON to trigger fallback
+                return "This is not JSON and will trigger the fallback mechanism"
+        
+        test_planner = TestPlannerWithForcedFailure()
+        fallback_result = test_planner.process(test_ticket)
+        
+        logger.info(f"Fallback result: {fallback_result}")
+        logger.info(f"Is using fallback: {fallback_result.get('using_fallback', False)}")
+        
     except Exception as e:
         logger.error(f"Test failed: {str(e)}")
 
 if __name__ == "__main__":
     test_planner_agent()
-

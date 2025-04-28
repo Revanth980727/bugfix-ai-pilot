@@ -1,7 +1,8 @@
 
 import os
 import json
-from typing import Dict, Any, List, Optional
+import re
+from typing import Dict, Any, List, Optional, Tuple
 import openai
 from .utils.logger import Logger
 
@@ -25,14 +26,14 @@ class PlannerAgent:
         
     def run(self, ticket_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyze a JIRA bug ticket and identify relevant files/modules to modify
+        Analyze a JIRA bug ticket and extract structured information
         
         Args:
             ticket_data: Dictionary containing ticket information with at least
                          'ticket_id', 'title', and 'description' keys
                          
         Returns:
-            A structured task plan as a dictionary
+            A structured analysis as a dictionary
         """
         self.logger.start_task(f"Planning for ticket {ticket_data.get('ticket_id', 'unknown')}")
         
@@ -42,37 +43,65 @@ class PlannerAgent:
             title = ticket_data.get("title", "")
             description = ticket_data.get("description", "")
             
-            # Create prompt for GPT-4
+            # Create prompt for GPT
             prompt = self._create_planning_prompt(ticket_id, title, description)
             
-            # Get analysis from GPT-4
-            self.logger.info("Sending ticket to GPT-4 for analysis")
+            # Get analysis from GPT
+            self.logger.info("Sending ticket to GPT for analysis")
             response = self._query_gpt(prompt)
             
-            # Parse and structure the response
-            task_plan = self._parse_gpt_response(response)
+            # Validate GPT response
+            is_valid, parsed_data, error_message = self._validate_gpt_response(response)
             
-            self.logger.info(f"Planning complete, identified {len(task_plan.get('files', []))} relevant files")
+            if is_valid and parsed_data:
+                # Log success
+                self.logger.info(f"[PlannerAgent] Parsed ticket {ticket_id} | Valid JSON received | Bug Summary: \"{parsed_data['bug_summary']}\"")
+                
+                # Structure the response
+                output = {
+                    "ticket_id": ticket_id,
+                    "bug_summary": parsed_data["bug_summary"],
+                    "affected_files": parsed_data["affected_files"],
+                    "error_type": parsed_data["error_type"],
+                    "using_fallback": False
+                }
+            else:
+                # Log fallback trigger
+                self.logger.warning(f"[PlannerAgent] Fallback triggered for {ticket_id} | Reason: {error_message}")
+                
+                # Use fallback mechanism
+                output = self._generate_fallback_output(ticket_id, description)
+            
+            self.logger.info(f"Planning complete for ticket {ticket_id}")
             self.logger.end_task(f"Planning for ticket {ticket_id}", success=True)
             
-            return task_plan
+            return output
             
         except Exception as e:
             self.logger.error(f"Planning failed: {str(e)}")
             self.logger.end_task(f"Planning for ticket {ticket_data.get('ticket_id', 'unknown')}", 
                                 success=False)
             
-            raise
+            # Even in case of exception, return structured fallback output
+            fallback_output = self._generate_fallback_output(
+                ticket_data.get("ticket_id", "unknown"),
+                ticket_data.get("description", "")
+            )
+            return fallback_output
             
     def _create_planning_prompt(self, ticket_id: str, title: str, description: str) -> str:
-        """Create a prompt for GPT-4 to analyze the bug ticket"""
+        """Create a structured prompt for GPT to analyze the bug ticket"""
         return f"""
-        You are a senior software developer analyzing a bug ticket. Your task is to create a structured plan
-        for fixing this bug by identifying:
+        You are a senior software developer analyzing a bug ticket. Your task is to extract key information from this ticket.
         
-        1. The root cause of the issue
-        2. The relevant files and modules that need to be modified
-        3. A high-level approach for the fix
+        Your response must be valid parsable JSON. No prose or extra text.
+        
+        Respond ONLY in the following strict JSON format:
+        {{
+            "bug_summary": "Brief one or two sentence summary of the bug",
+            "affected_files": ["file1.py", "module2.js", ...],
+            "error_type": "TypeError or other appropriate error classification"
+        }}
         
         Here's the bug ticket:
         
@@ -81,32 +110,15 @@ class PlannerAgent:
         
         Description:
         {description}
-        
-        Please provide your analysis in JSON format with the following structure:
-        {{
-            "root_cause": "Brief description of the root cause",
-            "severity": "high/medium/low",
-            "files": [
-                {{
-                    "path": "path/to/file.py",
-                    "reason": "Why this file needs to be modified"
-                }}
-            ],
-            "approach": "High-level description of the fix approach",
-            "implementation_details": "More detailed steps for implementing the fix",
-            "potential_risks": "Any potential side effects or risks of the fix"
-        }}
-        
-        Make sure your analysis is thorough and focuses on identifying the correct files to modify.
         """
         
     def _query_gpt(self, prompt: str) -> str:
-        """Query GPT-4 with the given prompt"""
+        """Query GPT with the given prompt"""
         try:
             response = openai.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a senior software developer tasked with analyzing bug tickets and planning fixes."},
+                    {"role": "system", "content": "You are a senior software developer tasked with analyzing bug tickets and extracting structured information."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,
@@ -115,46 +127,75 @@ class PlannerAgent:
             return response.choices[0].message.content
             
         except Exception as e:
-            self.logger.error(f"Error querying GPT-4: {str(e)}")
+            self.logger.error(f"Error querying GPT: {str(e)}")
             raise
+    
+    def _extract_first_sentences(self, text: str, max_sentences: int = 2) -> str:
+        """Extract the first 1-2 sentences from text for fallback summary"""
+        # Simple sentence splitting by common endings
+        sentence_endings = r'(?<=[.!?])\s+'
+        sentences = re.split(sentence_endings, text.strip())
+        selected = sentences[:min(max_sentences, len(sentences))]
+        return ' '.join(selected).strip()
+    
+    def _validate_gpt_response(self, response: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+        """
+        Validate the GPT response against our expected format
+        Returns: (is_valid, parsed_json, error_message)
+        """
+        if not response:
+            return False, None, "Empty response"
             
-    def _parse_gpt_response(self, response: str) -> Dict[str, Any]:
-        """Parse the GPT-4 response into a structured task plan"""
+        # Extract JSON if wrapped in backticks or text
+        json_content = response
+        json_match = re.search(r'```(?:json)?\s*({.*?})\s*```', response, re.DOTALL)
+        if json_match:
+            json_content = json_match.group(1)
+        else:
+            # Try to find JSON object in free text
+            json_match = re.search(r'({.*})', response, re.DOTALL)
+            if json_match:
+                json_content = json_match.group(1)
+        
         try:
-            # Extract JSON content from response
-            # This handles cases where GPT might add additional text around the JSON
-            start_idx = response.find("{")
-            end_idx = response.rfind("}") + 1
+            data = json.loads(json_content)
             
-            if start_idx >= 0 and end_idx > start_idx:
-                json_content = response[start_idx:end_idx]
-                task_plan = json.loads(json_content)
+            # Check required fields
+            required_fields = ["bug_summary", "affected_files", "error_type"]
+            for field in required_fields:
+                if field not in data:
+                    return False, None, f"Missing required field: {field}"
+                    
+            # Validate field types
+            if not isinstance(data["bug_summary"], str):
+                return False, None, "bug_summary must be a string"
                 
-                # Validate structure
-                required_keys = ["root_cause", "files", "approach"]
-                for key in required_keys:
-                    if key not in task_plan:
-                        self.logger.warning(f"Missing required key '{key}' in task plan")
-                        task_plan[key] = "Not specified"
-                        
-                return task_plan
+            if not isinstance(data["affected_files"], list):
+                return False, None, "affected_files must be a list"
                 
-            else:
-                self.logger.error("Failed to extract JSON from GPT response")
-                return {
-                    "error": "Failed to parse GPT response",
-                    "raw_response": response,
-                    "root_cause": "Unknown",
-                    "files": [],
-                    "approach": "Unable to determine"
-                }
+            if not isinstance(data["error_type"], str):
+                return False, None, "error_type must be a string"
                 
+            return True, data, "Valid JSON"
+            
         except json.JSONDecodeError as e:
-            self.logger.error(f"Error parsing GPT response as JSON: {str(e)}")
-            return {
-                "error": f"JSON parse error: {str(e)}",
-                "raw_response": response,
-                "root_cause": "Unknown",
-                "files": [],
-                "approach": "Unable to determine"
-            }
+            return False, None, f"JSON parse error: {str(e)}"
+        except Exception as e:
+            return False, None, f"Validation error: {str(e)}"
+            
+    def _generate_fallback_output(self, ticket_id: str, description: str) -> Dict[str, Any]:
+        """Generate fallback output when GPT response fails validation"""
+        self.logger.warning(f"Generating fallback output for ticket {ticket_id}")
+        
+        # Extract first 1-2 sentences for bug summary
+        bug_summary = self._extract_first_sentences(description)
+        if len(bug_summary) > 150:  # Truncate if too long
+            bug_summary = bug_summary[:147] + "..."
+            
+        return {
+            "ticket_id": ticket_id,
+            "bug_summary": bug_summary,
+            "affected_files": [],
+            "error_type": "Unknown",
+            "using_fallback": True
+        }

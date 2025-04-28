@@ -1,3 +1,4 @@
+
 export interface Ticket {
   id: string;
   title: string;
@@ -14,9 +15,14 @@ export interface Ticket {
 }
 
 export interface PlannerAnalysis {
-  affectedFiles: string[];
-  rootCause: string;
-  suggestedApproach: string;
+  ticket_id: string;
+  bug_summary: string;
+  affected_files: string[];
+  error_type: string;
+  using_fallback?: boolean;
+  affectedFiles?: string[];  // For backward compatibility
+  rootCause?: string;        // For backward compatibility
+  suggestedApproach?: string; // For backward compatibility
 }
 
 export interface CodeDiff {
