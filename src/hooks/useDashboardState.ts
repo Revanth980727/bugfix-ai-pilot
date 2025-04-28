@@ -147,11 +147,24 @@ export const useDashboardState = () => {
           ticket_id: details.ticket.id || '',
           bug_summary: plannerOutput.rootCause || '',
           affected_files: plannerOutput.affectedFiles || [],
-          error_type: plannerOutput.errorType || plannerOutput.error_type || 'Unknown',
+          error_type: 'Unknown',
           affectedFiles: plannerOutput.affectedFiles || [],
           rootCause: plannerOutput.rootCause || '',
           suggestedApproach: plannerOutput.suggestedApproach || ''
         });
+
+        if ('errorType' in plannerOutput) {
+          setPlannerAnalysis(prev => ({
+            ...prev!,
+            error_type: plannerOutput.errorType as string
+          }));
+        } else if ('error_type' in plannerOutput) {
+          setPlannerAnalysis(prev => ({
+            ...prev!,
+            error_type: plannerOutput.error_type as string
+          }));
+        }
+        
         setPlannerProgress(100);
       }
       
