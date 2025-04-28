@@ -180,6 +180,18 @@ class AgentController:
             # Check if tests passed
             success = test_results.get("passed", False)
             
+            # Log test result with enhanced information
+            timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+            result_status = "PASS" if success else "FAIL"
+            
+            # Include failure summary in the log if tests failed
+            failure_info = ""
+            if not success and "failure_summary" in test_results:
+                failure_info = f" | Failure: {test_results['failure_summary'].replace(chr(10), ' ')}"
+                
+            log_message = f"[Ticket: {ticket_id}] Retry {attempt}/{self.max_retries} | QA Result: {result_status}{failure_info} | Timestamp: {timestamp}"
+            self.logger.info(log_message)
+            
             # Step 4: Communicator Agent - Update JIRA and create PR if successful
             self.logger.info(f"Running CommunicatorAgent for ticket {ticket_id} (attempt {attempt})")
             result["current_stage"] = "communication"
@@ -216,6 +228,9 @@ class AgentController:
                     "patch_content": patch_data.get("patch_content", ""),
                     "qa_results": test_results
                 })
+            else:
+                # If successful, clear the QA failure summaries
+                context["previous_attempts"] = []
                 
             attempt += 1
         

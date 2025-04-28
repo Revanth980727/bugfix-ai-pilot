@@ -80,6 +80,7 @@ async def process_ticket(ticket: Dict[str, Any]):
         # Step 2-4: Developer-QA Loop
         current_attempt = 1
         qa_passed = False
+        retry_history = []  # Track retry history with QA results
         
         while current_attempt <= MAX_RETRIES and not qa_passed:
             logger.info(f"Sending ticket {ticket_id} to Developer agent (attempt {current_attempt}/{MAX_RETRIES})")
@@ -95,13 +96,8 @@ async def process_ticket(ticket: Dict[str, Any]):
                     f"Developer generating revised patch (attempt {current_attempt}/{MAX_RETRIES})"
                 )
             
-            # Developer context
-            developer_context = {"previousAttempts": []}
-            if current_attempt > 1 and active_tickets[ticket_id].get("qa_results"):
-                developer_context["previousAttempts"].append({
-                    "attempt": current_attempt - 1,
-                    "qaResults": active_tickets[ticket_id]["qa_results"]
-                })
+            # Developer context with QA feedback from previous attempts
+            developer_context = {"previousAttempts": retry_history}
             
             # Call Developer
             developer_input = {
@@ -145,19 +141,36 @@ async def process_ticket(ticket: Dict[str, Any]):
             
             update_ticket_status(ticket_id, "processing", {"qa_results": qa_response})
             
-            # Log retry status with timestamp
+            # Log retry status with improved format including failure summary
             timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             result_status = "PASS" if qa_passed else "FAIL"
-            log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{MAX_RETRIES} | QA Result: {result_status} | {timestamp}"
+            
+            # Include failure summary in logs when tests fail
+            failure_info = ""
+            if not qa_passed and "failure_summary" in qa_response:
+                failure_info = f" | Failure: {qa_response['failure_summary']}"
+            
+            log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{MAX_RETRIES} | QA Result: {result_status}{failure_info} | {timestamp}"
             logger.info(log_message)
+            
+            # Store results for future retries
+            retry_entry = {
+                "attempt": current_attempt,
+                "patch_content": developer_response.get("diffs", []),
+                "qa_results": qa_response
+            }
+            retry_history.append(retry_entry)
             
             if not qa_passed and current_attempt >= MAX_RETRIES:
                 # Max retries reached, escalate to human
                 update_ticket_status(ticket_id, "escalated", {"escalated": True})
+                
+                # Include failure summary in escalation note
+                failure_summary = qa_response.get("failure_summary", "Unknown error")
                 await update_jira_ticket(
                     ticket_id,
                     "Needs Review",
-                    f"BugFix AI: All {MAX_RETRIES} fix attempts failed. This ticket requires human attention.",
+                    f"BugFix AI: All {MAX_RETRIES} fix attempts failed. Last failure: {failure_summary}. This ticket requires human attention.",
                     {"needs_human_review": True}
                 )
                 
@@ -167,15 +180,16 @@ async def process_ticket(ticket: Dict[str, Any]):
                     "test_passed": False,
                     "escalated": True,
                     "retry_count": current_attempt,
-                    "max_retries": MAX_RETRIES
+                    "max_retries": MAX_RETRIES,
+                    "failure_summary": failure_summary
                 }
                 log_agent_input(ticket_id, "communicator_escalation", communicator_input)
                 
                 communicator_response = await call_communicator_agent(
                     ticket_id,
                     [],
-                    [],
-                    f"Failed after {MAX_RETRIES} attempts",
+                    qa_response["test_results"],
+                    f"Failed after {MAX_RETRIES} attempts: {failure_summary}",
                     escalated=True
                 )
                 
@@ -188,6 +202,9 @@ async def process_ticket(ticket: Dict[str, Any]):
                 # Wait before trying again
                 logger.info(f"Waiting {RETRY_DELAY_SECONDS} seconds before next retry")
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
+            else:
+                # Clear retry history on success
+                retry_history = []
             
             current_attempt += 1
         
@@ -241,4 +258,3 @@ async def process_ticket(ticket: Dict[str, Any]):
             "",
             f"BugFix AI encountered an error: {str(e)}. Escalating to human review."
         )
-

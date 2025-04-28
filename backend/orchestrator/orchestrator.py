@@ -84,7 +84,8 @@ class Orchestrator:
             "status": "processing",
             "start_time": datetime.now().isoformat(),
             "current_attempt": 0,
-            "escalated": False
+            "escalated": False,
+            "retry_history": []  # Store retry history with QA errors
         }
         
         logger.info(f"Starting processing for ticket {ticket_id}")
@@ -146,6 +147,9 @@ class Orchestrator:
         
         log_dir = f"logs/{ticket_id}"
         
+        # Initialize retry history for this ticket
+        retry_history = []
+        
         while current_attempt <= max_retries and not success:
             logger.info(f"Starting development attempt {current_attempt}/{max_retries} for ticket {ticket_id}")
             
@@ -156,13 +160,8 @@ class Orchestrator:
                 # STEP 2: Run developer agent
                 logger.info(f"Running DeveloperAgent for ticket {ticket_id} (attempt {current_attempt})")
                 
-                # Add context for retries
-                developer_context = {"previousAttempts": []}
-                if current_attempt > 1 and "qa_result" in self.active_tickets[ticket_id]:
-                    developer_context["previousAttempts"].append({
-                        "attempt": current_attempt - 1,
-                        "qaResults": self.active_tickets[ticket_id]["qa_result"]
-                    })
+                # Add context for retries with previous QA failures
+                developer_context = {"previousAttempts": retry_history}
                 
                 developer_input = {
                     "ticket_id": ticket_id,
@@ -211,14 +210,33 @@ class Orchestrator:
                 # Check if tests passed
                 success = qa_result.get("passed", False)
                 
-                # Log the retry status
+                # Log the retry status with enhanced failure information
                 timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
                 result_status = "PASS" if success else "FAIL"
-                log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{max_retries} | QA Result: {result_status} | {timestamp}"
+                
+                failure_info = ""
+                if not success and "failure_summary" in qa_result:
+                    failure_info = f" | Failure: {qa_result['failure_summary'].replace(chr(10), ' ')}"
+                    
+                log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{max_retries} | QA Result: {result_status}{failure_info} | {timestamp}"
                 logger.info(log_message)
+                
+                # Store the QA results in retry history for future attempts
+                retry_entry = {
+                    "attempt": current_attempt,
+                    "patch_content": developer_result.get("patch_content", ""),
+                    "qa_results": qa_result
+                }
+                
+                retry_history.append(retry_entry)
+                self.active_tickets[ticket_id]["retry_history"] = retry_history
                 
                 if success:
                     logger.info(f"QA tests passed for ticket {ticket_id} on attempt {current_attempt}")
+                    
+                    # Clear the QA failure history since we succeeded
+                    retry_history = []
+                    self.active_tickets[ticket_id]["retry_history"] = []
                     
                     # STEP 4: Create PR and update JIRA via communicator agent
                     await self.finalize_successful_fix(
@@ -236,11 +254,12 @@ class Orchestrator:
                         await self.escalate_ticket(ticket_id, current_attempt, qa_result)
                         break  # Exit retry loop after escalation
                     else:
-                        # Update JIRA with retry information
+                        # Update JIRA with retry information and failure summary
+                        failure_summary = qa_result.get("failure_summary", "Unknown failure")
                         await self.jira_client.update_ticket(
                             ticket_id,
                             "In Progress",
-                            f"Attempt {current_attempt}/{max_retries} failed. Retrying fix generation..."
+                            f"Attempt {current_attempt}/{max_retries} failed with errors: {failure_summary}. Retrying with improved fix..."
                         )
                         
                         # Add delay between retries to avoid hammering the system
@@ -259,6 +278,13 @@ class Orchestrator:
                     )
                     break
                 else:
+                    # Record error in retry history
+                    retry_entry = {
+                        "attempt": current_attempt,
+                        "error": str(e)
+                    }
+                    retry_history.append(retry_entry)
+                    
                     # Add delay between retries
                     logger.info(f"Waiting {RETRY_DELAY_SECONDS} seconds before next retry")
                     await asyncio.sleep(RETRY_DELAY_SECONDS)
@@ -326,6 +352,11 @@ class Orchestrator:
             self.active_tickets[ticket_id]["status"] = "escalated"
             self.active_tickets[ticket_id]["escalated"] = True
             
+            # Extract failure summary for more informative escalation
+            failure_summary = qa_result.get("failure_summary", "")
+            if not failure_summary and "error" in qa_result:
+                failure_summary = qa_result["error"]
+            
             # Run communicator agent for escalation
             logger.info(f"Running CommunicatorAgent for escalation of ticket {ticket_id}")
             
@@ -335,7 +366,8 @@ class Orchestrator:
                 "github_pr_url": None,
                 "retry_count": attempt,
                 "max_retries": MAX_RETRIES,
-                "escalated": True
+                "escalated": True,
+                "failure_summary": failure_summary
             }
             
             log_dir = f"logs/{ticket_id}"
@@ -347,11 +379,12 @@ class Orchestrator:
             with open(f"{log_dir}/communicator_output_escalation.json", 'w') as f:
                 json.dump(communicator_result, f, indent=2)
             
-            # Update JIRA ticket with escalation message
+            # Update JIRA ticket with escalation message including failure summary
+            escalation_message = f"Automatic retry limit ({MAX_RETRIES}) reached. Last failure: {failure_summary}"
             await self.jira_client.update_ticket(
                 ticket_id,
                 "Needs Review",
-                f"Automatic retry limit ({MAX_RETRIES}) reached. Escalating ticket for human review."
+                escalation_message
             )
             
             logger.info(f"Ticket {ticket_id} has been escalated after {attempt} failed attempts")
@@ -399,4 +432,3 @@ if __name__ == "__main__":
         asyncio.run(start_orchestrator())
     except KeyboardInterrupt:
         logger.info("Orchestrator stopped by user")
-
