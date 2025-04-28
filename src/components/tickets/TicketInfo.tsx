@@ -8,7 +8,7 @@ import { format } from 'date-fns';
 import { EscalationBadge } from './EscalationBadge';
 
 interface TicketInfoProps {
-  ticket: Ticket;
+  ticket: Ticket | null;
   className?: string;
 }
 
@@ -43,6 +43,19 @@ const getStatusColor = (status: string): string => {
 };
 
 export function TicketInfo({ ticket, className = "" }: TicketInfoProps) {
+  // If no ticket data is available, show empty card with a message
+  if (!ticket) {
+    return (
+      <Card className={`${className}`}>
+        <CardContent className="p-4">
+          <div className="text-center py-4 text-muted-foreground">
+            <p>No ticket selected</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   const statusColor = getStatusColor(ticket.status);
   const priorityColor = getPriorityColor(ticket.priority);
   const isEscalated = ticket.escalated || ticket.status?.toLowerCase()?.includes('escalated');
@@ -91,4 +104,3 @@ export function TicketInfo({ ticket, className = "" }: TicketInfoProps) {
     </Card>
   );
 }
-

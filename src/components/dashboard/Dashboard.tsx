@@ -47,6 +47,7 @@ export function Dashboard() {
     fetchTickets,
     selectTicket,
     isLoadingTickets,
+    selectedTicketId,
     currentAttempt,
     maxAttempts
   } = useDashboardState();
@@ -80,6 +81,7 @@ export function Dashboard() {
           
           <Separator className="my-6" />
           
+          {/* We'll adjust this to handle null activeTicket properly */}
           {!activeTicket ? (
             <div className="text-center py-10 text-muted-foreground">
               <p>Enter a JIRA ticket ID above to start fixing a bug,</p>
@@ -167,6 +169,9 @@ export function Dashboard() {
                 <div className="space-y-4">
                   <TicketsList 
                     tickets={ticketsList} 
+                    onSelectTicket={selectTicket}
+                    selectedTicketId={selectedTicketId}
+                    isLoading={isLoadingTickets}
                     searchQuery={searchQuery}
                     filterStatus={filterStatus}
                   />
