@@ -7,6 +7,9 @@ load_dotenv()
 
 # GitHub configuration
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+GITHUB_REPO_OWNER = os.getenv('GITHUB_REPO_OWNER')
+GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME')
+GITHUB_DEFAULT_BRANCH = os.getenv('GITHUB_DEFAULT_BRANCH', 'main')
 
 # JIRA configuration
 JIRA_TOKEN = os.getenv('JIRA_TOKEN')
@@ -38,3 +41,15 @@ def verify_env_vars():
             f"Missing required environment variables: {', '.join(missing_vars)}\n"
             "Please check your .env file and ensure all required variables are set."
         )
+
+# Added GitHub repo verification function
+def verify_github_repo_settings():
+    """Verify that GitHub repository settings are properly configured."""
+    if not GITHUB_TOKEN:
+        return False, "GITHUB_TOKEN is missing"
+    
+    # Check if we're using repo_owner/repo_name pattern
+    if GITHUB_REPO_OWNER and GITHUB_REPO_NAME:
+        return True, f"GitHub repository configured as {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+    
+    return False, "GITHUB_REPO_OWNER and GITHUB_REPO_NAME are required for GitHub operations"

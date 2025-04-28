@@ -1,8 +1,9 @@
+
 import logging
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
-from github import Github, GithubException
+from github import Github, GithubException, InputGitTreeElement
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,16 +37,47 @@ def authenticate_github():
         logger.error(f"GitHub authentication error: {str(e)}")
         return None
 
-def create_branch(repo_name: str, ticket_id: str, base_branch: str = "main") -> Optional[str]:
+def get_repo(repo_name: str = None):
+    """Get a repository by name or from environment variables"""
+    github_client = authenticate_github()
+    if not github_client:
+        return None
+    
+    # If repo_name is provided, use it directly
+    if repo_name:
+        try:
+            return github_client.get_repo(repo_name)
+        except GithubException as e:
+            logger.error(f"Error accessing repository {repo_name}: {str(e)}")
+            return None
+    
+    # Otherwise try to construct from environment variables
+    owner = os.environ.get("GITHUB_REPO_OWNER")
+    name = os.environ.get("GITHUB_REPO_NAME")
+    
+    if not owner or not name:
+        logger.error("GITHUB_REPO_OWNER and GITHUB_REPO_NAME environment variables are required")
+        return None
+    
+    try:
+        full_name = f"{owner}/{name}"
+        return github_client.get_repo(full_name)
+    except GithubException as e:
+        logger.error(f"Error accessing repository {full_name}: {str(e)}")
+        return None
+
+def create_branch(repo_name: str, ticket_id: str, base_branch: str = None) -> Optional[str]:
     """Create a new branch for the bugfix"""
     try:
-        github_client = authenticate_github()
-        if not github_client:
+        # Use default branch from environment if not specified
+        if not base_branch:
+            base_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
+            
+        # Get repository
+        repo = get_repo(repo_name)
+        if not repo:
             return None
             
-        # Get the repository
-        repo = github_client.get_repo(repo_name)
-        
         # Get the base branch to branch off from
         try:
             base_ref = repo.get_branch(base_branch)
@@ -83,14 +115,19 @@ def commit_changes(repo_name: str, branch_name: str, file_changes: List[Dict[str
             return False
             
         # Get the repository and branch reference
-        repo = github_client.get_repo(repo_name)
+        repo = get_repo(repo_name)
+        if not repo:
+            return False
         
+        # First attempt: Try updating files one by one
+        all_success = True
         for file_change in file_changes:
             filename = file_change.get('filename')
             content = file_change.get('content')
             
             if not filename or not content:
                 logger.warning(f"Skipping invalid file change: {file_change}")
+                all_success = False
                 continue
                 
             try:
@@ -117,23 +154,31 @@ def commit_changes(repo_name: str, branch_name: str, file_changes: List[Dict[str
                     logger.info(f"Created file {filename} in {branch_name}")
             except GithubException as e:
                 logger.error(f"Failed to update/create file {filename}: {str(e)}")
-                return False
+                all_success = False
                 
-        return True
+        return all_success
     except Exception as e:
         logger.error(f"Error committing changes: {str(e)}")
         return False
 
 def create_pull_request(repo_name: str, branch_name: str, ticket_id: str, title: str, 
-                      description: str, base_branch: str = "main") -> Optional[str]:
+                      description: str, base_branch: str = None) -> Optional[str]:
     """Create a pull request from the bugfix branch to the base branch"""
     try:
-        github_client = authenticate_github()
-        if not github_client:
-            return None
+        # Use default branch from environment if not specified
+        if not base_branch:
+            base_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
             
-        # Get the repository
-        repo = github_client.get_repo(repo_name)
+        # Get repository
+        repo = get_repo(repo_name)
+        if not repo:
+            return None
+        
+        # Check if PR already exists
+        existing_prs = repo.get_pulls(state='open', head=branch_name, base=base_branch)
+        for pr in existing_prs:
+            logger.info(f"Pull request already exists for branch {branch_name}: {pr.html_url}")
+            return pr.html_url
         
         # Create PR title
         pr_title = f"Fix for {ticket_id}: {title}"
@@ -154,23 +199,141 @@ def create_pull_request(repo_name: str, branch_name: str, ticket_id: str, title:
 This PR was automatically generated by BugFix AI.
         """
         
-        # Create the PR
-        try:
-            pull = repo.create_pull(
-                title=pr_title,
-                body=pr_body,
-                head=branch_name,
-                base=base_branch
-            )
-            
-            # Add labels
-            pull.add_to_labels("autofix", "bug")
-            
-            logger.info(f"Created PR #{pull.number} for {ticket_id}")
-            return pull.html_url
-        except GithubException as e:
-            logger.error(f"Failed to create PR: {str(e)}")
-            return None
+        # Create the PR with retries
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                pull = repo.create_pull(
+                    title=pr_title,
+                    body=pr_body,
+                    head=branch_name,
+                    base=base_branch
+                )
+                
+                # Add labels
+                pull.add_to_labels("autofix", "bug")
+                
+                logger.info(f"Created PR #{pull.number} for {ticket_id}")
+                return pull.html_url
+            except GithubException as e:
+                if e.status == 422:  # PR already exists or other validation errors
+                    logger.error(f"Cannot create PR: {str(e)}")
+                    return None
+                elif attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    logger.warning(f"Retrying PR creation in {wait_time} seconds: {str(e)}")
+                    import time
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to create PR after {max_retries} attempts: {str(e)}")
+                    return None
     except Exception as e:
         logger.error(f"Error creating PR: {str(e)}")
         return None
+
+def commit_multiple_changes_as_tree(repo_name: str, branch_name: str, 
+                                  file_changes: List[Dict[str, Any]], commit_message: str) -> bool:
+    """
+    Commit multiple file changes at once using Git trees for better performance
+    and atomic commits across multiple files.
+    """
+    try:
+        github_client = authenticate_github()
+        if not github_client:
+            return False
+            
+        # Get the repository
+        repo = get_repo(repo_name)
+        if not repo:
+            return False
+        
+        try:
+            # Get the latest commit on the branch
+            ref = repo.get_git_ref(f"heads/{branch_name}")
+            latest_commit = repo.get_git_commit(ref.object.sha)
+            base_tree = latest_commit.tree
+            
+            # Create tree elements for new files
+            tree_elements = []
+            for file_change in file_changes:
+                filename = file_change.get('filename')
+                content = file_change.get('content')
+                
+                if not filename or content is None:
+                    logger.warning(f"Skipping invalid file change: {file_change}")
+                    continue
+                    
+                # Convert content to string if it's not already
+                if not isinstance(content, str):
+                    content = str(content)
+                
+                element = InputGitTreeElement(
+                    path=filename,
+                    mode='100644',  # Regular file mode
+                    type='blob',
+                    content=content
+                )
+                tree_elements.append(element)
+            
+            # Create a tree with the new files
+            new_tree = repo.create_git_tree(tree_elements, base_tree)
+            
+            # Create a commit with the new tree
+            new_commit = repo.create_git_commit(
+                message=commit_message,
+                tree=new_tree,
+                parents=[latest_commit]
+            )
+            
+            # Update the reference to point to the new commit
+            ref.edit(new_commit.sha)
+            
+            logger.info(f"Committed {len(tree_elements)} files to {branch_name}")
+            return True
+        except GithubException as e:
+            logger.error(f"Failed to commit files as tree: {str(e)}")
+            return False
+    except Exception as e:
+        logger.error(f"Error in commit_multiple_changes_as_tree: {str(e)}")
+        return False
+
+def push_branch(repo_name: str, branch_name: str) -> bool:
+    """
+    Push a branch to remote. Note: With PyGithub this is usually not necessary
+    as commits are automatically pushed to remote when using create_file, update_file,
+    or commit_multiple_changes_as_tree.
+    """
+    # PyGithub automatically pushes when committing, so this is just here for completeness
+    # and in case we need to add additional logic
+    logger.info(f"Branch {branch_name} automatically pushed during commit")
+    return True
+
+def get_branch_commit_history(repo_name: str, branch_name: str, max_commits: int = 10) -> List[Dict]:
+    """Get the commit history for a branch"""
+    try:
+        repo = get_repo(repo_name)
+        if not repo:
+            return []
+        
+        # Get commits on the branch
+        commits = []
+        try:
+            branch = repo.get_branch(branch_name)
+            commit_iter = repo.get_commits(sha=branch.commit.sha, max_count=max_commits)
+            
+            for commit in commit_iter:
+                commits.append({
+                    'sha': commit.sha,
+                    'message': commit.commit.message,
+                    'author': commit.commit.author.name,
+                    'date': commit.commit.author.date.isoformat(),
+                    'url': commit.html_url
+                })
+            
+            return commits
+        except GithubException as e:
+            logger.error(f"Failed to get commit history for branch {branch_name}: {str(e)}")
+            return []
+    except Exception as e:
+        logger.error(f"Error getting branch commit history: {str(e)}")
+        return []
