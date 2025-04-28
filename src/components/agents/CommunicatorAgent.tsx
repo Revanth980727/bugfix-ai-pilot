@@ -1,12 +1,14 @@
+
 import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
-import { GitPullRequest, MessageSquare, Github } from 'lucide-react';
+import { GitPullRequest, MessageSquare, Github, AlertTriangle, Info } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
 import { AgentStatus } from '@/hooks/useDashboardState';
 import { Update } from '@/types/ticket';
+import { Badge } from '@/components/ui/badge';
 
 interface CommunicatorAgentProps {
   status: AgentStatus;
@@ -14,9 +16,21 @@ interface CommunicatorAgentProps {
   updates?: Update[];
   prUrl?: string;
   jiraUrl?: string;
+  earlyEscalation?: boolean;
+  escalationReason?: string;
+  confidenceScore?: number;
 }
 
-export function CommunicatorAgent({ status, progress, updates, prUrl, jiraUrl }: CommunicatorAgentProps) {
+export function CommunicatorAgent({ 
+  status, 
+  progress, 
+  updates, 
+  prUrl, 
+  jiraUrl,
+  earlyEscalation,
+  escalationReason,
+  confidenceScore
+}: CommunicatorAgentProps) {
   const { toast } = useToast();
   
   const handleButtonClick = (url: string, type: string) => {
@@ -47,6 +61,19 @@ export function CommunicatorAgent({ status, progress, updates, prUrl, jiraUrl }:
               className="h-full bg-agent-communicator transition-all duration-300" 
               style={{ width: `${progress || 0}%` }} 
             />
+          </div>
+        </div>
+      )}
+      
+      {earlyEscalation && (
+        <div className="mb-3 p-2 border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 rounded-md flex items-start gap-2">
+          <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-medium text-amber-800 dark:text-amber-300">Early Escalation</p>
+            <p className="text-amber-700 dark:text-amber-400">{escalationReason || "Ticket has been escalated early"}</p>
+            {confidenceScore !== undefined && confidenceScore < 60 && (
+              <p className="text-xs mt-1">Confidence score: {confidenceScore}%</p>
+            )}
           </div>
         </div>
       )}
@@ -86,13 +113,20 @@ export function CommunicatorAgent({ status, progress, updates, prUrl, jiraUrl }:
             {updates.map((update, index) => {
               const iconColor = 
                 update.type === 'jira' ? 'text-blue-400' : 
-                update.type === 'github' ? 'text-purple-400' : 'text-gray-400';
+                update.type === 'github' ? 'text-purple-400' : 
+                update.type === 'system' ? 'text-amber-400' :
+                'text-gray-400';
               
               const icon = 
                 update.type === 'jira' ? <MessageSquare className="h-4 w-4" /> : 
                 update.type === 'github' ? <Github className="h-4 w-4" /> : 
+                update.type === 'system' ? <Info className="h-4 w-4" /> :
                 '💬';
               
+              // Check if message contains early escalation keywords
+              const isEscalationMessage = update.message.includes('escalat') || 
+                                         update.message.includes('human review');
+                                         
               return (
                 <div key={index} className="flex gap-2 mb-2 text-sm">
                   <div className="text-muted-foreground text-xs whitespace-nowrap">
@@ -101,7 +135,18 @@ export function CommunicatorAgent({ status, progress, updates, prUrl, jiraUrl }:
                   <div className={`${iconColor} w-4 flex-shrink-0`}>
                     {icon}
                   </div>
-                  <div className="flex-1">{update.message}</div>
+                  <div className="flex-1">
+                    {isEscalationMessage ? 
+                      <div className="text-amber-600 dark:text-amber-400">{update.message}</div> : 
+                      update.message
+                    }
+                    
+                    {update.confidenceScore !== undefined && (
+                      <Badge variant="outline" className="ml-1 text-xs">
+                        {update.confidenceScore}%
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               );
             })}

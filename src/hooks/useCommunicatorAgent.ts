@@ -13,13 +13,28 @@ export function useCommunicatorAgent() {
   const [progress, setProgress] = useState(0);
   const [updates, setUpdates] = useState<Update[] | undefined>(undefined);
   const [result, setResult] = useState<CommunicatorResult | undefined>(undefined);
+  const [earlyEscalation, setEarlyEscalation] = useState(false);
+  const [escalationReason, setEscalationReason] = useState<string | undefined>(undefined);
+  const [confidenceScore, setConfidenceScore] = useState<number | undefined>(undefined);
 
   const simulateWork = (
     onComplete: () => void, 
     mockUpdates: Update[], 
-    mockResult?: CommunicatorResult
+    mockResult?: CommunicatorResult,
+    isEarlyEscalation?: boolean,
+    reason?: string,
+    confidence?: number
   ) => {
     setStatus('working');
+    
+    if (isEarlyEscalation) {
+      setEarlyEscalation(true);
+      setEscalationReason(reason);
+    }
+    
+    if (confidence !== undefined) {
+      setConfidenceScore(confidence);
+    }
     
     const interval = setInterval(() => {
       setProgress(prev => {
@@ -43,6 +58,9 @@ export function useCommunicatorAgent() {
     setProgress(0);
     setUpdates(undefined);
     setResult(undefined);
+    setEarlyEscalation(false);
+    setEscalationReason(undefined);
+    setConfidenceScore(undefined);
   };
 
   return {
@@ -51,6 +69,9 @@ export function useCommunicatorAgent() {
     updates,
     prUrl: result?.prUrl,
     jiraUrl: result?.jiraUrl,
+    earlyEscalation,
+    escalationReason,
+    confidenceScore,
     simulateWork,
     reset
   };

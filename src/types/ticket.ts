@@ -1,4 +1,3 @@
-
 export interface Ticket {
   id: string;
   title: string;
@@ -42,6 +41,6 @@ export type UpdateType = 'jira' | 'github' | 'system';
 export interface Update {
   timestamp: string;
   message: string;
-  type: UpdateType;
+  type: 'jira' | 'github' | 'system' | 'other';
+  confidenceScore?: number;
 }
-

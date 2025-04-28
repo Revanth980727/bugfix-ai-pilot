@@ -8,11 +8,22 @@ export function useDeveloperAgent() {
   const [progress, setProgress] = useState(0);
   const [diffs, setDiffs] = useState<CodeDiff[] | undefined>(undefined);
   const [attempt, setAttempt] = useState(1);
+  const [confidenceScore, setConfidenceScore] = useState<number | undefined>(undefined);
+  const [escalationReason, setEscalationReason] = useState<string | undefined>(undefined);
+  const [earlyEscalation, setEarlyEscalation] = useState(false);
   const maxAttempts = 4;
 
-  const simulateWork = (onComplete: () => void, mockDiffs: CodeDiff[], currentAttempt: number = 1) => {
+  const simulateWork = (
+    onComplete: () => void, 
+    mockDiffs: CodeDiff[], 
+    currentAttempt: number = 1,
+    patchConfidence?: number
+  ) => {
     setStatus('working');
     setAttempt(currentAttempt);
+    if (patchConfidence !== undefined) {
+      setConfidenceScore(patchConfidence);
+    }
     
     const interval = setInterval(() => {
       setProgress(prev => {
@@ -28,8 +39,20 @@ export function useDeveloperAgent() {
     }, 100);
   };
 
-  const simulateFailure = () => {
+  const simulateFailure = (reason?: string) => {
     setStatus('error');
+    if (reason) {
+      setEscalationReason(reason);
+    }
+  };
+  
+  const simulateEarlyEscalation = (reason: string, confidence?: number) => {
+    setStatus('escalated');
+    setEarlyEscalation(true);
+    setEscalationReason(reason);
+    if (confidence !== undefined) {
+      setConfidenceScore(confidence);
+    }
   };
 
   const reset = () => {
@@ -37,6 +60,9 @@ export function useDeveloperAgent() {
     setProgress(0);
     setDiffs(undefined);
     setAttempt(1);
+    setConfidenceScore(undefined);
+    setEscalationReason(undefined);
+    setEarlyEscalation(false);
   };
 
   return {
@@ -45,8 +71,12 @@ export function useDeveloperAgent() {
     diffs,
     attempt,
     maxAttempts,
+    confidenceScore,
+    escalationReason,
+    earlyEscalation,
     simulateWork,
     simulateFailure,
+    simulateEarlyEscalation,
     reset
   };
 }
