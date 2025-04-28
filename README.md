@@ -35,6 +35,8 @@ Before running this application, you'll need:
    ```
    Edit the `.env` file with your API credentials:
    - `GITHUB_TOKEN`: Your GitHub personal access token
+   - `GITHUB_REPO_OWNER`: Your GitHub username or organization
+   - `GITHUB_REPO_NAME`: Your repository name
    - `JIRA_TOKEN`: Your JIRA API token
    - `JIRA_USER`: Your JIRA email address
    - `JIRA_URL`: Your JIRA instance URL
@@ -81,6 +83,59 @@ The application uses a multi-agent architecture with four specialized AI agents:
 
 Each agent runs as a separate microservice and communicates through REST APIs. The main backend coordinates the workflow between agents.
 
+### API Integration Clients
+
+This system includes two API client libraries for interacting with external services:
+
+#### JIRA Client (`agents/utils/jira_client.py`)
+
+Provides functionality to:
+- Fetch tickets by ID
+- Get open bug tickets
+- Add comments to tickets 
+- Update ticket status (with transitions)
+
+Usage:
+```python
+from agents.utils.jira_client import JiraClient
+
+# Initialize the client
+jira = JiraClient()
+
+# Get open bug tickets
+bug_tickets = jira.get_open_bugs(max_results=10)
+
+# Update a ticket
+jira.update_ticket("PROJ-123", "In Progress", "Working on this ticket now")
+```
+
+#### GitHub Client (`agents/utils/github_client.py`)
+
+Provides functionality to:
+- Get file contents from a repository
+- Update files in a repository
+- Create branches
+- Create pull requests
+- Commit patches (code changes)
+
+Usage:
+```python
+from agents.utils.github_client import GitHubClient
+
+# Initialize the client
+github = GitHubClient()
+
+# Create a branch for a bug fix
+github.create_branch("fix-PROJ-123")
+
+# Create a PR
+pr_url = github.create_pull_request(
+    title="Fix for PROJ-123",
+    body="This PR fixes the issue described in PROJ-123",
+    head_branch="fix-PROJ-123"
+)
+```
+
 ### Directory Structure
 
 ```
@@ -89,7 +144,11 @@ Each agent runs as a separate microservice and communicates through REST APIs. T
 │   ├── planner/       # Analyzes tickets to identify root causes
 │   ├── developer/     # Generates code fixes
 │   ├── qa/            # Validates fixes with tests
-│   └── communicator/  # Updates JIRA and creates PRs
+│   ├── communicator/  # Updates JIRA and creates PRs
+│   └── utils/
+│       ├── jira_client.py    # JIRA API integration
+│       ├── github_client.py  # GitHub API integration
+│       └── logger.py         # Logging utilities
 ├── backend/           # Main backend service
 ├── src/               # Frontend React application
 └── docker-compose.yml # Container orchestration
