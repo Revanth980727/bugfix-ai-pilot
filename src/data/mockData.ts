@@ -14,6 +14,14 @@ export const mockTicket: Ticket = {
 };
 
 export const mockPlannerAnalysis: PlannerAnalysis = {
+  ticket_id: 'DEMO-123',
+  bug_summary: 'The event handler for the login button click is not correctly bound to the component context. This causes the handler to lose reference to the component state and methods when clicked.',
+  affected_files: [
+    'src/components/auth/LoginButton.js',
+    'src/components/modals/LoginModal.js'
+  ],
+  error_type: 'Event Handler Binding Issue',
+  // For backward compatibility
   affectedFiles: [
     'src/components/auth/LoginButton.js',
     'src/components/modals/LoginModal.js'

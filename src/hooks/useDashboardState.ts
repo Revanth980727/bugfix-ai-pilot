@@ -142,6 +142,10 @@ export const useDashboardState = () => {
       // Update agent outputs
       if (details.agentOutputs.planner) {
         setPlannerAnalysis({
+          ticket_id: details.ticket.id || '',
+          bug_summary: details.agentOutputs.planner.rootCause || '',
+          affected_files: details.agentOutputs.planner.affectedFiles || [],
+          error_type: details.agentOutputs.planner.errorType || 'Unknown',
           affectedFiles: details.agentOutputs.planner.affectedFiles || [],
           rootCause: details.agentOutputs.planner.rootCause || '',
           suggestedApproach: details.agentOutputs.planner.suggestedApproach || ''
