@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { TicketForm } from '../tickets/TicketForm';
 import { TicketInfo } from '../tickets/TicketInfo';
@@ -16,11 +15,13 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Search, Filter } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
+import { toast } from '@/components/ui/sonner';
 
 export function Dashboard() {
   const [view, setView] = useState<'current' | 'list'>('current');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [ticketId, setTicketId] = useState('');
   
   const { resolvedTheme, setTheme } = useTheme();
   
@@ -56,6 +57,29 @@ export function Dashboard() {
     
     return () => clearInterval(interval);
   }, [fetchTickets]);
+
+  // New function to handle manual ticket processing
+  const handleProcessTicket = async (ticketId: string) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/process-ticket`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ticket_id: ticketId }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to process ticket');
+      }
+
+      const data = await response.json();
+      toast.success(`Started processing ticket ${ticketId}`);
+      fetchTickets(); // Refresh the tickets list
+    } catch (error) {
+      toast.error(`Error processing ticket: ${(error as Error).message}`);
+    }
+  };
   
   return (
     <div className="space-y-6">
@@ -77,7 +101,6 @@ export function Dashboard() {
         </div>
       </div>
       
-      {/* Important: All TabsContent components must be within the same Tabs component as their corresponding TabsTrigger */}
       <Tabs value={view} onValueChange={(v) => setView(v as 'current' | 'list')} className="mt-0">
         <TabsContent value="current">
           <div className="grid gap-6 md:grid-cols-2">
@@ -86,10 +109,30 @@ export function Dashboard() {
                 <CardTitle>Fix Bug</CardTitle>
               </CardHeader>
               <CardContent>
-                <TicketForm onSubmit={handleTicketSubmit} isProcessing={isProcessing} />
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  handleTicketSubmit(ticketId);
+                }} 
+                className="space-y-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="ticketId">JIRA Ticket ID</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="ticketId"
+                        placeholder="E.g., PROJ-123"
+                        value={ticketId}
+                        onChange={(e) => setTicketId(e.target.value)}
+                        disabled={isProcessing}
+                      />
+                      <Button type="submit" disabled={isProcessing || !ticketId.trim()}>
+                        {isProcessing ? 'Processing...' : 'Fix Bug'}
+                      </Button>
+                    </div>
+                  </div>
+                </form>
               </CardContent>
             </Card>
-            
+
             <TicketInfo ticket={activeTicket} />
           </div>
           
