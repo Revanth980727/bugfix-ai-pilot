@@ -40,7 +40,7 @@ export function TicketsList({ tickets, searchQuery = '', filterStatus }: Tickets
               <p className="text-sm text-muted-foreground">{ticket.id}</p>
             </div>
             <span className="text-sm text-muted-foreground">
-              {new Date(ticket.created || ticket.updatedAt || '').toLocaleDateString()}
+              {getFormattedDate(ticket)}
             </span>
           </div>
           
@@ -68,4 +68,17 @@ export function TicketsList({ tickets, searchQuery = '', filterStatus }: Tickets
       ))}
     </div>
   );
+}
+
+// Helper function to get formatted date from either Ticket or TicketListItem
+function getFormattedDate(ticket: Ticket | TicketListItem): string {
+  let dateString = '';
+  
+  if ('created' in ticket && ticket.created) {
+    dateString = ticket.created;
+  } else if ('updatedAt' in ticket && ticket.updatedAt) {
+    dateString = ticket.updatedAt;
+  }
+  
+  return dateString ? new Date(dateString).toLocaleDateString() : '';
 }
