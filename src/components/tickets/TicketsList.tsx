@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { 
   Table, 
@@ -87,7 +88,7 @@ export function TicketsList({
                 <TableHead>Title</TableHead>
                 <TableHead className="hidden md:table-cell">Status</TableHead>
                 <TableHead className="hidden sm:table-cell">Updated</TableHead>
-                <TableHead className="hidden lg:table-cell">Retry</TableHead>
+                <TableHead className="hidden lg:table-cell">Retry Attempts</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -119,7 +120,7 @@ export function TicketsList({
                     <TableCell className="max-w-[200px] truncate">
                       <div className="flex items-center gap-2">
                         {ticket.escalated && (
-                          <AlertTriangle className="h-4 w-4 text-amber-500" />
+                          <AlertTriangle className="h-4 w-4 text-destructive" />
                         )}
                         {ticket.title}
                       </div>
@@ -133,13 +134,9 @@ export function TicketsList({
                       {formatDate(ticket.updatedAt)}
                     </TableCell>
                     <TableCell className="hidden lg:table-cell">
-                      {(ticket.retryCount !== undefined && ticket.maxRetries !== undefined && ticket.retryCount > 0) ? (
-                        <Badge variant={ticket.escalated ? "destructive" : "outline"} className="text-xs">
-                          {ticket.retryCount}/{ticket.maxRetries}
-                        </Badge>
-                      ) : (
-                        "-"
-                      )}
+                      <Badge variant={ticket.escalated ? "destructive" : "outline"} className="text-xs">
+                        <span>Attempt {ticket.retryCount || 0}/{ticket.maxRetries || 4}</span>
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))

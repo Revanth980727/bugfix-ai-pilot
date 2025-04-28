@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback } from 'react';
 import { Ticket, PlannerAnalysis, CodeDiff, TestResult, Update } from '@/types/ticket';
 import { api } from '@/services/api';

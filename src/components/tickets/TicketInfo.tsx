@@ -3,9 +3,10 @@ import React from 'react';
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Ticket } from "@/types/ticket";
-import { CalendarClock } from 'lucide-react';
+import { CalendarClock, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
 import { EscalationBadge } from './EscalationBadge';
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface TicketInfoProps {
   ticket: Ticket | null;
@@ -65,6 +66,15 @@ export function TicketInfo({ ticket, className = "" }: TicketInfoProps) {
   return (
     <Card className={`${className}`}>
       <CardContent className="p-4">
+        {isEscalated && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              This ticket has been escalated for human review after multiple fix attempts failed
+            </AlertDescription>
+          </Alert>
+        )}
+        
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
           <div>
             <h2 className="text-xl font-semibold">{ticket.title || ticket.id}</h2>
@@ -77,11 +87,10 @@ export function TicketInfo({ ticket, className = "" }: TicketInfoProps) {
           <div className="flex flex-wrap gap-2">
             {isEscalated && <EscalationBadge />}
             
-            {ticket.current_attempt > 0 && (
-              <Badge variant="outline" className={isEscalated ? 'border-amber-500 text-amber-500' : ''}>
-                Attempt {ticket.current_attempt}/{ticket.max_attempts || 4}
-              </Badge>
-            )}
+            <Badge variant={isEscalated ? "destructive" : "outline"} className="flex items-center space-x-1">
+              <span>Retry Attempt:</span>
+              <span>{ticket.current_attempt || 0}/{ticket.max_attempts || 4}</span>
+            </Badge>
             
             {ticket.priority && (
               <Badge className={`${priorityColor} text-white`}>

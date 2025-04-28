@@ -49,7 +49,8 @@ export function Dashboard() {
     isLoadingTickets,
     selectedTicketId,
     currentAttempt,
-    maxAttempts
+    maxAttempts,
+    isEscalated
   } = useDashboardState();
 
   return (
