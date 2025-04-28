@@ -8,6 +8,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8000
+# Create necessary directories
+RUN mkdir -p /app/logs
+RUN mkdir -p /app/code_repo
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Set up environment variables
+ENV PYTHONPATH=/app
+
+# Run the orchestrator 
+CMD ["python", "-m", "orchestrator.start_orchestrator"]
+
