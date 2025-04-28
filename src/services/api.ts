@@ -17,7 +17,7 @@ const apiClient = axios.create({
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    console.error('API Error:', error);
+    console.error('API Error:', error.response?.status || 'Unknown', error.response?.data || error.message);
     return Promise.reject(error);
   }
 );
@@ -110,4 +110,15 @@ export const api = {
       return null;
     }
   },
+  
+  // Check health of backend services
+  async checkHealth(): Promise<boolean> {
+    try {
+      await apiClient.get('/health');
+      return true;
+    } catch (error) {
+      console.error('Health check failed:', error);
+      return false;
+    }
+  }
 };

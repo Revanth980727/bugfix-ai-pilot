@@ -7,6 +7,7 @@ from typing import Dict, Any
 from pydantic import BaseModel
 import os
 import sys
+from datetime import datetime
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,13 +28,27 @@ async def startup_event():
 
 class TicketRequest(BaseModel):
     ticket_id: str
-    title: str
-    description: str
+    title: str = ""
+    description: str = ""
 
 
 @app.get("/")
 async def root():
     return {"message": "Orchestrator API is running", "status": "healthy"}
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": os.environ.get("VERSION", "development"),
+        "services": {
+            "orchestrator": "running",
+            "agents": orchestrator.get_agent_statuses()
+        }
+    }
 
 
 @app.get("/status")
@@ -60,7 +75,8 @@ async def process_ticket(request: TicketRequest):
     
     return {
         "message": f"Started processing ticket {request.ticket_id}",
-        "status": "processing"
+        "status": "processing",
+        "ticketId": request.ticket_id
     }
 
 

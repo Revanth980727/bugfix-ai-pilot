@@ -15,6 +15,13 @@ services:
       - backend
     networks:
       - bugfix_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
 
   backend:
     build:
@@ -26,6 +33,7 @@ services:
       - DEVELOPER_URL=http://developer:8002
       - QA_URL=http://qa:8003
       - COMMUNICATOR_URL=http://communicator:8004
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     env_file:
       - ./.env
     volumes:
@@ -38,6 +46,13 @@ services:
       - communicator
     networks:
       - bugfix_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
 
   planner:
     build:
@@ -46,6 +61,8 @@ services:
       - "8001:8001"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     env_file:
       - ./.env
     volumes:
@@ -53,6 +70,12 @@ services:
       - ./logs:/app/logs/planner
     networks:
       - bugfix_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
   developer:
     build:
@@ -61,6 +84,9 @@ services:
       - "8002:8002"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - MAX_RETRIES=${MAX_RETRIES:-4}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     env_file:
       - ./.env
     volumes:
@@ -68,6 +94,12 @@ services:
       - ./logs:/app/logs/developer
     networks:
       - bugfix_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
   qa:
     build:
@@ -76,7 +108,8 @@ services:
       - "8003:8003"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - TEST_COMMAND=${TEST_COMMAND:-pytest}
+      - TEST_COMMAND=${PROJECT_TEST_COMMAND:-pytest}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     env_file:
       - ./.env
     volumes:
@@ -84,6 +117,12 @@ services:
       - ./logs:/app/logs/qa
     networks:
       - bugfix_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
   communicator:
     build:
@@ -105,13 +144,20 @@ services:
       - SLACK_TOKEN=${SLACK_TOKEN:-""}
       - SLACK_CHANNEL=${SLACK_CHANNEL:-""}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     env_file:
       - ./.env
     volumes:
       - ./logs:/app/logs/communicator
-      - ./backend:/app/backend
+      - ./code_repo:/app/code_repo
     networks:
       - bugfix_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
   jira_service:
     build:
@@ -120,8 +166,8 @@ services:
     command: python -m jira_service.run_service
     environment:
       - JIRA_URL=${JIRA_URL}
-      - JIRA_USERNAME=${JIRA_USER}
-      - JIRA_API_TOKEN=${JIRA_TOKEN}
+      - JIRA_USER=${JIRA_USER}
+      - JIRA_TOKEN=${JIRA_TOKEN}
       - JIRA_PROJECT_KEY=${JIRA_PROJECT_KEY:-""}
       - JIRA_POLL_INTERVAL=${JIRA_POLL_INTERVAL:-30}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -154,6 +200,7 @@ services:
 
 networks:
   bugfix_network:
+    driver: bridge
 
 volumes:
   code_repo:

@@ -1,77 +1,103 @@
 
-# BugFix AI Pilot
+# BugFix AI System
 
 An autonomous AI tool that fixes bugs in your codebase by analyzing JIRA tickets and generating code fixes.
+
+## System Overview
+
+BugFix AI is a containerized system that uses multiple specialized AI agents to automatically fix bugs in your codebase:
+
+1. **Planner Agent** - Analyzes JIRA tickets and identifies affected code areas
+2. **Developer Agent** - Generates code fixes based on the planner's analysis
+3. **QA Agent** - Validates the fixes by running tests
+4. **Communicator Agent** - Updates JIRA tickets and creates GitHub PRs
+
+Each agent runs as a separate microservice and communicates through REST APIs. The main backend coordinates the workflow between agents, and a React frontend provides monitoring and control capabilities.
 
 ## Prerequisites
 
 Before running this application, you'll need:
 
-1. A GitHub personal access token with repo permissions
-   - Go to GitHub Settings > Developer Settings > Personal Access Tokens
-   - Generate a new token with 'repo' scope
+1. **Docker** and **Docker Compose** installed on your system
+   - [Install Docker](https://docs.docker.com/get-docker/)
+   - [Install Docker Compose](https://docs.docker.com/compose/install/)
 
-2. JIRA API credentials
-   - Go to https://id.atlassian.com/manage-profile/security/api-tokens
-   - Create an API token
-   - Note your Atlassian account email and JIRA domain URL
-
-3. OpenAI API key
-   - Go to https://platform.openai.com/account/api-keys
-   - Create a new API key
+2. **API Credentials**:
+   - **GitHub**: A personal access token with repo permissions
+     - Go to GitHub Settings > Developer Settings > Personal Access Tokens
+     - Generate a new token with 'repo' scope
+   
+   - **JIRA**: API token and account email
+     - Go to https://id.atlassian.com/manage-profile/security/api-tokens
+     - Create an API token
+     - Note your Atlassian account email and JIRA domain URL
+   
+   - **OpenAI**: API key for GPT-4
+     - Go to https://platform.openai.com/account/api-keys
+     - Create a new API key
 
 ## Setup Instructions
 
-1. Clone this repository:
+1. **Clone this repository**:
    ```bash
-   git clone https://github.com/yourusername/bugfix-ai-pilot.git
-   cd bugfix-ai-pilot
+   git clone https://github.com/yourusername/bugfix-ai.git
+   cd bugfix-ai
    ```
 
-2. Set up your environment variables:
+2. **Configure environment variables**:
    ```bash
-   cd backend
    cp .env.example .env
    ```
-   Edit the `.env` file with your API credentials:
-   - `GITHUB_TOKEN`: Your GitHub personal access token
-   - `GITHUB_REPO_OWNER`: Your GitHub username or organization
-   - `GITHUB_REPO_NAME`: Your repository name
-   - `JIRA_TOKEN`: Your JIRA API token
-   - `JIRA_USER`: Your JIRA email address
-   - `JIRA_URL`: Your JIRA instance URL
-   - `OPENAI_API_KEY`: Your OpenAI API key
-   - `OPENAI_MODEL`: The model to use (default: gpt-4o)
+   Edit the `.env` file with your API credentials
 
-3. Install dependencies:
+3. **Start the system**:
    ```bash
-   # Backend
-   cd backend
-   pip install -r requirements.txt
-   
-   # Frontend
-   cd ../
-   npm install
+   chmod +x start.sh stop.sh logs.sh
+   ./start.sh
    ```
 
-4. Start the application:
-   ```bash
-   # Using Docker Compose (recommended)
-   docker-compose up -d
-   
-   # Or manually:
-   # Start the backend
-   cd backend
-   uvicorn main:app --reload
-   
-   # In another terminal, start the frontend
-   cd src
-   npm run dev
-   ```
+This will:
+- Create necessary directories
+- Build and start all Docker containers
+- Make the frontend available at http://localhost:3000
 
-5. Open http://localhost:3000 in your browser
+## Using the System
 
-## Architecture
+### Web Interface
+
+1. Open http://localhost:3000 in your browser
+2. You'll see the dashboard with:
+   - List of active tickets
+   - Status of each ticket
+   - Detailed view of agent outputs
+   
+3. **Manually trigger a fix**:
+   - Enter a JIRA ticket ID in the form
+   - Click "Fix Bug" to start the process
+
+### Monitoring Logs
+
+To view logs for all services:
+```bash
+./logs.sh
+```
+
+To view logs for a specific service:
+```bash
+./logs.sh backend
+./logs.sh planner
+./logs.sh developer
+./logs.sh qa
+./logs.sh communicator
+```
+
+### Stopping the System
+
+```bash
+./stop.sh
+```
+
+## System Architecture
 
 ### Agent System
 
@@ -82,138 +108,67 @@ The application uses a multi-agent architecture with four specialized AI agents:
 3. **QA Agent** - Validates the fixes by running tests
 4. **Communicator Agent** - Updates JIRA tickets and creates GitHub PRs
 
-Each agent runs as a separate microservice and communicates through REST APIs. The main backend coordinates the workflow between agents.
-
 ### API Integration Clients
 
-This system includes two API client libraries for interacting with external services:
+This system includes API client libraries for interacting with external services:
 
-#### JIRA Client (`agents/utils/jira_client.py`)
+- **JIRA Client** (`agents/utils/jira_client.py`): Fetch and update JIRA tickets
+- **GitHub Client** (`agents/utils/github_client.py`): Manage repository operations
+- **OpenAI Client** (`agents/utils/openai_client.py`): Generate code fixes using GPT-4
 
-Provides functionality to:
-- Fetch tickets by ID
-- Get open bug tickets
-- Add comments to tickets 
-- Update ticket status (with transitions)
+## Docker Container Structure
 
-Usage:
-```python
-from agents.utils.jira_client import JiraClient
+- **frontend**: React web interface (port 3000)
+- **backend**: Main orchestration API (port 8000)
+- **planner**: Planner Agent microservice (port 8001)
+- **developer**: Developer Agent microservice (port 8002)
+- **qa**: QA Agent microservice (port 8003)
+- **communicator**: Communicator Agent microservice (port 8004)
+- **jira_service**: Background service monitoring JIRA
+- **github_service**: Background service for GitHub operations
 
-# Initialize the client
-jira = JiraClient()
+## Troubleshooting
 
-# Get open bug tickets
-bug_tickets = jira.get_open_bugs(max_results=10)
+### Common Issues
 
-# Update a ticket
-jira.update_ticket("PROJ-123", "In Progress", "Working on this ticket now")
-```
+1. **Docker containers not starting**
+   - Check if Docker daemon is running: `docker ps`
+   - Verify port availability: make sure ports 3000, 8000-8004 are not in use
+   - Check logs: `./logs.sh`
 
-#### GitHub Client (`agents/utils/github_client.py`)
+2. **API connectivity issues**
+   - Verify API credentials in `.env` file
+   - Check network connectivity to JIRA/GitHub
+   - Look for 401/403 errors in logs
 
-Provides functionality to:
-- Get file contents from a repository
-- Update files in a repository
-- Create branches
-- Create pull requests
-- Commit patches (code changes)
+3. **Agent failures**
+   - Check agent-specific logs: `./logs.sh [agent_name]`
+   - Verify OpenAI API key is valid
+   - Check if code repository path exists and is accessible
 
-Usage:
-```python
-from agents.utils.github_client import GitHubClient
+### Container Health Checks
 
-# Initialize the client
-github = GitHubClient()
-
-# Create a branch for a bug fix
-github.create_branch("fix-PROJ-123")
-
-# Create a PR
-pr_url = github.create_pull_request(
-    title="Fix for PROJ-123",
-    body="This PR fixes the issue described in PROJ-123",
-    head_branch="fix-PROJ-123"
-)
-```
-
-#### OpenAI Client (`agents/utils/openai_client.py`)
-
-Provides functionality to:
-- Generate code completions using GPT-4
-- Handle API errors and retries
-- Manage authentication securely
-
-Usage:
-```python
-from agents.utils.openai_client import OpenAIClient
-
-# Initialize the client
-openai_client = OpenAIClient()
-
-# Generate code completion
-completion = openai_client.generate_completion(
-    "Generate code to fix the following bug: ..."
-)
-```
-
-### Frontend Dashboard
-
-The frontend dashboard provides:
-1. Real-time monitoring of tickets being processed by the system
-2. Detailed views of each agent's output and progress
-3. Manual ticket triggering interface
-4. List of all tickets with filtering options
-
-## Development
-
-### Frontend (React + TypeScript)
-
+To check the health of all containers:
 ```bash
-npm install
-npm run dev
+docker-compose ps
 ```
 
-### Backend (FastAPI)
+Look for containers in an unhealthy state.
 
+### Restarting Individual Services
+
+To restart a specific service:
 ```bash
-cd backend
-uvicorn main:app --reload
+docker-compose restart [service_name]
 ```
 
-### Agent Services
-
-Each agent has its own Python/FastAPI service in the `agents/` directory.
-
-```bash
-# Run individual agents (development mode)
-cd agents/planner
-uvicorn agent:app --reload --port 8001
-
-cd agents/developer
-uvicorn agent:app --reload --port 8002
-
-cd agents/qa
-uvicorn agent:app --reload --port 8003
-
-cd agents/communicator
-uvicorn agent:app --reload --port 8004
-```
+Example: `docker-compose restart developer`
 
 ## Security Notes
 
 - Never commit your `.env` file to version control
 - Keep your API tokens secure and rotate them regularly
-- Store your API keys only in the backend `.env` file
-
-## Troubleshooting
-
-If you encounter issues:
-1. Verify your API credentials in the backend `.env` file are correct
-2. Check that your GitHub token has the required permissions
-3. Ensure your JIRA domain URL is correct and accessible
-4. Check the backend logs for detailed error messages
-5. Verify agent health with `GET /agents/health` endpoint
+- The `.env` file is listed in .gitignore to prevent accidental commits
 
 ## License
 
