@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { TicketForm } from '../tickets/TicketForm';
 import { TicketInfo } from '../tickets/TicketInfo';
@@ -13,6 +14,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { Search, Filter } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
 import { toast } from '@/components/ui/sonner';

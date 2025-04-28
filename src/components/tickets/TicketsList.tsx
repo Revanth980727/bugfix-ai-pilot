@@ -3,9 +3,10 @@ import React from 'react';
 import { Card } from '@/components/ui/card';
 import { LogViewer, type LogEntry } from '@/components/logs/LogViewer';
 import type { Ticket } from '@/types/ticket';
+import { TicketListItem } from '@/hooks/useDashboardState';
 
 interface TicketsListProps {
-  tickets: Ticket[];
+  tickets: Ticket[] | TicketListItem[];
   searchQuery?: string;
   filterStatus?: string | null;
 }
@@ -39,7 +40,7 @@ export function TicketsList({ tickets, searchQuery = '', filterStatus }: Tickets
               <p className="text-sm text-muted-foreground">{ticket.id}</p>
             </div>
             <span className="text-sm text-muted-foreground">
-              {new Date(ticket.created).toLocaleDateString()}
+              {new Date(ticket.created || ticket.updatedAt || '').toLocaleDateString()}
             </span>
           </div>
           
@@ -48,10 +49,20 @@ export function TicketsList({ tickets, searchQuery = '', filterStatus }: Tickets
               <span className="font-medium">Status: </span>
               <span className="text-muted-foreground">{ticket.status}</span>
             </div>
-            <div className="text-sm">
-              <span className="font-medium">Reporter: </span>
-              <span className="text-muted-foreground">{ticket.reporter}</span>
-            </div>
+            {/* Show reporter only if it exists (it exists in Ticket but may not in TicketListItem) */}
+            {'reporter' in ticket && (
+              <div className="text-sm">
+                <span className="font-medium">Reporter: </span>
+                <span className="text-muted-foreground">{ticket.reporter}</span>
+              </div>
+            )}
+            {/* Show stage if it exists (it exists in TicketListItem but not in Ticket) */}
+            {'stage' in ticket && (
+              <div className="text-sm">
+                <span className="font-medium">Stage: </span>
+                <span className="text-muted-foreground">{ticket.stage}</span>
+              </div>
+            )}
           </div>
         </Card>
       ))}
