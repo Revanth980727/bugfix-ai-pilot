@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { 
   Table, 
@@ -17,16 +16,20 @@ import { EscalationBadge } from './EscalationBadge';
 
 interface TicketsListProps {
   tickets: TicketListItem[];
-  selectedTicketId: string | null; 
-  onSelectTicket: (ticketId: string) => void;
+  selectedTicketId?: string | null; 
+  onSelectTicket?: (ticketId: string) => void;
   isLoading?: boolean;
+  searchQuery?: string;
+  filterStatus?: string | null;
 }
 
 export function TicketsList({ 
   tickets, 
   selectedTicketId, 
   onSelectTicket,
-  isLoading = false
+  isLoading = false,
+  searchQuery = '',
+  filterStatus = null
 }: TicketsListProps) {
   // Function to determine status badge color
   const getStatusColor = (status: string): string => {
@@ -53,6 +56,22 @@ export function TicketsList({
       return 'Unknown';
     }
   };
+  
+  // Filter tickets based on search query and status filter
+  const filteredTickets = tickets.filter(ticket => {
+    // Filter by search query (case insensitive)
+    const matchesSearch = searchQuery
+      ? ticket.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ticket.id.toLowerCase().includes(searchQuery.toLowerCase())
+      : true;
+      
+    // Filter by status
+    const matchesStatus = filterStatus
+      ? ticket.status.toLowerCase().includes(filterStatus.toLowerCase())
+      : true;
+      
+    return matchesSearch && matchesStatus;
+  });
 
   return (
     <Card className="w-full">
@@ -81,18 +100,20 @@ export function TicketsList({
                     </div>
                   </TableCell>
                 </TableRow>
-              ) : tickets.length === 0 ? (
+              ) : filteredTickets.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                    No active tickets found
+                    {searchQuery || filterStatus 
+                      ? "No tickets match your search criteria" 
+                      : "No active tickets found"}
                   </TableCell>
                 </TableRow>
               ) : (
-                tickets.map((ticket) => (
+                filteredTickets.map((ticket) => (
                   <TableRow 
                     key={ticket.id}
                     className={`cursor-pointer hover:bg-muted/50 ${selectedTicketId === ticket.id ? 'bg-muted' : ''}`}
-                    onClick={() => onSelectTicket(ticket.id)}
+                    onClick={() => onSelectTicket && onSelectTicket(ticket.id)}
                   >
                     <TableCell className="font-medium">{ticket.id}</TableCell>
                     <TableCell className="max-w-[200px] truncate">
