@@ -109,6 +109,26 @@ services:
       - ./backend:/app/backend
     networks:
       - bugfix_network
+      
+  jira_service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m jira_service.run_service
+    environment:
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${JIRA_USER}
+      - JIRA_API_TOKEN=${JIRA_TOKEN}
+      - JIRA_PROJECT_KEY=${JIRA_PROJECT_KEY:-""}
+      - JIRA_POLL_INTERVAL=${JIRA_POLL_INTERVAL:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    env_file:
+      - ./.env
+    volumes:
+      - ./logs:/app/logs/jira_service
+    networks:
+      - bugfix_network
+    restart: unless-stopped
 
 networks:
   bugfix_network:
