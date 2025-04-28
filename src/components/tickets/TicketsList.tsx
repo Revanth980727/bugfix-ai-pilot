@@ -1,7 +1,6 @@
 
 import React from 'react';
 import { Card } from '@/components/ui/card';
-import { LogViewer, type LogEntry } from '@/components/logs/LogViewer';
 import type { Ticket } from '@/types/ticket';
 import { TicketListItem } from '@/hooks/useDashboardState';
 

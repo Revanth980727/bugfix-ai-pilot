@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { TicketForm } from '../tickets/TicketForm';
 import { TicketInfo } from '../tickets/TicketInfo';
 import { PlannerAgent } from '../agents/PlannerAgent';
@@ -18,12 +18,12 @@ import { Button } from '@/components/ui/button';
 import { Search, Filter } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
 import { toast } from '@/components/ui/sonner';
+import { Loading } from '@/components/ui/loading';
 
 export function Dashboard() {
   const [view, setView] = useState<'current' | 'list'>('current');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
-  const [ticketId, setTicketId] = useState('');
   
   const { resolvedTheme, setTheme } = useTheme();
   
@@ -45,44 +45,12 @@ export function Dashboard() {
     handleTicketSubmit,
     ticketsList,
     fetchTickets,
+    selectTicket,
+    isLoadingTickets,
     currentAttempt,
     maxAttempts
   } = useDashboardState();
 
-  // Poll for ticket updates every 10 seconds
-  useEffect(() => {
-    fetchTickets();
-    
-    const interval = setInterval(() => {
-      fetchTickets();
-    }, 10000);
-    
-    return () => clearInterval(interval);
-  }, [fetchTickets]);
-
-  // New function to handle manual ticket processing
-  const handleProcessTicket = async (ticketId: string) => {
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/process-ticket`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ ticket_id: ticketId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to process ticket');
-      }
-
-      const data = await response.json();
-      toast.success(`Started processing ticket ${ticketId}`);
-      fetchTickets(); // Refresh the tickets list
-    } catch (error) {
-      toast.error(`Error processing ticket: ${(error as Error).message}`);
-    }
-  };
-  
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -106,77 +74,58 @@ export function Dashboard() {
       <Tabs value={view} onValueChange={(v) => setView(v as 'current' | 'list')} className="mt-0">
         <TabsContent value="current">
           <div className="grid gap-6 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Fix Bug</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={(e) => {
-                  e.preventDefault();
-                  handleTicketSubmit(ticketId);
-                }} 
-                className="space-y-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="ticketId">JIRA Ticket ID</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="ticketId"
-                        placeholder="E.g., PROJ-123"
-                        value={ticketId}
-                        onChange={(e) => setTicketId(e.target.value)}
-                        disabled={isProcessing}
-                      />
-                      <Button type="submit" disabled={isProcessing || !ticketId.trim()}>
-                        {isProcessing ? 'Processing...' : 'Fix Bug'}
-                      </Button>
-                    </div>
-                  </div>
-                </form>
-              </CardContent>
-            </Card>
-
+            <TicketForm onSubmit={handleTicketSubmit} isProcessing={isProcessing} />
             <TicketInfo ticket={activeTicket} />
           </div>
           
-          <Separator />
+          <Separator className="my-6" />
           
-          <div className="grid gap-6 md:grid-cols-2">
-            <PlannerAgent 
-              status={plannerStatus} 
-              progress={plannerProgress}
-              analysis={plannerAnalysis}
-            />
-            
-            <DeveloperAgent 
-              status={developerStatus} 
-              progress={developerProgress}
-              attempt={currentAttempt}
-              maxAttempts={maxAttempts}
-              diffs={diffs}
-            />
-          </div>
-          
-          <div className="grid gap-6 md:grid-cols-2">
-            <QAAgent 
-              status={qaStatus} 
-              progress={qaProgress}
-              testResults={testResults}
-              summary={testResults ? {
-                total: testResults.length,
-                passed: testResults.filter(t => t.status === 'pass').length,
-                failed: testResults.filter(t => t.status === 'fail').length,
-                duration: testResults.reduce((acc, curr) => acc + curr.duration, 0)
-              } : undefined}
-            />
-            
-            <CommunicatorAgent 
-              status={communicatorStatus} 
-              progress={communicatorProgress}
-              updates={updates}
-              prUrl={updates ? "https://github.com/org/repo/pull/45" : undefined}
-              jiraUrl={updates ? "https://jira.company.com/browse/DEMO-123" : undefined}
-            />
-          </div>
+          {!activeTicket ? (
+            <div className="text-center py-10 text-muted-foreground">
+              <p>Enter a JIRA ticket ID above to start fixing a bug,</p>
+              <p>or select a ticket from the Tickets List tab.</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-6 md:grid-cols-2">
+                <PlannerAgent 
+                  status={plannerStatus} 
+                  progress={plannerProgress}
+                  analysis={plannerAnalysis}
+                />
+                
+                <DeveloperAgent 
+                  status={developerStatus} 
+                  progress={developerProgress}
+                  attempt={currentAttempt}
+                  maxAttempts={maxAttempts}
+                  diffs={diffs}
+                />
+              </div>
+              
+              <div className="grid gap-6 md:grid-cols-2 mt-6">
+                <QAAgent 
+                  status={qaStatus} 
+                  progress={qaProgress}
+                  testResults={testResults}
+                  summary={testResults ? {
+                    total: testResults.length,
+                    passed: testResults.filter(t => t.status === 'pass').length,
+                    failed: testResults.filter(t => t.status === 'fail').length,
+                    duration: testResults.reduce((acc, curr) => acc + curr.duration, 0)
+                  } : undefined}
+                />
+                
+                <CommunicatorAgent 
+                  status={communicatorStatus} 
+                  progress={communicatorProgress}
+                  updates={updates}
+                  prUrl={updates && updates.length > 0 ? "https://github.com/org/repo/pull/45" : undefined}
+                  jiraUrl={activeTicket ? `https://jira.company.com/browse/${activeTicket.id}` : undefined}
+                />
+              </div>
+            </>
+          )}
         </TabsContent>
         
         <TabsContent value="list">
@@ -212,11 +161,28 @@ export function Dashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <TicketsList 
-                tickets={ticketsList} 
-                searchQuery={searchQuery}
-                filterStatus={filterStatus}
-              />
+              {isLoadingTickets ? (
+                <Loading message="Loading tickets..." className="py-10" />
+              ) : (
+                <div className="space-y-4">
+                  <TicketsList 
+                    tickets={ticketsList} 
+                    searchQuery={searchQuery}
+                    filterStatus={filterStatus}
+                  />
+                  {ticketsList.length > 0 && (
+                    <div className="flex justify-end">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => fetchTickets()}
+                      >
+                        Refresh
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

@@ -1,12 +1,8 @@
 
-import { useState, useCallback } from 'react';
-import { Ticket, TestResult } from '../types/ticket';
+import { useState, useEffect, useCallback } from 'react';
+import { Ticket, PlannerAnalysis, CodeDiff, TestResult, Update } from '@/types/ticket';
+import { api } from '@/services/api';
 import { toast } from '@/components/ui/sonner';
-import { mockTicket, mockPlannerAnalysis, mockDiffs, mockTestResults, mockUpdates, mockTicketsList } from '../data/mockData';
-import { usePlannerAgent } from './usePlannerAgent';
-import { useDeveloperAgent } from './useDeveloperAgent';
-import { useQAAgent } from './useQAAgent';
-import { useCommunicatorAgent } from './useCommunicatorAgent';
 
 export type AgentStatus = 'idle' | 'working' | 'success' | 'error' | 'waiting' | 'escalated';
 
@@ -14,213 +10,274 @@ export interface TicketListItem {
   id: string;
   title: string;
   status: string;
-  stage: 'planning' | 'development' | 'qa' | 'pr-opened' | 'escalated' | 'completed';
-  prUrl?: string;
+  stage: string;
+  priority?: string;
   updatedAt: string;
-  needsReview?: boolean;
 }
 
-export function useDashboardState() {
-  const [isProcessing, setIsProcessing] = useState(false);
+export const useDashboardState = () => {
+  // Active ticket state
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [activeTicket, setActiveTicket] = useState<Ticket | null>(null);
-  const [ticketsList, setTicketsList] = useState<TicketListItem[]>(mockTicketsList as TicketListItem[]);
-  const [currentAttempt, setCurrentAttempt] = useState(1);
-  const MAX_ATTEMPTS = 4; // Can be moved to env variable in a real implementation
   
-  const planner = usePlannerAgent();
-  const developer = useDeveloperAgent();
-  const qa = useQAAgent();
-  const communicator = useCommunicatorAgent();
+  // Agent statuses
+  const [plannerStatus, setPlannerStatus] = useState<AgentStatus>('idle');
+  const [developerStatus, setDeveloperStatus] = useState<AgentStatus>('idle');
+  const [qaStatus, setQaStatus] = useState<AgentStatus>('idle');
+  const [communicatorStatus, setCommunicatorStatus] = useState<AgentStatus>('idle');
+  
+  // Agent progress (0-100)
+  const [plannerProgress, setPlannerProgress] = useState<number>(0);
+  const [developerProgress, setDeveloperProgress] = useState<number>(0);
+  const [qaProgress, setQaProgress] = useState<number>(0);
+  const [communicatorProgress, setCommunicatorProgress] = useState<number>(0);
+  
+  // Agent outputs
+  const [plannerAnalysis, setPlannerAnalysis] = useState<PlannerAnalysis | undefined>(undefined);
+  const [diffs, setDiffs] = useState<CodeDiff[] | undefined>(undefined);
+  const [testResults, setTestResults] = useState<TestResult[] | undefined>(undefined);
+  const [updates, setUpdates] = useState<Update[] | undefined>(undefined);
+  
+  // Retry information
+  const [currentAttempt, setCurrentAttempt] = useState<number>(0);
+  const [maxAttempts] = useState<number>(4);
+  
+  // Tickets list
+  const [ticketsList, setTicketsList] = useState<TicketListItem[]>([]);
+  const [isLoadingTickets, setIsLoadingTickets] = useState<boolean>(false);
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
 
-  const resetAllAgents = () => {
-    planner.reset();
-    developer.reset();
-    qa.reset();
-    communicator.reset();
-    setCurrentAttempt(1);
-  };
-
-  const handleTicketSubmit = (ticketId: string) => {
-    setIsProcessing(true);
-    toast.info(`Starting fix process for ticket ${ticketId}`);
+  // Reset all agent states
+  const resetAgentStates = useCallback(() => {
+    setPlannerStatus('idle');
+    setDeveloperStatus('idle');
+    setQaStatus('idle');
+    setCommunicatorStatus('idle');
     
-    resetAllAgents();
+    setPlannerProgress(0);
+    setDeveloperProgress(0);
+    setQaProgress(0);
+    setCommunicatorProgress(0);
     
-    // Simulate fetching the ticket
-    setTimeout(() => {
-      setActiveTicket(mockTicket);
-      simulateWorkflow();
-      
-      // Update the ticket list to show this ticket as in-progress
-      setTicketsList(prev => 
-        prev.map(ticket => 
-          ticket.id === ticketId 
-            ? { ...ticket, stage: 'planning' as const, status: 'in-progress' } 
-            : ticket
-        )
-      );
-    }, 1000);
-  };
-
-  const simulateWorkflow = () => {
-    planner.simulateWork(
-      () => startDeveloperPhase(1),
-      mockPlannerAnalysis
-    );
-  };
-
-  const startDeveloperPhase = (attempt: number) => {
-    setCurrentAttempt(attempt);
+    setPlannerAnalysis(undefined);
+    setDiffs(undefined);
+    setTestResults(undefined);
+    setUpdates(undefined);
     
-    if (attempt > MAX_ATTEMPTS) {
-      handleEscalation();
-      return;
-    }
-    
-    developer.simulateWork(
-      () => startQaPhase(attempt),
-      mockDiffs,
-      attempt
-    );
-    
-    // Update ticket status to show current attempt
-    if (activeTicket) {
-      setTicketsList(prev => 
-        prev.map(ticket => 
-          ticket.id === activeTicket.id 
-            ? { 
-                ...ticket, 
-                stage: 'development' as const, 
-                status: `attempt ${attempt}/${MAX_ATTEMPTS}` 
-              } 
-            : ticket
-        )
-      );
-    }
-  };
-  
-  const startQaPhase = (attempt: number) => {
-    if (activeTicket) {
-      setTicketsList(prev => 
-        prev.map(ticket => 
-          ticket.id === activeTicket.id 
-            ? { ...ticket, stage: 'qa' as const, status: 'testing' } 
-            : ticket
-        )
-      );
-    }
-    
-    // For demo purposes, simulate QA passing on second attempt
-    if (attempt === 2) {
-      qa.simulateWork(
-        () => startCommunicatorPhase(),
-        mockTestResults
-      );
-    } else if (attempt < MAX_ATTEMPTS) {
-      // Simulate QA failure and retry
-      qa.simulateFailure(() => {
-        toast.error(`QA tests failed for attempt ${attempt}. Retrying...`);
-        // Wait a bit before starting next attempt
-        setTimeout(() => startDeveloperPhase(attempt + 1), 1500);
-      });
-    } else {
-      // Final attempt failed
-      qa.simulateFailure(() => {
-        handleEscalation();
-      });
-    }
-  };
-  
-  const startCommunicatorPhase = () => {
-    if (activeTicket) {
-      setTicketsList(prev => 
-        prev.map(ticket => 
-          ticket.id === activeTicket.id 
-            ? { ...ticket, stage: 'pr-opened' as const, status: 'finalizing' } 
-            : ticket
-        )
-      );
-    }
-    
-    communicator.simulateWork(
-      () => {
-        setIsProcessing(false);
-        toast.success('Fix process completed successfully!', {
-          description: 'PR created and JIRA updated.'
-        });
-        
-        // Update the ticket list to show this ticket as completed
-        if (activeTicket) {
-          setTicketsList(prev => 
-            prev.map(ticket => 
-              ticket.id === activeTicket.id 
-                ? { 
-                    ...ticket, 
-                    stage: 'pr-opened' as const, 
-                    status: 'success',
-                    prUrl: 'https://github.com/org/repo/pull/123' // Mock PR URL
-                  } 
-                : ticket
-            )
-          );
-        }
-      },
-      mockUpdates
-    );
-  };
-  
-  const handleEscalation = () => {
-    setIsProcessing(false);
-    toast.error('Fix process has failed after maximum retries.', {
-      description: 'Ticket has been escalated for human review.'
-    });
-    
-    if (activeTicket) {
-      setTicketsList(prev => 
-        prev.map(ticket => 
-          ticket.id === activeTicket.id 
-            ? { 
-                ...ticket, 
-                stage: 'escalated' as const, 
-                status: 'escalated',
-                needsReview: true
-              } 
-            : ticket
-        )
-      );
-    }
-  };
-  
-  const fetchTickets = useCallback(() => {
-    // In a real implementation, this would be an API call
-    // For now, we're just using the mock data
-    
-    // Simulate API poll - in a real app, this would fetch fresh data from the backend
-    console.log("Polling for ticket updates...");
-    
-    // We could simulate updates here by randomly changing the status of some tickets
-    // But for now, we'll just leave it as is
+    setCurrentAttempt(0);
   }, []);
+
+  // Fetch ticket details
+  const fetchTicketDetails = useCallback(async (ticketId: string) => {
+    try {
+      const details = await api.getTicketDetails(ticketId);
+      if (!details) return;
+      
+      // Update active ticket info
+      setActiveTicket(details.ticket);
+      setSelectedTicketId(ticketId);
+      
+      // Update agent statuses based on current stage
+      switch (details.currentStage) {
+        case 'planning':
+          setPlannerStatus('working');
+          setDeveloperStatus('idle');
+          setQaStatus('idle');
+          setCommunicatorStatus('idle');
+          break;
+        case 'development':
+          setPlannerStatus('success');
+          setDeveloperStatus('working');
+          setQaStatus('idle');
+          setCommunicatorStatus('idle');
+          break;
+        case 'qa':
+          setPlannerStatus('success');
+          setDeveloperStatus('success');
+          setQaStatus('working');
+          setCommunicatorStatus('idle');
+          break;
+        case 'communicating':
+          setPlannerStatus('success');
+          setDeveloperStatus('success');
+          setQaStatus('success');
+          setCommunicatorStatus('working');
+          break;
+        case 'completed':
+          setPlannerStatus('success');
+          setDeveloperStatus('success');
+          setQaStatus('success');
+          setCommunicatorStatus('success');
+          break;
+        case 'escalated':
+          // Set relevant agent to error status
+          if (details.agentOutputs.planner) {
+            setPlannerStatus('success');
+            if (details.agentOutputs.developer) {
+              setDeveloperStatus(details.agentOutputs.qa ? 'success' : 'error');
+              setQaStatus(details.agentOutputs.qa ? 'error' : 'idle');
+            } else {
+              setDeveloperStatus('error');
+            }
+          } else {
+            setPlannerStatus('error');
+          }
+          setCommunicatorStatus('escalated');
+          break;
+      }
+      
+      // Update agent outputs
+      if (details.agentOutputs.planner) {
+        setPlannerAnalysis({
+          affectedFiles: details.agentOutputs.planner.affectedFiles || [],
+          rootCause: details.agentOutputs.planner.rootCause || '',
+          suggestedApproach: details.agentOutputs.planner.suggestedApproach || ''
+        });
+        setPlannerProgress(100);
+      }
+      
+      if (details.agentOutputs.developer) {
+        setDiffs(details.agentOutputs.developer.diffs || []);
+        setCurrentAttempt(details.agentOutputs.developer.attempt);
+        setDeveloperProgress(100);
+      }
+      
+      if (details.agentOutputs.qa) {
+        setTestResults(details.agentOutputs.qa.testResults || []);
+        setQaProgress(100);
+      }
+      
+      if (details.agentOutputs.communicator) {
+        setUpdates(details.agentOutputs.communicator.updates || []);
+        setCommunicatorProgress(100);
+      }
+      
+    } catch (error) {
+      console.error('Error fetching ticket details:', error);
+    }
+  }, []);
+
+  // Fetch list of tickets
+  const fetchTickets = useCallback(async () => {
+    if (isLoadingTickets) return;
+    
+    try {
+      setIsLoadingTickets(true);
+      const tickets = await api.getTickets();
+      
+      // Transform tickets to TicketListItem format
+      const ticketItems: TicketListItem[] = tickets.map(ticket => ({
+        id: ticket.id,
+        title: ticket.title,
+        status: ticket.status,
+        stage: getStageFromStatus(ticket.status),
+        priority: ticket.priority,
+        updatedAt: ticket.updated || ''
+      }));
+      
+      setTicketsList(ticketItems);
+      
+      // If we have a selected ticket, refresh its details
+      if (selectedTicketId) {
+        fetchTicketDetails(selectedTicketId);
+      }
+      
+      setIsLoadingTickets(false);
+      console.info('Polling for ticket updates...');
+    } catch (error) {
+      setIsLoadingTickets(false);
+      console.error('Error fetching tickets:', error);
+    }
+  }, [isLoadingTickets, selectedTicketId, fetchTicketDetails]);
+
+  // Handle ticket selection
+  const selectTicket = useCallback((ticketId: string) => {
+    setSelectedTicketId(ticketId);
+    fetchTicketDetails(ticketId);
+  }, [fetchTicketDetails]);
+
+  // Handle ticket submission
+  const handleTicketSubmit = useCallback(async (ticketId: string) => {
+    try {
+      setIsProcessing(true);
+      resetAgentStates();
+      
+      const response = await api.startFix(ticketId);
+      if (!response) {
+        toast.error('Failed to start bug fix process');
+        setIsProcessing(false);
+        return;
+      }
+      
+      toast.success(`Started bug fix for ${ticketId}`);
+      
+      // Now fetch the details
+      fetchTicketDetails(ticketId);
+      
+      // Also refresh the ticket list
+      fetchTickets();
+      
+      setIsProcessing(false);
+    } catch (error) {
+      setIsProcessing(false);
+      toast.error(`Error starting fix: ${(error as Error).message}`);
+    }
+  }, [resetAgentStates, fetchTicketDetails, fetchTickets]);
+
+  // Poll for updates every 10 seconds
+  useEffect(() => {
+    fetchTickets();
+    
+    const intervalId = setInterval(() => {
+      fetchTickets();
+    }, 10000);
+    
+    return () => clearInterval(intervalId);
+  }, [fetchTickets]);
 
   return {
     isProcessing,
     activeTicket,
-    plannerStatus: planner.status,
-    developerStatus: developer.status,
-    qaStatus: qa.status,
-    communicatorStatus: communicator.status,
-    plannerProgress: planner.progress,
-    developerProgress: developer.progress,
-    qaProgress: qa.progress,
-    communicatorProgress: communicator.progress,
-    plannerAnalysis: planner.analysis,
-    diffs: developer.diffs,
-    testResults: qa.testResults,
-    updates: communicator.updates,
+    plannerStatus,
+    developerStatus,
+    qaStatus,
+    communicatorStatus,
+    plannerProgress,
+    developerProgress,
+    qaProgress,
+    communicatorProgress,
+    plannerAnalysis,
+    diffs,
+    testResults,
+    updates,
     handleTicketSubmit,
     ticketsList,
     fetchTickets,
+    selectTicket,
+    isLoadingTickets,
+    selectedTicketId,
     currentAttempt,
-    maxAttempts: MAX_ATTEMPTS
+    maxAttempts
   };
+};
+
+// Helper function to map ticket status to stage
+function getStageFromStatus(status: string): string {
+  const lowerStatus = status.toLowerCase();
+  
+  if (lowerStatus.includes('planning') || lowerStatus === 'open') {
+    return 'planning';
+  } else if (lowerStatus.includes('develop')) {
+    return 'development';
+  } else if (lowerStatus.includes('test') || lowerStatus.includes('qa')) {
+    return 'qa';
+  } else if (lowerStatus.includes('review') || lowerStatus.includes('pr')) {
+    return 'communicating';
+  } else if (lowerStatus.includes('done') || lowerStatus.includes('complete')) {
+    return 'completed';
+  } else if (lowerStatus.includes('escalat')) {
+    return 'escalated';
+  }
+  
+  return 'planning'; // Default
 }

@@ -65,7 +65,7 @@ Before running this application, you'll need:
    uvicorn main:app --reload
    
    # In another terminal, start the frontend
-   cd frontend
+   cd src
    npm run dev
    ```
 
@@ -157,24 +157,13 @@ completion = openai_client.generate_completion(
 )
 ```
 
-### Directory Structure
+### Frontend Dashboard
 
-```
-.
-├── agents/
-│   ├── planner/       # Analyzes tickets to identify root causes
-│   ├── developer/     # Generates code fixes
-│   ├── qa/            # Validates fixes with tests
-│   ├── communicator/  # Updates JIRA and creates PRs
-│   └── utils/
-│       ├── jira_client.py    # JIRA API integration
-│       ├── github_client.py  # GitHub API integration
-│       ├── openai_client.py  # OpenAI API integration
-│       └── logger.py         # Logging utilities
-├── backend/           # Main backend service
-├── src/               # Frontend React application
-└── docker-compose.yml # Container orchestration
-```
+The frontend dashboard provides:
+1. Real-time monitoring of tickets being processed by the system
+2. Detailed views of each agent's output and progress
+3. Manual ticket triggering interface
+4. List of all tickets with filtering options
 
 ## Development
 
