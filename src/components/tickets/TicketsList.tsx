@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { 
   Table, 
@@ -10,7 +9,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { LogViewer } from '@/components/logs/LogViewer';
+import LogViewer from '@/components/logs/LogViewer';
 import { cn } from '@/lib/utils';
 import { TicketListItem } from '@/hooks/useDashboardState';
 import { EscalationBadge } from './EscalationBadge';
@@ -41,7 +40,7 @@ export function TicketsList({ tickets, searchQuery, filterStatus }: TicketsListP
   };
   
   const getStatusBadgeVariant = (status: string) => {
-    if (status === 'success') return "default";
+    if (status === 'success') return "success";
     if (status === 'in-progress' || status.includes('attempt')) return "outline"; 
     if (status === 'failed' || status === 'escalated') return "destructive";
     return "secondary";
