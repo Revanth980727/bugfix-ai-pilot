@@ -41,6 +41,7 @@ Before running this application, you'll need:
    - `JIRA_USER`: Your JIRA email address
    - `JIRA_URL`: Your JIRA instance URL
    - `OPENAI_API_KEY`: Your OpenAI API key
+   - `OPENAI_MODEL`: The model to use (default: gpt-4o)
 
 3. Install dependencies:
    ```bash
@@ -136,6 +137,26 @@ pr_url = github.create_pull_request(
 )
 ```
 
+#### OpenAI Client (`agents/utils/openai_client.py`)
+
+Provides functionality to:
+- Generate code completions using GPT-4
+- Handle API errors and retries
+- Manage authentication securely
+
+Usage:
+```python
+from agents.utils.openai_client import OpenAIClient
+
+# Initialize the client
+openai_client = OpenAIClient()
+
+# Generate code completion
+completion = openai_client.generate_completion(
+    "Generate code to fix the following bug: ..."
+)
+```
+
 ### Directory Structure
 
 ```
@@ -148,6 +169,7 @@ pr_url = github.create_pull_request(
 │   └── utils/
 │       ├── jira_client.py    # JIRA API integration
 │       ├── github_client.py  # GitHub API integration
+│       ├── openai_client.py  # OpenAI API integration
 │       └── logger.py         # Logging utilities
 ├── backend/           # Main backend service
 ├── src/               # Frontend React application

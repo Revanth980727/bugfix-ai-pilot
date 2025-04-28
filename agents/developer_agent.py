@@ -5,6 +5,7 @@ import json
 from typing import Dict, Any, List, Optional
 import openai
 from .utils.logger import Logger
+from .utils.openai_client import OpenAIClient
 
 class DeveloperAgent:
     """
@@ -22,16 +23,11 @@ class DeveloperAgent:
         self.logger = Logger("developer_agent")
         self.max_retries = max_retries
         
-        # Get OpenAI API key from environment
-        self.api_key = os.environ.get("OPENAI_API_KEY")
-        if not self.api_key:
-            self.logger.error("Missing OpenAI API key")
-            raise EnvironmentError("Missing OPENAI_API_KEY environment variable")
-        
         # Get repo path from environment
         self.repo_path = os.environ.get("REPO_PATH", "/mnt/codebase")
         
-        openai.api_key = self.api_key
+        # Initialize OpenAI client
+        self.openai_client = OpenAIClient()
     
     def run(self, task_plan: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -65,18 +61,8 @@ class DeveloperAgent:
         self.logger.info(f"Starting fix attempt {attempt}/{self.max_retries}")
         
         try:
-            # Read file contents for the files identified in the task plan
-            file_contents = self._read_identified_files(task_plan.get("files", []))
-            
-            # Create prompt for GPT-4
-            prompt = self._create_developer_prompt(task_plan, file_contents, previous_attempts)
-            
-            # Get code fix from GPT-4
-            self.logger.info(f"Sending task plan to GPT-4 for code generation (attempt {attempt})")
-            response = self._query_gpt(prompt)
-            
-            # Parse the response to extract the patch content
-            patch_data = self._extract_patch(response, task_plan)
+            # Generate the fix using OpenAI
+            patch_data = self.generate_fix(task_plan, attempt, previous_attempts)
             
             # Add metadata
             patch_data["attempt"] = attempt
@@ -84,6 +70,7 @@ class DeveloperAgent:
             
             # Save patch to file
             patch_file_path = f"logs/patch_{ticket_id}_attempt_{attempt}.patch"
+            os.makedirs("logs", exist_ok=True)
             with open(patch_file_path, "w") as f:
                 f.write(patch_data["patch_content"])
                 
@@ -109,6 +96,38 @@ class DeveloperAgent:
                 "ticket_id": ticket_id,
                 "success": False
             }
+            
+    def generate_fix(self, task_plan: Dict[str, Any], attempt: int = 1, 
+                     previous_attempts: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Generate a code fix based on the task plan using GPT-4
+        
+        Args:
+            task_plan: The task plan from PlannerAgent
+            attempt: Current attempt number
+            previous_attempts: List of previous attempts and their results
+            
+        Returns:
+            Dictionary with patch information
+        """
+        if previous_attempts is None:
+            previous_attempts = []
+            
+        # Read file contents for the files identified in the task plan
+        file_contents = self._read_identified_files(task_plan.get("files", []))
+        
+        # Create prompt for GPT-4
+        prompt = self._create_developer_prompt(task_plan, file_contents, previous_attempts)
+        
+        # Get code fix from GPT-4
+        self.logger.info(f"Sending prompt to GPT-4 for code generation (attempt {attempt})")
+        response = self.openai_client.generate_completion(prompt)
+        
+        if not response:
+            raise Exception(f"Failed to generate code fix. OpenAI API call failed on attempt {attempt}.")
+        
+        # Parse the response to extract the patch content
+        return self._extract_patch(response, task_plan)
             
     def _read_identified_files(self, files: List[Dict[str, Any]]) -> Dict[str, str]:
         """
@@ -157,6 +176,10 @@ class DeveloperAgent:
         # Basic prompt with task plan info
         prompt = f"""
         You are a senior software developer implementing a fix for a bug based on the following analysis:
+        
+        Bug Title: {task_plan.get('title', 'No title provided')}
+        
+        Bug Description: {task_plan.get('description', 'No description provided')}
         
         Root Cause: {task_plan.get('root_cause', 'Unknown')}
         
@@ -218,24 +241,6 @@ class DeveloperAgent:
         """
         
         return prompt
-        
-    def _query_gpt(self, prompt: str) -> str:
-        """Query GPT-4 with the given prompt"""
-        try:
-            response = openai.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are a senior software developer implementing bug fixes."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=4000
-            )
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            self.logger.error(f"Error querying GPT-4: {str(e)}")
-            raise
             
     def _extract_patch(self, response: str, task_plan: Dict[str, Any]) -> Dict[str, Any]:
         """
