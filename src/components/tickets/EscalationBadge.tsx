@@ -1,27 +1,25 @@
 
 import React from 'react';
+import { Badge } from '@/components/ui/badge';
 import { AlertTriangle } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface EscalationBadgeProps {
-  needsReview: boolean;
   className?: string;
 }
 
-export function EscalationBadge({ needsReview, className }: EscalationBadgeProps) {
-  if (!needsReview) return null;
-  
+export function EscalationBadge({ className = '' }: EscalationBadgeProps) {
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className={cn("inline-flex items-center", className)}>
-            <AlertTriangle className="h-4 w-4 text-destructive animate-pulse" />
-          </span>
+          <Badge variant="destructive" className={`flex items-center gap-1 ${className}`}>
+            <AlertTriangle className="h-3 w-3" />
+            <span>Escalated</span>
+          </Badge>
         </TooltipTrigger>
         <TooltipContent>
-          <p>This ticket requires human review</p>
+          <p className="text-xs">This ticket has been escalated for human review after multiple fix attempts failed</p>
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

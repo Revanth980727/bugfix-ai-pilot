@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { AgentStatus } from '@/hooks/useDashboardState';
+import { AlertTriangle } from 'lucide-react';
 
 interface FileDiff {
   filename: string;
@@ -20,9 +21,10 @@ interface DeveloperAgentProps {
   attempt?: number;
   maxAttempts?: number;
   diffs?: FileDiff[];
+  escalated?: boolean;
 }
 
-export function DeveloperAgent({ status, progress, attempt = 0, maxAttempts = 4, diffs }: DeveloperAgentProps) {
+export function DeveloperAgent({ status, progress, attempt = 0, maxAttempts = 4, diffs, escalated = false }: DeveloperAgentProps) {
   return (
     <AgentCard title="Developer" type="developer" status={status} progress={progress}>
       {status === 'idle' && (
@@ -48,10 +50,16 @@ export function DeveloperAgent({ status, progress, attempt = 0, maxAttempts = 4,
       
       {diffs && diffs.length > 0 && (
         <Tabs defaultValue="diff">
-          <TabsList className="w-full">
-            <TabsTrigger value="diff" className="flex-1">Code Changes</TabsTrigger>
-            <TabsTrigger value="summary" className="flex-1">Summary</TabsTrigger>
-          </TabsList>
+          <div className="flex justify-between items-center mb-2">
+            <TabsList className="flex-1">
+              <TabsTrigger value="diff" className="flex-1">Code Changes</TabsTrigger>
+              <TabsTrigger value="summary" className="flex-1">Summary</TabsTrigger>
+            </TabsList>
+            <Badge variant={escalated ? "destructive" : "outline"} className="ml-2">
+              {escalated && <AlertTriangle className="h-3 w-3 mr-1" />}
+              Attempt {attempt}/{maxAttempts}
+            </Badge>
+          </div>
           
           <TabsContent value="diff">
             <ScrollArea className="h-[300px]">
@@ -98,7 +106,6 @@ export function DeveloperAgent({ status, progress, attempt = 0, maxAttempts = 4,
                     ))}
                   </ul>
                 </div>
-                <Badge variant="outline">Attempt {attempt}/{maxAttempts}</Badge>
               </div>
             </ScrollArea>
           </TabsContent>
@@ -109,10 +116,23 @@ export function DeveloperAgent({ status, progress, attempt = 0, maxAttempts = 4,
         <div className="text-sm text-red-400 space-y-2">
           <p>Failed to generate a working fix after {attempt} attempts.</p>
           {attempt >= maxAttempts && (
-            <p>Maximum attempts reached. Issue will be escalated to human review.</p>
+            <p className="flex items-center gap-1">
+              <AlertTriangle className="h-4 w-4" />
+              Maximum attempts reached. Issue has been escalated to human review.
+            </p>
           )}
+        </div>
+      )}
+      
+      {status === 'escalated' && (
+        <div className="text-sm text-amber-500 space-y-2">
+          <p className="flex items-center gap-1">
+            <AlertTriangle className="h-4 w-4" />
+            Escalated to human review after {attempt} failed attempts.
+          </p>
         </div>
       )}
     </AgentCard>
   );
 }
+

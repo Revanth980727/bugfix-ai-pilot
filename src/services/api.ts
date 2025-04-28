@@ -64,6 +64,9 @@ export interface TicketDetailResponse {
   };
   status: string;
   currentStage: 'planning' | 'development' | 'qa' | 'communicating' | 'completed' | 'escalated';
+  escalated: boolean;
+  retryCount: number;
+  maxRetries: number;
 }
 
 export interface StartFixResponse {

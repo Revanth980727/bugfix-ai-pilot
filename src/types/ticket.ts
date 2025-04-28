@@ -9,6 +9,9 @@ export interface Ticket {
   assignee: string | null;
   created: string;
   updated: string;
+  escalated?: boolean;
+  current_attempt?: number;
+  max_attempts?: number;
 }
 
 export interface PlannerAnalysis {
@@ -41,3 +44,4 @@ export interface Update {
   message: string;
   type: UpdateType;
 }
+

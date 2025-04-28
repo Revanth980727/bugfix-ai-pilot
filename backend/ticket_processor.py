@@ -31,6 +31,9 @@ from log_utils import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ticket-processor")
 
+# Get retry delay from environment or default to 5 seconds
+RETRY_DELAY_SECONDS = int(os.environ.get('RETRY_DELAY_SECONDS', '5'))
+
 async def process_ticket(ticket: Dict[str, Any]):
     """Process a single ticket through the entire agent workflow"""
     ticket_id = ticket["ticket_id"]
@@ -142,15 +145,49 @@ async def process_ticket(ticket: Dict[str, Any]):
             
             update_ticket_status(ticket_id, "processing", {"qa_results": qa_response})
             
+            # Log retry status with timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            result_status = "PASS" if qa_passed else "FAIL"
+            log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{MAX_RETRIES} | QA Result: {result_status} | {timestamp}"
+            logger.info(log_message)
+            
             if not qa_passed and current_attempt >= MAX_RETRIES:
-                update_ticket_status(ticket_id, "escalated")
+                # Max retries reached, escalate to human
+                update_ticket_status(ticket_id, "escalated", {"escalated": True})
                 await update_jira_ticket(
                     ticket_id,
                     "Needs Review",
                     f"BugFix AI: All {MAX_RETRIES} fix attempts failed. This ticket requires human attention.",
                     {"needs_human_review": True}
                 )
+                
+                # Call communicator for escalation
+                communicator_input = {
+                    "ticket_id": ticket_id,
+                    "test_passed": False,
+                    "escalated": True,
+                    "retry_count": current_attempt,
+                    "max_retries": MAX_RETRIES
+                }
+                log_agent_input(ticket_id, "communicator_escalation", communicator_input)
+                
+                communicator_response = await call_communicator_agent(
+                    ticket_id,
+                    [],
+                    [],
+                    f"Failed after {MAX_RETRIES} attempts",
+                    escalated=True
+                )
+                
+                if communicator_response:
+                    log_agent_output(ticket_id, "communicator_escalation", communicator_response)
+                
                 return
+            
+            if not qa_passed:
+                # Wait before trying again
+                logger.info(f"Waiting {RETRY_DELAY_SECONDS} seconds before next retry")
+                await asyncio.sleep(RETRY_DELAY_SECONDS)
             
             current_attempt += 1
         
@@ -166,7 +203,7 @@ async def process_ticket(ticket: Dict[str, Any]):
             "test_results": qa_response["test_results"],
             "commit_message": developer_response["commit_message"],
             "qa_passed": qa_passed,
-            "attempts": current_attempt
+            "attempts": current_attempt - 1  # -1 because we increment at end of loop
         }
         log_agent_input(ticket_id, "communicator", communicator_input)
         

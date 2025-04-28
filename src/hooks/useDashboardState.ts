@@ -13,6 +13,9 @@ export interface TicketListItem {
   stage: string;
   priority?: string;
   updatedAt: string;
+  escalated?: boolean;
+  retryCount?: number;
+  maxRetries?: number;
 }
 
 export const useDashboardState = () => {
@@ -40,7 +43,10 @@ export const useDashboardState = () => {
   
   // Retry information
   const [currentAttempt, setCurrentAttempt] = useState<number>(0);
-  const [maxAttempts] = useState<number>(4);
+  const [maxAttempts, setMaxAttempts] = useState<number>(4);
+  
+  // Escalation state
+  const [isEscalated, setIsEscalated] = useState<boolean>(false);
   
   // Tickets list
   const [ticketsList, setTicketsList] = useState<TicketListItem[]>([]);
@@ -65,6 +71,7 @@ export const useDashboardState = () => {
     setUpdates(undefined);
     
     setCurrentAttempt(0);
+    setIsEscalated(false);
   }, []);
 
   // Fetch ticket details
@@ -76,6 +83,13 @@ export const useDashboardState = () => {
       // Update active ticket info
       setActiveTicket(details.ticket);
       setSelectedTicketId(ticketId);
+      
+      // Update escalation status
+      setIsEscalated(details.escalated || false);
+      
+      // Update retry counts
+      setCurrentAttempt(details.retryCount || 0);
+      setMaxAttempts(details.maxRetries || 4);
       
       // Update agent statuses based on current stage
       switch (details.currentStage) {
@@ -114,13 +128,13 @@ export const useDashboardState = () => {
           if (details.agentOutputs.planner) {
             setPlannerStatus('success');
             if (details.agentOutputs.developer) {
-              setDeveloperStatus(details.agentOutputs.qa ? 'success' : 'error');
-              setQaStatus(details.agentOutputs.qa ? 'error' : 'idle');
+              setDeveloperStatus(details.agentOutputs.qa ? 'success' : 'escalated');
+              setQaStatus(details.agentOutputs.qa ? 'escalated' : 'idle');
             } else {
-              setDeveloperStatus('error');
+              setDeveloperStatus('escalated');
             }
           } else {
-            setPlannerStatus('error');
+            setPlannerStatus('escalated');
           }
           setCommunicatorStatus('escalated');
           break;
@@ -172,7 +186,10 @@ export const useDashboardState = () => {
         status: ticket.status,
         stage: getStageFromStatus(ticket.status),
         priority: ticket.priority,
-        updatedAt: ticket.updated || ''
+        updatedAt: ticket.updated || '',
+        escalated: ticket.escalated || false,
+        retryCount: ticket.current_attempt || 0,
+        maxRetries: ticket.max_attempts || 4
       }));
       
       setTicketsList(ticketItems);
@@ -257,7 +274,8 @@ export const useDashboardState = () => {
     isLoadingTickets,
     selectedTicketId,
     currentAttempt,
-    maxAttempts
+    maxAttempts,
+    isEscalated
   };
 };
 

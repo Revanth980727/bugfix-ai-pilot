@@ -35,6 +35,7 @@ logger = logging.getLogger("orchestrator")
 POLL_INTERVAL_SECONDS = int(os.environ.get('POLL_INTERVAL_SECONDS', '60'))
 MAX_RETRIES = int(os.environ.get('MAX_RETRIES', '4'))
 REPO_PATH = os.environ.get('REPO_PATH', '/app/code_repo')
+RETRY_DELAY_SECONDS = 5  # Delay between retries
 
 
 class Orchestrator:
@@ -83,6 +84,7 @@ class Orchestrator:
             "status": "processing",
             "start_time": datetime.now().isoformat(),
             "current_attempt": 0,
+            "escalated": False
         }
         
         logger.info(f"Starting processing for ticket {ticket_id}")
@@ -209,6 +211,12 @@ class Orchestrator:
                 # Check if tests passed
                 success = qa_result.get("passed", False)
                 
+                # Log the retry status
+                timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                result_status = "PASS" if success else "FAIL"
+                log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{max_retries} | QA Result: {result_status} | {timestamp}"
+                logger.info(log_message)
+                
                 if success:
                     logger.info(f"QA tests passed for ticket {ticket_id} on attempt {current_attempt}")
                     
@@ -226,6 +234,7 @@ class Orchestrator:
                     if current_attempt >= max_retries:
                         logger.warning(f"Maximum retries reached for ticket {ticket_id}, escalating")
                         await self.escalate_ticket(ticket_id, current_attempt, qa_result)
+                        break  # Exit retry loop after escalation
                     else:
                         # Update JIRA with retry information
                         await self.jira_client.update_ticket(
@@ -233,6 +242,10 @@ class Orchestrator:
                             "In Progress",
                             f"Attempt {current_attempt}/{max_retries} failed. Retrying fix generation..."
                         )
+                        
+                        # Add delay between retries to avoid hammering the system
+                        logger.info(f"Waiting {RETRY_DELAY_SECONDS} seconds before next retry")
+                        await asyncio.sleep(RETRY_DELAY_SECONDS)
             
             except Exception as e:
                 logger.error(f"Error in development-QA loop for ticket {ticket_id}: {str(e)}")
@@ -245,6 +258,10 @@ class Orchestrator:
                         {"error": str(e), "passed": False}
                     )
                     break
+                else:
+                    # Add delay between retries
+                    logger.info(f"Waiting {RETRY_DELAY_SECONDS} seconds before next retry")
+                    await asyncio.sleep(RETRY_DELAY_SECONDS)
             
             current_attempt += 1
     
@@ -305,6 +322,10 @@ class Orchestrator:
     ) -> None:
         """Escalate a ticket after failed attempts"""
         try:
+            # Mark ticket as escalated
+            self.active_tickets[ticket_id]["status"] = "escalated"
+            self.active_tickets[ticket_id]["escalated"] = True
+            
             # Run communicator agent for escalation
             logger.info(f"Running CommunicatorAgent for escalation of ticket {ticket_id}")
             
@@ -313,7 +334,8 @@ class Orchestrator:
                 "test_passed": False,
                 "github_pr_url": None,
                 "retry_count": attempt,
-                "max_retries": MAX_RETRIES
+                "max_retries": MAX_RETRIES,
+                "escalated": True
             }
             
             log_dir = f"logs/{ticket_id}"
@@ -325,8 +347,12 @@ class Orchestrator:
             with open(f"{log_dir}/communicator_output_escalation.json", 'w') as f:
                 json.dump(communicator_result, f, indent=2)
             
-            # Update ticket tracking
-            self.active_tickets[ticket_id]["status"] = "escalated"
+            # Update JIRA ticket with escalation message
+            await self.jira_client.update_ticket(
+                ticket_id,
+                "Needs Review",
+                f"Automatic retry limit ({MAX_RETRIES}) reached. Escalating ticket for human review."
+            )
             
             logger.info(f"Ticket {ticket_id} has been escalated after {attempt} failed attempts")
             
@@ -342,54 +368,20 @@ class Orchestrator:
             logger.error(f"Error running {agent.name}: {str(e)}")
             return {"error": str(e)}
     
-    async def cleanup_completed_tickets(self, age_hours: int = 24) -> None:
-        """Clean up completed tickets from memory after specified age"""
-        current_time = datetime.now()
-        tickets_to_remove = []
-        
-        for ticket_id, data in self.active_tickets.items():
-            if data["status"] in ["completed", "escalated", "failed"]:
-                start_time = datetime.fromisoformat(data["start_time"])
-                age = (current_time - start_time).total_seconds() / 3600  # hours
-                
-                if age > age_hours:
-                    tickets_to_remove.append(ticket_id)
-        
-        for ticket_id in tickets_to_remove:
-            del self.active_tickets[ticket_id]
-            logger.info(f"Removed completed ticket {ticket_id} from active tracking")
-    
-    async def run_forever(self) -> None:
-        """Run the orchestrator in an infinite loop"""
-        logger.info("Starting orchestrator main loop")
-        
-        while True:
-            try:
-                # Get tickets to process
-                tickets = await self.fetch_eligible_tickets()
-                
-                # Process each ticket
-                for ticket in tickets:
-                    asyncio.create_task(self.process_ticket(ticket))
-                
-                # Clean up old completed tickets
-                await self.cleanup_completed_tickets()
-                
-                # Wait before next poll
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
-                
-            except Exception as e:
-                logger.error(f"Error in orchestrator main loop: {str(e)}")
-                logger.error(traceback.format_exc())
-                
-                # Wait before retry
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
-    
     def get_status(self) -> Dict[str, Any]:
         """Get current status of the orchestrator"""
         return {
             "active_tickets": len(self.active_tickets),
             "tickets": self.active_tickets
+        }
+    
+    def get_agent_statuses(self) -> Dict[str, str]:
+        """Get statuses of all agents for health check"""
+        return {
+            "planner": "ready",
+            "developer": "ready",
+            "qa": "ready",
+            "communicator": "ready"
         }
 
 
@@ -407,3 +399,4 @@ if __name__ == "__main__":
         asyncio.run(start_orchestrator())
     except KeyboardInterrupt:
         logger.info("Orchestrator stopped by user")
+

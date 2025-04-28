@@ -60,6 +60,7 @@ class CommunicatorAgent(Agent):
         github_pr_url = input_data.get("github_pr_url")
         retry_count = input_data.get("retry_count", 0)
         max_retries = input_data.get("max_retries", 4)
+        escalated = input_data.get("escalated", False)
         
         if not ticket_id:
             raise ValueError("ticket_id is required")
@@ -68,12 +69,23 @@ class CommunicatorAgent(Agent):
         
         jira_updates_success = True
         github_updates_success = True
+        updates = []
+        
+        # Timestamp for updates
+        timestamp = datetime.now().isoformat()
         
         if test_passed:
             # Handle successful test case
-            jira_comment = "✅ Bug fix tested successfully."
+            jira_comment = f"✅ Bug fix tested successfully on attempt {retry_count}/{max_retries}."
             if github_pr_url:
                 jira_comment += f" PR created: {github_pr_url}"
+            
+            # Add update for frontend
+            updates.append({
+                "timestamp": timestamp,
+                "message": jira_comment,
+                "type": "jira"
+            })
             
             # Update JIRA
             jira_updates_success = await self._update_jira_ticket(
@@ -84,12 +96,59 @@ class CommunicatorAgent(Agent):
             
             # Update GitHub PR if URL provided
             if github_pr_url:
+                github_comment = f"✅ All tests passed on attempt {retry_count}/{max_retries}. Ready for review."
                 github_updates_success = await self._post_github_comment(
                     github_pr_url,
-                    "✅ All tests passed. Ready for review."
+                    github_comment
                 )
+                
+                if github_updates_success:
+                    updates.append({
+                        "timestamp": timestamp,
+                        "message": github_comment,
+                        "type": "github"
+                    })
+        elif escalated:
+            # Handle escalation case
+            jira_comment = (
+                f"❌ Automated fix attempts failed after {max_retries} tries. "
+                "Escalating to human reviewer."
+            )
+            
+            updates.append({
+                "timestamp": timestamp,
+                "message": jira_comment,
+                "type": "jira"
+            })
+            
+            # Add system message for frontend
+            updates.append({
+                "timestamp": timestamp,
+                "message": "Ticket escalated for human review after maximum retry attempts.",
+                "type": "system"
+            })
+            
+            jira_updates_success = await self._update_jira_ticket(
+                ticket_id,
+                "Needs Review",
+                jira_comment
+            )
+            
+            if github_pr_url:
+                github_comment = f"❌ Automated tests failed after {max_retries} retries. Escalating to human review."
+                github_updates_success = await self._post_github_comment(
+                    github_pr_url,
+                    github_comment
+                )
+                
+                if github_updates_success:
+                    updates.append({
+                        "timestamp": timestamp,
+                        "message": github_comment,
+                        "type": "github"
+                    })
         else:
-            # Handle test failure case
+            # Handle test failure case with more retries left
             if retry_count < max_retries:
                 # Still have retries left
                 jira_comment = (
@@ -97,29 +156,35 @@ class CommunicatorAgent(Agent):
                     "Retrying fix generation..."
                 )
                 
+                updates.append({
+                    "timestamp": timestamp,
+                    "message": jira_comment,
+                    "type": "jira"
+                })
+                
                 jira_updates_success = await self._update_jira_ticket(
                     ticket_id,
                     "In Progress",
                     jira_comment
                 )
             else:
-                # No more retries, escalate
+                # This should be caught by the escalated flag, but just in case
                 jira_comment = (
                     f"❌ Automated fix attempts failed after {max_retries} tries. "
                     "Escalating to human reviewer."
                 )
                 
+                updates.append({
+                    "timestamp": timestamp,
+                    "message": jira_comment,
+                    "type": "jira"
+                })
+                
                 jira_updates_success = await self._update_jira_ticket(
                     ticket_id,
-                    "Escalated",
+                    "Needs Review",
                     jira_comment
                 )
-                
-                if github_pr_url:
-                    github_updates_success = await self._post_github_comment(
-                        github_pr_url,
-                        "❌ Automated tests failed after multiple retries."
-                    )
         
         # Set agent status based on operation success
         self.status = (
@@ -128,12 +193,17 @@ class CommunicatorAgent(Agent):
             else AgentStatus.FAILED
         )
         
-        # Return processing results
+        # Return processing results with updates for frontend
         return {
             "ticket_id": ticket_id,
             "communications_success": jira_updates_success and github_updates_success,
             "test_passed": test_passed,
             "jira_updated": jira_updates_success,
             "github_updated": github_updates_success if github_pr_url else None,
+            "escalated": escalated,
+            "retry_count": retry_count,
+            "max_retries": max_retries,
+            "updates": updates,
             "timestamp": datetime.now().isoformat()
         }
+
