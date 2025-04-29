@@ -26,6 +26,7 @@ from log_utils import (
     log_agent_output,
     log_error
 )
+from analytics_tracker import get_analytics_tracker
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -94,12 +95,10 @@ async def process_ticket(ticket: Dict[str, Any]):
                     logger.info(f"Planner identified {valid_files} valid files and {invalid_files} invalid files")
             
             # Notify JIRA about planner completion
-            await call_communicator_agent(
-                ticket_id=ticket_id,
-                diffs=None,
-                test_results=None,
-                commit_message=None,
-                agent_type="planner"
+            await update_jira_ticket(
+                ticket_id,
+                "", 
+                "BugFix AI: Planner analysis completed. Identified affected files and error type."
             )
             
             # Check if fallback was used
@@ -188,8 +187,27 @@ async def process_ticket(ticket: Dict[str, Any]):
                         confidence_score=confidence_score
                     )
                     
+                    # Log analytics for early escalation due to confidence
+                    analytics_tracker = get_analytics_tracker()
+                    analytics_tracker.log_ticket_result(
+                        ticket_id=ticket_id,
+                        total_retries=current_attempt,
+                        final_status="escalated",
+                        confidence_score=confidence_score,
+                        early_escalation=True,
+                        escalation_reason=f"Low confidence patch ({confidence_score}%)"
+                    )
+                    
                     return
                     
+                # Update JIRA with developed patch details
+                await update_jira_ticket(
+                    ticket_id,
+                    "",
+                    f"BugFix AI: Developer created patch (attempt {current_attempt}/{MAX_RETRIES})." +
+                    (f" Confidence score: {confidence_score}%" if confidence_score is not None else "")
+                )
+                
                 # Notify JIRA about developer patch
                 await call_communicator_agent(
                     ticket_id=ticket_id,
@@ -240,6 +258,28 @@ async def process_ticket(ticket: Dict[str, Any]):
             log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{MAX_RETRIES} | QA Result: {result_status}{failure_info} | {timestamp}"
             logger.info(log_message)
             
+            # Update JIRA with QA results after each attempt
+            qa_jira_comment = f"QA Test Results (Attempt {current_attempt}/{MAX_RETRIES}): {result_status}\n"
+            
+            if qa_passed:
+                qa_jira_comment += "✅ All tests passed! Moving to PR creation."
+            else:
+                qa_jira_comment += f"❌ Tests failed. "
+                if "failure_summary" in qa_response:
+                    qa_jira_comment += f"Failure summary: {qa_response['failure_summary']}\n"
+                
+                if current_attempt < MAX_RETRIES:
+                    qa_jira_comment += f"\nBugFix AI will attempt another fix (retry {current_attempt+1}/{MAX_RETRIES})."
+                else:
+                    qa_jira_comment += "\nMaximum retries reached. Escalating to human review."
+                    
+            # Post QA results to JIRA
+            await update_jira_ticket(
+                ticket_id, 
+                "", 
+                qa_jira_comment
+            )
+            
             # Store results for future retries - key for smart retry logic
             retry_entry = {
                 "attempt": current_attempt,
@@ -269,11 +309,13 @@ async def process_ticket(ticket: Dict[str, Any]):
                     if current_attempt < MAX_RETRIES:
                         logger.warning(f"Early escalation due to repeated failure pattern")
                         
+                        escalation_reason = "Repeated failure pattern detected"
+                        
                         # Update ticket status
                         update_ticket_status(ticket_id, "escalated", {
                             "escalated": True,
                             "early_escalation": True,
-                            "escalation_reason": "Repeated failure pattern detected",
+                            "escalation_reason": escalation_reason,
                         })
                         
                         # Call communicator for early escalation
@@ -289,6 +331,18 @@ async def process_ticket(ticket: Dict[str, Any]):
                             failure_details=latest_failure
                         )
                         
+                        # Log analytics for early escalation due to repeated failures
+                        analytics_tracker = get_analytics_tracker()
+                        analytics_tracker.log_ticket_result(
+                            ticket_id=ticket_id,
+                            total_retries=current_attempt,
+                            final_status="escalated",
+                            confidence_score=developer_response.get("confidence_score"),
+                            early_escalation=True,
+                            escalation_reason=escalation_reason,
+                            qa_failure_summary=latest_failure
+                        )
+                        
                         return
             
             if not qa_passed and current_attempt >= MAX_RETRIES:
@@ -297,6 +351,7 @@ async def process_ticket(ticket: Dict[str, Any]):
                 
                 # Include failure summary in escalation note
                 failure_summary = qa_response.get("failure_summary", "Unknown error")
+                escalation_reason = f"Maximum retries ({MAX_RETRIES}) reached with continued test failures"
                 
                 # Call communicator for escalation
                 await call_communicator_agent(
@@ -308,6 +363,18 @@ async def process_ticket(ticket: Dict[str, Any]):
                     retry_count=current_attempt,
                     max_retries=MAX_RETRIES,
                     failure_details=failure_summary
+                )
+                
+                # Log analytics for max retries escalation
+                analytics_tracker = get_analytics_tracker()
+                analytics_tracker.log_ticket_result(
+                    ticket_id=ticket_id,
+                    total_retries=current_attempt,
+                    final_status="escalated",
+                    confidence_score=developer_response.get("confidence_score"),
+                    early_escalation=False,
+                    escalation_reason=escalation_reason,
+                    qa_failure_summary=failure_summary
                 )
                 
                 return
@@ -342,6 +409,17 @@ async def process_ticket(ticket: Dict[str, Any]):
             log_agent_output(ticket_id, "communicator", communicator_response)
             update_ticket_status(ticket_id, "completed", {"communicator_result": communicator_response})
             logger.info(f"Completed processing for ticket {ticket_id}")
+            
+            # Log successful ticket completion in analytics
+            analytics_tracker = get_analytics_tracker()
+            analytics_tracker.log_ticket_result(
+                ticket_id=ticket_id,
+                total_retries=current_attempt - 1,
+                final_status="success",
+                confidence_score=developer_response.get("confidence_score"),
+                early_escalation=False,
+                additional_data={"retry_history": retry_history}
+            )
         else:
             log_error(ticket_id, "communicator", "Failed to deploy fix")
             update_ticket_status(ticket_id, "error")
@@ -349,6 +427,18 @@ async def process_ticket(ticket: Dict[str, Any]):
                 ticket_id,
                 "",
                 "BugFix AI: Failed to deploy the fix. Escalating to human review."
+            )
+            
+            # Log error in analytics
+            analytics_tracker = get_analytics_tracker()
+            analytics_tracker.log_ticket_result(
+                ticket_id=ticket_id,
+                total_retries=current_attempt - 1,
+                final_status="failed",
+                confidence_score=developer_response.get("confidence_score"),
+                early_escalation=False,
+                escalation_reason="Failed to deploy fix",
+                additional_data={"retry_history": retry_history}
             )
         
         # Collate all logs for this ticket
@@ -365,3 +455,15 @@ async def process_ticket(ticket: Dict[str, Any]):
             "",
             f"BugFix AI encountered an error: {str(e)}. Escalating to human review."
         )
+        
+        # Log error in analytics
+        try:
+            analytics_tracker = get_analytics_tracker()
+            analytics_tracker.log_ticket_result(
+                ticket_id=ticket_id,
+                total_retries=0,
+                final_status="error",
+                escalation_reason=f"Unhandled exception: {str(e)}"
+            )
+        except Exception as analytics_error:
+            logger.error(f"Error logging analytics: {str(analytics_error)}")

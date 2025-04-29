@@ -114,6 +114,76 @@ class AnalyticsTracker:
         except Exception as e:
             logger.error(f"Error logging analytics for ticket {ticket_id}: {str(e)}")
 
+    def get_retry_summary(self) -> Dict[str, Any]:
+        """
+        Generate summary statistics for retries and escalations
+        
+        Returns:
+            Dictionary containing retry and escalation summary statistics
+        """
+        try:
+            total_tickets = 0
+            total_retries = 0
+            escalated_tickets = 0
+            early_escalations = 0
+            successful_tickets = 0
+            
+            # Aggregate data from JSON logs for more detailed analysis
+            confidence_scores = []
+            escalation_reasons = {}
+            
+            with open(self.json_log_path, 'r') as jsonfile:
+                for line in jsonfile:
+                    try:
+                        entry = json.loads(line.strip())
+                        total_tickets += 1
+                        total_retries += entry.get('total_retries', 0)
+                        
+                        if entry.get('final_status') == 'success':
+                            successful_tickets += 1
+                            
+                        if entry.get('early_escalation'):
+                            early_escalations += 1
+                            
+                        if entry.get('final_status') == 'escalated':
+                            escalated_tickets += 1
+                            reason = entry.get('escalation_reason', 'Unknown')
+                            if reason in escalation_reasons:
+                                escalation_reasons[reason] += 1
+                            else:
+                                escalation_reasons[reason] = 1
+                                
+                        if entry.get('confidence_score') is not None:
+                            confidence_scores.append(entry.get('confidence_score'))
+                    except json.JSONDecodeError:
+                        logger.warning(f"Skipping invalid JSON line in analytics log")
+                        continue
+            
+            # Calculate statistics
+            avg_retries = total_retries / total_tickets if total_tickets > 0 else 0
+            success_rate = (successful_tickets / total_tickets) * 100 if total_tickets > 0 else 0
+            escalation_rate = (escalated_tickets / total_tickets) * 100 if total_tickets > 0 else 0
+            avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0
+            
+            return {
+                'total_tickets': total_tickets,
+                'total_retries': total_retries,
+                'avg_retries_per_ticket': avg_retries,
+                'success_rate': success_rate,
+                'escalation_rate': escalation_rate,
+                'early_escalations': early_escalations,
+                'escalation_reasons': escalation_reasons,
+                'avg_confidence_score': avg_confidence,
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating retry summary: {str(e)}")
+            return {
+                'error': str(e),
+                'total_tickets': 0,
+                'success_rate': 0
+            }
+
 # Singleton instance
 _analytics_tracker = None
 

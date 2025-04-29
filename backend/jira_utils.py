@@ -77,6 +77,24 @@ async def update_jira_ticket(ticket_id: str, status: str, comment: str, pr_url: 
                         logger.error(f"Failed to transition JIRA ticket {ticket_id}")
                         return False
             
+            # If PR URL is provided, update the ticket with PR link
+            if pr_url:
+                fields_update = {
+                    "fields": {
+                        "customfield_10045": pr_url  # Assuming this is the PR URL field
+                    }
+                }
+                
+                update_response = await client.put(
+                    f"{JIRA_URL}/rest/api/3/issue/{ticket_id}",
+                    json=fields_update,
+                    auth=auth
+                )
+                
+                if update_response.status_code not in [200, 204]:
+                    logger.error(f"Failed to update PR URL for JIRA ticket {ticket_id}")
+                    # Continue anyway, this is not critical
+            
             logger.info(f"Successfully updated JIRA ticket {ticket_id}")
             return True
     
