@@ -12,6 +12,13 @@ export interface Ticket {
   escalated?: boolean;
   current_attempt?: number;
   max_attempts?: number;
+  // Add the missing properties
+  escalation_reason?: string;
+  confidence_score?: number;
+  retry_history?: Array<{
+    result: 'success' | 'failure';
+    qa_message?: string;
+  }>;
 }
 
 export interface AffectedFile {
