@@ -147,6 +147,7 @@ export const useDashboardState = () => {
         // Handle both old and new format for affected files
         let affectedFiles: string[] | AffectedFile[] = [];
         
+        // Fix: Use conditional check for properties instead of direct access
         if (Array.isArray(plannerOutput.affected_files)) {
           // New format
           affectedFiles = plannerOutput.affected_files;
@@ -157,9 +158,9 @@ export const useDashboardState = () => {
         
         setPlannerAnalysis({
           ticket_id: details.ticket.id || '',
-          bug_summary: plannerOutput.rootCause || '',
+          bug_summary: plannerOutput.rootCause || plannerOutput.bug_summary || '',
           affected_files: affectedFiles,
-          error_type: 'Unknown',
+          error_type: plannerOutput.error_type || 'Unknown',
           affectedFiles: plannerOutput.affectedFiles || [],
           rootCause: plannerOutput.rootCause || '',
           suggestedApproach: plannerOutput.suggestedApproach || ''
