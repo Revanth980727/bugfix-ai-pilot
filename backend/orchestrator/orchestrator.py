@@ -18,6 +18,7 @@ from ..agent_framework.qa_agent import QAAgent
 from ..agent_framework.communicator_agent import CommunicatorAgent
 from ..jira_service.jira_client import JiraClient
 from ..github_service.github_service import GitHubService
+from ..analytics_tracker import get_analytics_tracker
 from ..env import MAX_RETRIES
 
 # Configure logging
@@ -36,6 +37,7 @@ POLL_INTERVAL_SECONDS = int(os.environ.get('POLL_INTERVAL_SECONDS', '60'))
 MAX_RETRIES = int(os.environ.get('MAX_RETRIES', '4'))
 REPO_PATH = os.environ.get('REPO_PATH', '/app/code_repo')
 RETRY_DELAY_SECONDS = 5  # Delay between retries
+LOW_CONFIDENCE_THRESHOLD = 60  # Threshold for early escalation
 
 
 class Orchestrator:
@@ -50,6 +52,9 @@ class Orchestrator:
         self.qa_agent = QAAgent()
         self.communicator_agent = CommunicatorAgent()
         
+        # Get analytics tracker
+        self.analytics_tracker = get_analytics_tracker()
+        
         # Track active tickets
         self.active_tickets = {}
         
@@ -57,23 +62,7 @@ class Orchestrator:
     
     async def fetch_eligible_tickets(self) -> List[Dict[str, Any]]:
         """Fetch eligible tickets from JIRA that need processing"""
-        try:
-            # This should be replaced with actual JIRA API call
-            tickets = await self.jira_client.get_open_bugs()
-            
-            # Filter out tickets already being processed
-            eligible_tickets = [
-                t for t in tickets 
-                if t["ticket_id"] not in self.active_tickets
-            ]
-            
-            if eligible_tickets:
-                logger.info(f"Found {len(eligible_tickets)} eligible tickets for processing")
-            
-            return eligible_tickets
-        except Exception as e:
-            logger.error(f"Error fetching eligible tickets: {str(e)}")
-            return []
+        # ... keep existing code (fetch eligible tickets method)
     
     async def process_ticket(self, ticket: Dict[str, Any]) -> None:
         """Process a single ticket through the AI agent pipeline"""
@@ -138,19 +127,30 @@ class Orchestrator:
                 )
             except Exception as jira_error:
                 logger.error(f"Failed to update JIRA for ticket {ticket_id}: {str(jira_error)}")
+                
+            # Log analytics for the failed ticket
+            self.analytics_tracker.log_ticket_result(
+                ticket_id=ticket_id,
+                total_retries=self.active_tickets[ticket_id].get("current_attempt", 0),
+                final_status="failed",
+                escalation_reason=f"Process error: {str(e)}"
+            )
     
     async def run_development_qa_loop(self, ticket_id: str, planner_result: Dict[str, Any]) -> None:
         """Run the developer-QA loop with retries"""
         max_retries = MAX_RETRIES
         current_attempt = 1
         success = False
+        early_escalation = False
+        escalation_reason = None
+        confidence_score = None
         
         log_dir = f"logs/{ticket_id}"
         
         # Initialize retry history for this ticket
         retry_history = []
         
-        while current_attempt <= max_retries and not success:
+        while current_attempt <= max_retries and not success and not early_escalation:
             logger.info(f"Starting development attempt {current_attempt}/{max_retries} for ticket {ticket_id}")
             
             # Update ticket tracking
@@ -179,11 +179,17 @@ class Orchestrator:
                 if not developer_result or "error" in developer_result:
                     raise Exception(f"DeveloperAgent failed: {developer_result.get('error', 'Unknown error')}")
                 
+                # Get confidence score from developer result
+                confidence_score = developer_result.get("confidence_score")
+                if confidence_score is not None:
+                    logger.info(f"Developer confidence score: {confidence_score}% for ticket {ticket_id}")
+                
                 with open(f"{log_dir}/developer_output_{current_attempt}.json", 'w') as f:
                     json.dump(developer_result, f, indent=2)
                 
                 # Update ticket tracking
                 self.active_tickets[ticket_id]["developer_result"] = developer_result
+                self.active_tickets[ticket_id]["confidence_score"] = confidence_score
                 
                 # STEP 3: Run QA agent
                 logger.info(f"Running QAAgent for ticket {ticket_id} (attempt {current_attempt})")
@@ -214,18 +220,22 @@ class Orchestrator:
                 timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
                 result_status = "PASS" if success else "FAIL"
                 
-                failure_info = ""
+                failure_summary = ""
                 if not success and "failure_summary" in qa_result:
-                    failure_info = f" | Failure: {qa_result['failure_summary'].replace(chr(10), ' ')}"
+                    failure_summary = qa_result['failure_summary']
                     
-                log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{max_retries} | QA Result: {result_status}{failure_info} | {timestamp}"
+                log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{max_retries} | QA Result: {result_status}"
+                if failure_summary:
+                    log_message += f" | Failure: {failure_summary.replace(chr(10), ' ')}"
+                log_message += f" | Confidence: {confidence_score}% | {timestamp}"
                 logger.info(log_message)
                 
                 # Store the QA results in retry history for future attempts
                 retry_entry = {
                     "attempt": current_attempt,
                     "patch_content": developer_result.get("patch_content", ""),
-                    "qa_results": qa_result
+                    "qa_results": qa_result,
+                    "confidence_score": confidence_score
                 }
                 
                 retry_history.append(retry_entry)
@@ -248,8 +258,26 @@ class Orchestrator:
                 else:
                     logger.warning(f"QA tests failed for ticket {ticket_id} on attempt {current_attempt}")
                     
-                    # Try again or escalate
-                    if current_attempt >= max_retries:
+                    # Check for early escalation based on confidence score
+                    # Only check on first attempt
+                    if current_attempt == 1 and confidence_score is not None and confidence_score < LOW_CONFIDENCE_THRESHOLD:
+                        early_escalation = True
+                        escalation_reason = f"Low confidence score ({confidence_score}%) on first attempt"
+                        logger.warning(f"Early escalation for ticket {ticket_id}: {escalation_reason}")
+                        
+                        # Escalate the ticket
+                        await self.escalate_ticket(
+                            ticket_id, 
+                            current_attempt, 
+                            qa_result, 
+                            early=True, 
+                            reason=escalation_reason,
+                            confidence=confidence_score
+                        )
+                        break  # Exit retry loop after early escalation
+                    
+                    # Try again or escalate if max retries reached
+                    elif current_attempt >= max_retries:
                         logger.warning(f"Maximum retries reached for ticket {ticket_id}, escalating")
                         await self.escalate_ticket(ticket_id, current_attempt, qa_result)
                         break  # Exit retry loop after escalation
@@ -291,6 +319,27 @@ class Orchestrator:
             
             current_attempt += 1
     
+        # Log analytics at the end of the ticket journey
+        if success:
+            self.analytics_tracker.log_ticket_result(
+                ticket_id=ticket_id,
+                total_retries=current_attempt,
+                final_status="success",
+                confidence_score=confidence_score,
+                early_escalation=early_escalation,
+                additional_data={"final_qa_result": qa_result.get("passed", False)}
+            )
+        elif early_escalation:
+            self.analytics_tracker.log_ticket_result(
+                ticket_id=ticket_id,
+                total_retries=current_attempt,
+                final_status="escalated",
+                confidence_score=confidence_score,
+                escalation_reason=escalation_reason,
+                early_escalation=True,
+                qa_failure_summary=qa_result.get("failure_summary", "")
+            )
+    
     async def finalize_successful_fix(
         self, 
         ticket_id: str, 
@@ -307,12 +356,16 @@ class Orchestrator:
             # Run communicator agent
             logger.info(f"Running CommunicatorAgent for successful fix of ticket {ticket_id}")
             
+            # Get confidence score
+            confidence_score = developer_result.get("confidence_score")
+            
             communicator_input = {
                 "ticket_id": ticket_id,
                 "test_passed": True,
                 "github_pr_url": pr_url,
                 "retry_count": attempt,
-                "max_retries": MAX_RETRIES
+                "max_retries": MAX_RETRIES,
+                "confidence_score": confidence_score
             }
             
             log_dir = f"logs/{ticket_id}"
@@ -344,13 +397,20 @@ class Orchestrator:
         self, 
         ticket_id: str, 
         attempt: int, 
-        qa_result: Dict[str, Any]
+        qa_result: Dict[str, Any],
+        early: bool = False,
+        reason: str = None,
+        confidence: int = None
     ) -> None:
-        """Escalate a ticket after failed attempts"""
+        """Escalate a ticket after failed attempts or due to early escalation"""
         try:
             # Mark ticket as escalated
             self.active_tickets[ticket_id]["status"] = "escalated"
             self.active_tickets[ticket_id]["escalated"] = True
+            
+            if early:
+                self.active_tickets[ticket_id]["early_escalation"] = True
+                self.active_tickets[ticket_id]["escalation_reason"] = reason
             
             # Extract failure summary for more informative escalation
             failure_summary = qa_result.get("failure_summary", "")
@@ -367,6 +427,9 @@ class Orchestrator:
                 "retry_count": attempt,
                 "max_retries": MAX_RETRIES,
                 "escalated": True,
+                "early_escalation": early,
+                "early_escalation_reason": reason if early else None,
+                "confidence_score": confidence,
                 "failure_summary": failure_summary
             }
             
@@ -380,42 +443,39 @@ class Orchestrator:
                 json.dump(communicator_result, f, indent=2)
             
             # Update JIRA ticket with escalation message including failure summary
-            escalation_message = f"Automatic retry limit ({MAX_RETRIES}) reached. Last failure: {failure_summary}"
+            escalation_message = ""
+            if early:
+                escalation_message = f"Early escalation: {reason}"
+                if confidence is not None:
+                    escalation_message += f" (confidence score: {confidence}%)"
+            else:
+                escalation_message = f"Automatic retry limit ({MAX_RETRIES}) reached. Last failure: {failure_summary}"
+                
             await self.jira_client.update_ticket(
                 ticket_id,
                 "Needs Review",
                 escalation_message
             )
             
-            logger.info(f"Ticket {ticket_id} has been escalated after {attempt} failed attempts")
+            if early:
+                logger.info(f"Ticket {ticket_id} has been escalated early after attempt {attempt}: {reason}")
+            else:
+                logger.info(f"Ticket {ticket_id} has been escalated after {attempt} failed attempts")
             
         except Exception as e:
             logger.error(f"Error escalating ticket {ticket_id}: {str(e)}")
     
     async def run_agent(self, agent: Any, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run an agent with error handling and retry logic"""
-        try:
-            result = await asyncio.to_thread(agent.process, input_data)
-            return result
-        except Exception as e:
-            logger.error(f"Error running {agent.name}: {str(e)}")
-            return {"error": str(e)}
+        # ... keep existing code (run agent method)
     
     def get_status(self) -> Dict[str, Any]:
         """Get current status of the orchestrator"""
-        return {
-            "active_tickets": len(self.active_tickets),
-            "tickets": self.active_tickets
-        }
+        # ... keep existing code (get status method)
     
     def get_agent_statuses(self) -> Dict[str, str]:
         """Get statuses of all agents for health check"""
-        return {
-            "planner": "ready",
-            "developer": "ready",
-            "qa": "ready",
-            "communicator": "ready"
-        }
+        # ... keep existing code (get agent statuses method)
 
 
 async def start_orchestrator():

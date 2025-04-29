@@ -272,6 +272,80 @@ class DeveloperAgent(Agent):
         except Exception as e:
             self.log(f"Error saving output to file: {str(e)}")
 
+    def calculate_confidence_score(self, file_changes: List[Dict[str, Any]], 
+                                  expected_files: List[str], 
+                                  patch_results: Dict[str, Any] = None) -> int:
+        """
+        Calculate a confidence score (0-100) for the generated patch
+        
+        Args:
+            file_changes: List of file changes from parse_gpt_response
+            expected_files: List of files that were expected to be modified from planner analysis
+            patch_results: Results of applying patch (if available)
+            
+        Returns:
+            Integer confidence score from 0 to 100
+        """
+        self.log("Calculating confidence score for patch...")
+        base_score = 70  # Start with a neutral score
+        
+        # Factor 1: Check if we modified files that were expected
+        if expected_files and file_changes:
+            modified_files = [change["file_path"].split("/")[-1] for change in file_changes]
+            expected_file_basenames = [f.split("/")[-1] for f in expected_files]
+            
+            matched_files = sum(1 for f in modified_files if f in expected_file_basenames)
+            unexpected_files = sum(1 for f in modified_files if f not in expected_file_basenames)
+            
+            # If all expected files were modified and no unexpected ones, increase confidence
+            if matched_files == len(expected_file_basenames) and unexpected_files == 0:
+                base_score += 10
+            elif matched_files > 0:
+                base_score += 5
+            
+            # If we modified unexpected files, reduce confidence
+            if unexpected_files > 0:
+                base_score -= 10 * min(unexpected_files, 3)  # Cap penalty at 3 files
+                
+        # Factor 2: Check patches for signs of quality
+        total_lines_changed = 0
+        for change in file_changes:
+            diff = change.get("diff", "")
+            
+            # Count added/removed lines
+            added_lines = len([l for l in diff.split('\n') if l.startswith('+')])
+            removed_lines = len([l for l in diff.split('\n') if l.startswith('-')])
+            total_lines_changed += added_lines + removed_lines
+            
+            # Check for potential hallucinations or issues
+            if "???" in diff or "TODO" in diff or "FIXME" in diff:
+                base_score -= 15
+                
+            # If the patch is extremely large (might be over-engineering)
+            if added_lines > 100:
+                base_score -= 10
+                
+            # If the file has a very small focused change, increase confidence
+            if 1 < added_lines < 20 and 1 < removed_lines < 20:
+                base_score += 5
+                
+        # Factor 3: Number of files changed (simpler fixes generally touch fewer files)
+        num_files_changed = len(file_changes)
+        if num_files_changed > 3:
+            base_score -= 5 * (num_files_changed - 3)  # Penalty for many files
+        
+        # Factor 4: Check patch application results if available
+        if patch_results:
+            failed_files = len(patch_results.get("files_failed", []))
+            if failed_files > 0:
+                base_score -= 20  # Significant penalty for failed patches
+                
+        # Ensure the score is within 0-100 range
+        final_score = max(0, min(100, base_score))
+        
+        self.log(f"Calculated confidence score: {final_score}")
+        return final_score
+
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run the developer agent to generate and apply code fixes"""
         ticket_id = input_data.get("ticket_id", "UNKNOWN")
@@ -308,6 +382,9 @@ class DeveloperAgent(Agent):
             # Apply the patches to files
             patch_results = self._apply_patch(file_changes)
             
+            # Calculate confidence score
+            confidence_score = self.calculate_confidence_score(file_changes, likely_files, patch_results)
+            
             # Prepare output
             output = {
                 "ticket_id": ticket_id,
@@ -316,13 +393,14 @@ class DeveloperAgent(Agent):
                 "patches_applied": patch_results["patches_applied"],
                 "diff_summary": f"Applied {patch_results['patches_applied']} changes to {len(patch_results['files_modified'])} files",
                 "raw_gpt_response": gpt_response,
+                "confidence_score": confidence_score,  # Include confidence score in output
                 "timestamp": datetime.now().isoformat()
             }
             
             # Save output for debugging/auditing
             self._save_output(ticket_id, output)
             
-            self.log(f"Completed processing ticket {ticket_id}")
+            self.log(f"Completed processing ticket {ticket_id} with confidence score: {confidence_score}")
             return output
             
         except Exception as e:
@@ -331,5 +409,6 @@ class DeveloperAgent(Agent):
             return {
                 "ticket_id": ticket_id,
                 "error": error_msg,
+                "confidence_score": 0,  # Zero confidence when error occurs
                 "timestamp": datetime.now().isoformat()
             }
