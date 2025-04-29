@@ -14,10 +14,16 @@ export interface Ticket {
   max_attempts?: number;
 }
 
+export interface AffectedFile {
+  file: string;
+  valid: boolean;
+  reason?: string;
+}
+
 export interface PlannerAnalysis {
   ticket_id: string;
   bug_summary: string;
-  affected_files: string[];
+  affected_files: string[] | AffectedFile[];
   error_type: string;
   using_fallback?: boolean;
   affectedFiles?: string[];  // For backward compatibility

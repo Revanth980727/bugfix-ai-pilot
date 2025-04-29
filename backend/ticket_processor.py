@@ -1,10 +1,9 @@
-
 import logging
 import asyncio
 import os
 import json
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 from jira_utils import update_jira_ticket
 from agent_utils import (
     call_planner_agent,
@@ -35,7 +34,7 @@ logger = logging.getLogger("ticket-processor")
 RETRY_DELAY_SECONDS = int(os.environ.get('RETRY_DELAY_SECONDS', '5'))
 
 async def process_ticket(ticket: Dict[str, Any]):
-    """Process a single ticket through the entire agent workflow"""
+    """Process a single ticket through the enhanced agent workflow"""
     ticket_id = ticket["ticket_id"]
     
     try:
@@ -56,15 +55,50 @@ async def process_ticket(ticket: Dict[str, Any]):
             "BugFix AI has started working on this ticket."
         )
         
-        # Step 1: Planner Analysis
-        logger.info(f"Sending ticket {ticket_id} to Planner agent")
+        # Step 1: Enhanced Planner Analysis
+        logger.info(f"Sending ticket {ticket_id} to enhanced Planner agent")
         await update_jira_ticket(ticket_id, "", "Planner analyzing bug")
         
-        log_agent_input(ticket_id, "planner", ticket)
-        planner_analysis = await call_planner_agent(ticket)
+        # Prepare enhanced input with additional ticket fields
+        enhanced_ticket = ticket.copy()
+        
+        # Try to fetch additional fields if not already in ticket
+        if 'jira_id' in ticket and ('labels' not in ticket or 'attachments' not in ticket):
+            try:
+                # This would fetch additional ticket data from JIRA in a real implementation
+                # For now, let's just log that we would do this
+                logger.info(f"Would fetch additional JIRA fields for ticket {ticket_id}")
+                
+                # Placeholder for fetched data
+                # enhanced_ticket['labels'] = ['bug', 'critical', 'backend']
+                # enhanced_ticket['attachments'] = ['screenshot.png', 'logs.txt']
+            except Exception as e:
+                logger.warning(f"Could not fetch additional ticket data: {str(e)}")
+        
+        log_agent_input(ticket_id, "planner", enhanced_ticket)
+        planner_analysis = await call_planner_agent(enhanced_ticket)
         
         if planner_analysis:
             log_agent_output(ticket_id, "planner", planner_analysis)
+            
+            # Log information about file validation results
+            if 'affected_files' in planner_analysis and isinstance(planner_analysis['affected_files'], list):
+                valid_files = 0
+                invalid_files = 0
+                
+                for file_item in planner_analysis['affected_files']:
+                    if isinstance(file_item, dict) and 'valid' in file_item:
+                        if file_item['valid']:
+                            valid_files += 1
+                        else:
+                            invalid_files += 1
+                
+                if valid_files > 0 or invalid_files > 0:
+                    logger.info(f"Planner identified {valid_files} valid files and {invalid_files} invalid files")
+            
+            # Check if fallback was used
+            if planner_analysis.get('using_fallback'):
+                logger.warning(f"Planner used fallback mechanism for ticket {ticket_id}")
         else:
             log_error(ticket_id, "planner", "Planner analysis failed")
             update_ticket_status(ticket_id, "error")

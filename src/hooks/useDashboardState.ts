@@ -1,5 +1,6 @@
+
 import { useState, useEffect, useCallback } from 'react';
-import { Ticket, PlannerAnalysis, CodeDiff, TestResult, Update } from '@/types/ticket';
+import { Ticket, PlannerAnalysis, CodeDiff, TestResult, Update, AffectedFile } from '@/types/ticket';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/sonner';
 
@@ -143,10 +144,21 @@ export const useDashboardState = () => {
       if (details.agentOutputs.planner) {
         const plannerOutput = details.agentOutputs.planner;
         
+        // Handle both old and new format for affected files
+        let affectedFiles: string[] | AffectedFile[] = [];
+        
+        if (Array.isArray(plannerOutput.affected_files)) {
+          // New format
+          affectedFiles = plannerOutput.affected_files;
+        } else if (Array.isArray(plannerOutput.affectedFiles)) {
+          // Old format
+          affectedFiles = plannerOutput.affectedFiles;
+        }
+        
         setPlannerAnalysis({
           ticket_id: details.ticket.id || '',
           bug_summary: plannerOutput.rootCause || '',
-          affected_files: plannerOutput.affectedFiles || [],
+          affected_files: affectedFiles,
           error_type: 'Unknown',
           affectedFiles: plannerOutput.affectedFiles || [],
           rootCause: plannerOutput.rootCause || '',

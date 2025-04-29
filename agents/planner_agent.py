@@ -5,15 +5,16 @@ import re
 from typing import Dict, Any, List, Optional, Tuple
 import openai
 from .utils.logger import Logger
+from .utils.ticket_cleaner import TicketCleaner, StackTraceExtractor, RepositoryValidator
 
 class PlannerAgent:
     """
-    Agent responsible for analyzing a JIRA bug ticket and creating a structured plan
-    for fixing the bug, identifying relevant files and modules to modify.
+    Enhanced Planner Agent responsible for analyzing JIRA bug tickets and creating structured plans
+    for fixing bugs, with improved resilience for real-world ticket formats and validation.
     """
     
     def __init__(self):
-        """Initialize the planner agent"""
+        """Initialize the planner agent with additional utilities"""
         self.logger = Logger("planner_agent")
         
         # Get OpenAI API key from environment
@@ -24,13 +25,25 @@ class PlannerAgent:
         
         openai.api_key = self.api_key
         
+        # Initialize repository validator
+        self.repo_validator = RepositoryValidator()
+        
+        # Try to load repository structure if REPO_PATH is defined
+        repo_path = os.environ.get("REPO_PATH")
+        if repo_path:
+            try:
+                self.repo_validator.load_repo_structure(repo_path)
+                self.logger.info(f"Loaded repository structure from {repo_path}")
+            except Exception as e:
+                self.logger.warning(f"Failed to load repository structure: {str(e)}")
+        
     def run(self, ticket_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyze a JIRA bug ticket and extract structured information
         
         Args:
-            ticket_data: Dictionary containing ticket information with at least
-                         'ticket_id', 'title', and 'description' keys
+            ticket_data: Dictionary containing ticket information with fields like
+                         'ticket_id', 'title', 'description', 'labels', etc.
                          
         Returns:
             A structured analysis as a dictionary
@@ -42,18 +55,40 @@ class PlannerAgent:
             ticket_id = ticket_data.get("ticket_id", "unknown")
             title = ticket_data.get("title", "")
             description = ticket_data.get("description", "")
+            labels = ticket_data.get("labels", [])
             
-            # Create prompt for GPT
-            prompt = self._create_planning_prompt(ticket_id, title, description)
+            # Step 1: Clean the ticket description
+            cleaned_description = TicketCleaner.clean_ticket(description)
+            self.logger.info(f"Cleaned ticket description, removed {len(description) - len(cleaned_description)} characters of noise")
             
-            # Get analysis from GPT
-            self.logger.info("Sending ticket to GPT for analysis")
-            response = self._query_gpt(prompt)
+            # Step 2: Extract and highlight stack traces
+            highlighted_description = StackTraceExtractor.highlight_stack_traces(cleaned_description)
+            stack_traces = StackTraceExtractor.extract_stack_traces(cleaned_description)
+            stack_trace_found = len(stack_traces) > 0
             
-            # Validate GPT response
-            is_valid, parsed_data, error_message = self._validate_gpt_response(response)
+            if stack_trace_found:
+                self.logger.info(f"Found {len(stack_traces)} stack traces in ticket {ticket_id}")
+            
+            # Step 3: Build enhanced prompt with multi-source ticket fields
+            prompt = self._create_enhanced_planning_prompt(
+                ticket_id, 
+                title, 
+                highlighted_description,
+                labels=labels,
+                has_stack_trace=stack_trace_found
+            )
+            
+            # Step 4: Get analysis from GPT with retry mechanism
+            self.logger.info(f"Sending ticket {ticket_id} to GPT for analysis")
+            gpt_response = self._query_gpt_with_retry(prompt)
+            
+            # Step 5: Validate GPT response
+            is_valid, parsed_data, error_message = self._validate_gpt_response(gpt_response)
             
             if is_valid and parsed_data:
+                # Step 6: Validate affected files against repository structure
+                affected_files = self._validate_affected_files(parsed_data.get("affected_files", []))
+                
                 # Log success
                 self.logger.info(f"[PlannerAgent] Parsed ticket {ticket_id} | Valid JSON received | Bug Summary: \"{parsed_data['bug_summary']}\"")
                 
@@ -61,7 +96,7 @@ class PlannerAgent:
                 output = {
                     "ticket_id": ticket_id,
                     "bug_summary": parsed_data["bug_summary"],
-                    "affected_files": parsed_data["affected_files"],
+                    "affected_files": affected_files,
                     "error_type": parsed_data["error_type"],
                     "using_fallback": False
                 }
@@ -88,13 +123,65 @@ class PlannerAgent:
                 ticket_data.get("description", "")
             )
             return fallback_output
+    
+    def _validate_affected_files(self, files: List[str]) -> List[Dict[str, Any]]:
+        """
+        Validate file paths against the repository structure
+        
+        Args:
+            files: List of file paths
             
-    def _create_planning_prompt(self, ticket_id: str, title: str, description: str) -> str:
-        """Create a structured prompt for GPT to analyze the bug ticket"""
+        Returns:
+            List of dictionaries with file paths and validation status
+        """
+        validated_files = []
+        
+        for file_path in files:
+            is_valid = self.repo_validator.validate_file(file_path)
+            validated_files.append({
+                "file": file_path,
+                "valid": is_valid
+            })
+            
+            if not is_valid:
+                self.logger.warning(f"Invalid file path detected: {file_path}")
+        
+        return validated_files
+            
+    def _create_enhanced_planning_prompt(self, ticket_id: str, title: str, 
+                                        description: str, labels: List[str] = None, 
+                                        has_stack_trace: bool = False) -> str:
+        """
+        Create an enhanced structured prompt for GPT to analyze the bug ticket
+        
+        Args:
+            ticket_id: The ticket identifier
+            title: The ticket title
+            description: The cleaned and highlighted ticket description
+            labels: Optional list of ticket labels
+            has_stack_trace: Whether stack traces were detected in the description
+            
+        Returns:
+            A formatted prompt string
+        """
+        # Format labels if provided
+        labels_text = ""
+        if labels and len(labels) > 0:
+            labels_text = f"\nLabels: {', '.join(labels)}"
+        
+        # Add special instruction for stack traces if detected
+        stack_trace_instruction = ""
+        if has_stack_trace:
+            stack_trace_instruction = """
+            IMPORTANT: Stack traces have been detected and are highlighted between [STACK TRACE START] and [STACK TRACE END] markers. 
+            Pay special attention to these as they often point directly to affected files and error types.
+            """
+        
         return f"""
         You are a senior software developer analyzing a bug ticket. Your task is to extract key information from this ticket.
         
         Your response must be valid parsable JSON. No prose or extra text.
+        {stack_trace_instruction}
         
         Respond ONLY in the following strict JSON format:
         {{
@@ -106,11 +193,48 @@ class PlannerAgent:
         Here's the bug ticket:
         
         Ticket ID: {ticket_id}
-        Title: {title}
+        Title: {title}{labels_text}
         
         Description:
         {description}
         """
+        
+    def _query_gpt_with_retry(self, prompt: str, max_retries: int = 1) -> str:
+        """
+        Query GPT with automatic retry on failure
+        
+        Args:
+            prompt: The prompt to send to GPT
+            max_retries: Maximum number of retries (default: 1)
+            
+        Returns:
+            The GPT response text
+        """
+        attempts = 0
+        max_attempts = max_retries + 1  # Initial attempt plus retries
+        
+        while attempts < max_attempts:
+            try:
+                self.logger.info(f"Querying GPT (attempt {attempts + 1}/{max_attempts})")
+                response = self._query_gpt(prompt)
+                
+                # Check if response looks like valid JSON
+                if response and ('{' in response and '}' in response):
+                    return response
+                
+                self.logger.warning("GPT response doesn't appear to be valid JSON, retrying")
+            except Exception as e:
+                self.logger.error(f"Error querying GPT: {str(e)}")
+            
+            attempts += 1
+            
+            # If we've used all attempts, break out
+            if attempts >= max_attempts:
+                self.logger.warning("Maximum GPT query attempts reached")
+                break
+        
+        # Return whatever we have after max attempts
+        return response if 'response' in locals() else ""
         
     def _query_gpt(self, prompt: str) -> str:
         """Query GPT with the given prompt"""
@@ -195,7 +319,7 @@ class PlannerAgent:
         return {
             "ticket_id": ticket_id,
             "bug_summary": bug_summary,
-            "affected_files": [],
+            "affected_files": [],  # Empty list since we couldn't identify files
             "error_type": "Unknown",
             "using_fallback": True
         }

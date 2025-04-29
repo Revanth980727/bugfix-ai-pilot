@@ -5,13 +5,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { AgentStatus } from '@/hooks/useDashboardState';
 import { Badge } from '@/components/ui/badge';
+import { AffectedFile } from '@/types/ticket';
+import { CheckCircle2, XCircle } from 'lucide-react';
 
 interface PlannerAgentProps {
   status: AgentStatus;
   progress?: number;
   analysis?: {
     bug_summary?: string;
-    affected_files?: string[];
+    affected_files?: Array<string | AffectedFile>;
     error_type?: string;
     using_fallback?: boolean;
     affectedFiles?: string[];  // For backward compatibility
@@ -20,10 +22,24 @@ interface PlannerAgentProps {
   };
 }
 
+// Helper function to determine if an item is an AffectedFile
+const isAffectedFile = (item: any): item is AffectedFile => {
+  return typeof item === 'object' && 'file' in item && 'valid' in item;
+};
+
 export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) {
   // Handle both new and old format
   const bugSummary = analysis?.bug_summary || analysis?.rootCause;
-  const affectedFiles = analysis?.affected_files || analysis?.affectedFiles || [];
+  
+  // Handle different formats of affected files
+  let affectedFiles: Array<string | AffectedFile> = [];
+  
+  if (analysis?.affected_files) {
+    affectedFiles = analysis.affected_files;
+  } else if (analysis?.affectedFiles) {
+    affectedFiles = analysis.affectedFiles;
+  }
+  
   const errorType = analysis?.error_type;
   const usingFallback = analysis?.using_fallback;
   
@@ -82,8 +98,24 @@ export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) 
                 {affectedFiles?.length ? (
                   <ul className="space-y-1">
                     {affectedFiles.map((file, index) => (
-                      <li key={index} className="text-sm p-1 rounded hover:bg-muted">
-                        <code>{file}</code>
+                      <li key={index} className="text-sm p-1 rounded hover:bg-muted flex items-center gap-2">
+                        {isAffectedFile(file) ? (
+                          <>
+                            {file.valid ? (
+                              <CheckCircle2 className="h-4 w-4 text-green-500" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-red-500" />
+                            )}
+                            <code className={file.valid ? "" : "text-red-500"}>{file.file}</code>
+                            {!file.valid && (
+                              <Badge variant="outline" className="ml-1 bg-red-50 border-red-200 text-red-600 text-xs">
+                                Invalid Path
+                              </Badge>
+                            )}
+                          </>
+                        ) : (
+                          <code>{file}</code>
+                        )}
                       </li>
                     ))}
                   </ul>

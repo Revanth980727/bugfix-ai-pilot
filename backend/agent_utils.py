@@ -1,4 +1,3 @@
-
 import logging
 import os
 import httpx
@@ -17,12 +16,28 @@ QA_URL = os.getenv("QA_URL", "http://qa:8003")
 COMMUNICATOR_URL = os.getenv("COMMUNICATOR_URL", "http://communicator:8004")
 
 async def call_planner_agent(ticket: Dict[str, Any]):
-    """Send ticket information to the Planner agent"""
+    """Send ticket information to the enhanced Planner agent"""
     try:
+        # Create a request payload with all available ticket information
+        payload = {
+            "ticket_id": ticket.get("ticket_id", ""),
+            "title": ticket.get("title", ""),
+            "description": ticket.get("description", ""),
+            "repository": ticket.get("repository", "main")
+        }
+        
+        # Add labels if available
+        if "labels" in ticket:
+            payload["labels"] = ticket["labels"]
+            
+        # Add attachments if available
+        if "attachments" in ticket:
+            payload["attachments"] = ticket["attachments"]
+        
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 f"{PLANNER_URL}/analyze",
-                json=ticket
+                json=payload
             )
             
             if response.status_code != 200:
