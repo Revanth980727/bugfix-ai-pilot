@@ -6,8 +6,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { AgentStatus } from '@/hooks/useDashboardState';
-import { AlertTriangle, CheckCircle, XCircle, BarChart } from 'lucide-react';
+import { AlertTriangle, CheckCircle, XCircle, BarChart, InfoIcon } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface FileDiff {
   filename: string;
@@ -54,6 +55,13 @@ export function DeveloperAgent({
     if (score >= 60) return "Medium";
     return "Low";
   };
+
+  const getConfidenceTooltipText = (score?: number) => {
+    if (!score) return "No confidence score available";
+    if (score >= 80) return "High confidence: The patch is likely to fix the issue with minimal side effects";
+    if (score >= 60) return "Medium confidence: The patch addresses the issue but may need further refinement";
+    return "Low confidence: The patch may not fully address the issue or could have side effects";
+  };
   
   return (
     <AgentCard title="Developer" type="developer" status={status} progress={progress}>
@@ -67,7 +75,10 @@ export function DeveloperAgent({
         <div className="space-y-2">
           <div className="flex justify-between">
             <p>Generating fix implementation...</p>
-            <Badge variant="outline">Attempt {attempt}/{maxAttempts}</Badge>
+            <Badge variant="outline" className="flex items-center gap-1">
+              <InfoIcon className="h-3 w-3" />
+              <span>Attempt {attempt}/{maxAttempts}</span>
+            </Badge>
           </div>
           <div className="h-4 w-full bg-muted overflow-hidden rounded">
             <div 
@@ -79,22 +90,42 @@ export function DeveloperAgent({
       )}
       
       {confidenceScore !== undefined && (
-        <div className="mt-2 mb-4">
-          <div className="flex justify-between items-center mb-1 text-sm">
-            <div className="flex items-center gap-1">
-              <BarChart className="h-4 w-4" />
-              <span>Confidence Score:</span>
-            </div>
-            <Badge variant={confidenceScore < 60 ? "destructive" : (confidenceScore >= 80 ? "default" : "outline")}>
-              {getConfidenceLabel(confidenceScore)} ({confidenceScore}%)
-            </Badge>
-          </div>
-          <Progress 
-            value={confidenceScore} 
-            max={100}
-            className={`h-2 ${getConfidenceColor(confidenceScore)}`}
-          />
-        </div>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="mt-2 mb-4 border rounded-md p-3 hover:bg-muted/50 transition-colors">
+                <div className="flex justify-between items-center mb-1 text-sm">
+                  <div className="flex items-center gap-1">
+                    <BarChart className="h-4 w-4" />
+                    <span>Confidence Score:</span>
+                  </div>
+                  <Badge 
+                    variant={
+                      confidenceScore < 60 ? "destructive" : 
+                      (confidenceScore >= 80 ? "default" : "outline")
+                    }
+                    className={confidenceScore < 60 ? "animate-pulse" : ""}
+                  >
+                    {getConfidenceLabel(confidenceScore)} ({confidenceScore}%)
+                  </Badge>
+                </div>
+                <Progress 
+                  value={confidenceScore} 
+                  max={100}
+                  className={`h-2 ${getConfidenceColor(confidenceScore)}`}
+                />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-sm">
+              <p>{getConfidenceTooltipText(confidenceScore)}</p>
+              {confidenceScore < 60 && (
+                <p className="mt-1 text-red-500 font-semibold">
+                  Low confidence scores may trigger early escalation.
+                </p>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
       
       {diffs && diffs.length > 0 && (
@@ -104,16 +135,43 @@ export function DeveloperAgent({
               <TabsTrigger value="diff" className="flex-1">Code Changes</TabsTrigger>
               <TabsTrigger value="summary" className="flex-1">Summary</TabsTrigger>
             </TabsList>
-            <Badge 
-              variant={
-                escalated ? "destructive" : 
-                (earlyEscalation ? "outline" : "outline")
-              } 
-              className={`ml-2 ${earlyEscalation ? "border-red-400" : ""}`}
-            >
-              {(escalated || earlyEscalation) && <AlertTriangle className="h-3 w-3 mr-1" />}
-              Attempt {attempt}/{maxAttempts}
-            </Badge>
+            
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge 
+                    variant={
+                      escalated ? "destructive" : 
+                      (earlyEscalation ? "outline" : "outline")
+                    } 
+                    className={`ml-2 ${earlyEscalation ? "border-red-400" : ""} ${
+                      (escalated || earlyEscalation) ? "animate-pulse" : ""
+                    }`}
+                  >
+                    {(escalated || earlyEscalation) && <AlertTriangle className="h-3 w-3 mr-1" />}
+                    Attempt {attempt}/{maxAttempts}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent side="left" className="max-w-xs">
+                  {escalated || earlyEscalation ? (
+                    <div className="space-y-1">
+                      <p className="font-semibold text-red-500">
+                        {earlyEscalation ? "Early Escalation" : "Escalated to Human"}
+                      </p>
+                      <p className="text-xs">
+                        {escalationReason || 
+                          (earlyEscalation ? 
+                            "This ticket was escalated early due to low confidence or complexity." : 
+                            `Maximum attempts (${maxAttempts}) reached without success.`)
+                        }
+                      </p>
+                    </div>
+                  ) : (
+                    <p>Current attempt: {attempt} of {maxAttempts} maximum tries</p>
+                  )}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           
           <TabsContent value="diff">
@@ -150,18 +208,29 @@ export function DeveloperAgent({
                   <span> / </span>
                   <span className="text-red-500">-{diffs.reduce((acc, curr) => acc + curr.linesRemoved, 0)}</span>
                 </p>
+                
                 {confidenceScore !== undefined && (
-                  <p className="text-sm">
-                    <span className="text-muted-foreground">Confidence Score:</span>{" "}
-                    <span className={
-                      confidenceScore < 60 ? "text-red-500" : 
-                      (confidenceScore >= 80 ? "text-green-500" : "text-yellow-500")
-                    }>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Confidence Score:</span>
+                    <Badge 
+                      variant={
+                        confidenceScore < 60 ? "destructive" : 
+                        (confidenceScore >= 80 ? "default" : "outline")
+                      }
+                    >
                       {confidenceScore}%
+                    </Badge>
+                    <span className={
+                      confidenceScore < 60 ? "text-red-500 text-xs" : 
+                      (confidenceScore >= 80 ? "text-green-500 text-xs" : "text-yellow-500 text-xs")
+                    }>
+                      ({getConfidenceLabel(confidenceScore)})
                     </span>
-                  </p>
+                  </div>
                 )}
+                
                 <Separator />
+                
                 <div className="text-sm">
                   <p className="font-semibold mb-1">Modified files:</p>
                   <ul className="list-disc pl-5 space-y-1">
@@ -179,8 +248,11 @@ export function DeveloperAgent({
       )}
       
       {status === 'error' && (
-        <div className="text-sm text-red-400 space-y-2">
-          <p>Failed to generate a working fix after {attempt} attempts.</p>
+        <div className="text-sm text-red-400 space-y-2 p-3 border border-red-200 rounded-md bg-red-50 dark:bg-red-900/10">
+          <p className="flex items-center gap-1">
+            <XCircle className="h-4 w-4" />
+            Failed to generate a working fix after {attempt} attempt{attempt !== 1 ? 's' : ''}.
+          </p>
           {attempt >= maxAttempts && (
             <p className="flex items-center gap-1">
               <AlertTriangle className="h-4 w-4" />
@@ -191,7 +263,7 @@ export function DeveloperAgent({
       )}
       
       {status === 'escalated' && (
-        <div className="text-sm text-amber-500 space-y-2">
+        <div className="text-sm text-amber-500 space-y-2 p-3 border border-amber-200 rounded-md bg-amber-50 dark:bg-amber-900/10">
           <p className="flex items-center gap-1">
             <AlertTriangle className="h-4 w-4" />
             {earlyEscalation ? "Early escalation" : "Escalated"} to human review{attempt ? ` after ${attempt} attempt${attempt !== 1 ? 's' : ''}` : ""}.
@@ -199,6 +271,11 @@ export function DeveloperAgent({
           {escalationReason && (
             <p className="pl-6 text-amber-600">
               Reason: {escalationReason}
+            </p>
+          )}
+          {confidenceScore !== undefined && confidenceScore < 60 && (
+            <p className="pl-6 text-amber-600">
+              Low confidence score: {confidenceScore}%
             </p>
           )}
         </div>

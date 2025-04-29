@@ -18,6 +18,7 @@ export function useCommunicatorAgent() {
   const [confidenceScore, setConfidenceScore] = useState<number | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
   const [maxRetries, setMaxRetries] = useState(4);
+  const [analyticsData, setAnalyticsData] = useState<any>(null);
 
   const simulateWork = (
     onComplete: () => void, 
@@ -29,6 +30,7 @@ export function useCommunicatorAgent() {
       confidence?: number;
       retryCount?: number;
       maxRetries?: number;
+      analytics?: any;
     }
   ) => {
     setStatus('working');
@@ -38,7 +40,8 @@ export function useCommunicatorAgent() {
       reason,
       confidence,
       retryCount: attemptCount,
-      maxRetries: maxAttempts
+      maxRetries: maxAttempts,
+      analytics
     } = options || {};
     
     if (isEarlyEscalation) {
@@ -58,6 +61,10 @@ export function useCommunicatorAgent() {
       setMaxRetries(maxAttempts);
     }
     
+    if (analytics) {
+      setAnalyticsData(analytics);
+    }
+    
     // Add communication updates for retry attempts
     if (attemptCount && attemptCount > 0) {
       const retryUpdate: Update = {
@@ -75,13 +82,27 @@ export function useCommunicatorAgent() {
       const escalationUpdate: Update = {
         timestamp: new Date().toISOString(),
         message: isEarlyEscalation 
-          ? `Early escalation: ${reason || 'Complex issue requiring human review'}`
+          ? `Early escalation: ${reason || 'Complex issue requiring human review'} ${confidence !== undefined ? `(Confidence Score: ${confidence}%)` : ''}`
           : `Escalated after ${maxAttempts} unsuccessful attempts. Assigning to human developer.`,
         type: 'jira',
         confidenceScore: confidence
       };
       
       mockUpdates = [escalationUpdate, ...mockUpdates];
+    }
+    
+    // Add confidence score update if available
+    if (confidence !== undefined && !isEarlyEscalation) {
+      const confidenceLabel = confidence >= 80 ? "High" : (confidence >= 60 ? "Medium" : "Low");
+      
+      const confidenceUpdate: Update = {
+        timestamp: new Date().toISOString(),
+        message: `Developer confidence score: ${confidence}% (${confidenceLabel})`,
+        type: 'system',
+        confidenceScore: confidence
+      };
+      
+      mockUpdates = [confidenceUpdate, ...mockUpdates];
     }
     
     const interval = setInterval(() => {
@@ -111,6 +132,7 @@ export function useCommunicatorAgent() {
     setConfidenceScore(undefined);
     setRetryCount(0);
     setMaxRetries(4);
+    setAnalyticsData(null);
   };
 
   return {
@@ -124,6 +146,7 @@ export function useCommunicatorAgent() {
     confidenceScore,
     retryCount,
     maxRetries,
+    analyticsData,
     simulateWork,
     reset
   };

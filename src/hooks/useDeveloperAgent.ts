@@ -11,18 +11,28 @@ export function useDeveloperAgent() {
   const [confidenceScore, setConfidenceScore] = useState<number | undefined>(undefined);
   const [escalationReason, setEscalationReason] = useState<string | undefined>(undefined);
   const [earlyEscalation, setEarlyEscalation] = useState(false);
+  const [patchAnalytics, setPatchAnalytics] = useState<any>(null);
   const maxAttempts = 4;
 
+  /**
+   * Simulate developer agent work
+   */
   const simulateWork = (
     onComplete: () => void, 
     mockDiffs: CodeDiff[], 
     currentAttempt: number = 1,
-    patchConfidence?: number
+    patchConfidence?: number,
+    analytics?: any
   ) => {
     setStatus('working');
     setAttempt(currentAttempt);
+    
     if (patchConfidence !== undefined) {
       setConfidenceScore(patchConfidence);
+    }
+    
+    if (analytics) {
+      setPatchAnalytics(analytics);
     }
     
     const interval = setInterval(() => {
@@ -39,6 +49,9 @@ export function useDeveloperAgent() {
     }, 100);
   };
 
+  /**
+   * Simulate a failure in the developer agent
+   */
   const simulateFailure = (reason?: string) => {
     setStatus('error');
     if (reason) {
@@ -46,6 +59,9 @@ export function useDeveloperAgent() {
     }
   };
   
+  /**
+   * Simulate an early escalation due to low confidence or complexity
+   */
   const simulateEarlyEscalation = (reason: string, confidence?: number) => {
     setStatus('escalated');
     setEarlyEscalation(true);
@@ -55,6 +71,9 @@ export function useDeveloperAgent() {
     }
   };
 
+  /**
+   * Reset the agent state
+   */
   const reset = () => {
     setStatus('idle');
     setProgress(0);
@@ -63,6 +82,7 @@ export function useDeveloperAgent() {
     setConfidenceScore(undefined);
     setEscalationReason(undefined);
     setEarlyEscalation(false);
+    setPatchAnalytics(null);
   };
 
   return {
@@ -74,6 +94,7 @@ export function useDeveloperAgent() {
     confidenceScore,
     escalationReason,
     earlyEscalation,
+    patchAnalytics,
     simulateWork,
     simulateFailure,
     simulateEarlyEscalation,
