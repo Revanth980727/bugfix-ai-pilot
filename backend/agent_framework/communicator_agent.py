@@ -61,6 +61,9 @@ class CommunicatorAgent(Agent):
         retry_count = input_data.get("retry_count", 0)
         max_retries = input_data.get("max_retries", 4)
         escalated = input_data.get("escalated", False)
+        early_escalation = input_data.get("early_escalation", False)
+        early_escalation_reason = input_data.get("early_escalation_reason")
+        confidence_score = input_data.get("confidence_score")
         
         if not ticket_id:
             raise ValueError("ticket_id is required")
@@ -74,7 +77,56 @@ class CommunicatorAgent(Agent):
         # Timestamp for updates
         timestamp = datetime.now().isoformat()
         
-        if test_passed:
+        if early_escalation:
+            # Handle early escalation (before max retries)
+            reason = early_escalation_reason or "Automated fix determined to be low confidence"
+            
+            jira_comment = (
+                f"⚠️ Early escalation after attempt {retry_count}/{max_retries}. "
+                f"Reason: {reason}"
+            )
+            
+            if confidence_score is not None:
+                jira_comment += f" (Confidence score: {confidence_score}%)"
+            
+            updates.append({
+                "timestamp": timestamp,
+                "message": jira_comment,
+                "type": "jira",
+                "confidenceScore": confidence_score
+            })
+            
+            # Add system message for frontend
+            updates.append({
+                "timestamp": timestamp,
+                "message": f"Ticket escalated early: {reason}",
+                "type": "system"
+            })
+            
+            jira_updates_success = await self._update_jira_ticket(
+                ticket_id,
+                "Needs Review",
+                jira_comment
+            )
+            
+            if github_pr_url:
+                github_comment = f"⚠️ Early escalation: {reason}"
+                if confidence_score is not None:
+                    github_comment += f" (Confidence score: {confidence_score}%)"
+                
+                github_updates_success = await self._post_github_comment(
+                    github_pr_url,
+                    github_comment
+                )
+                
+                if github_updates_success:
+                    updates.append({
+                        "timestamp": timestamp,
+                        "message": github_comment,
+                        "type": "github",
+                        "confidenceScore": confidence_score
+                    })
+        elif test_passed:
             # Handle successful test case
             jira_comment = f"✅ Bug fix tested successfully on attempt {retry_count}/{max_retries}."
             if github_pr_url:
@@ -109,7 +161,7 @@ class CommunicatorAgent(Agent):
                         "type": "github"
                     })
         elif escalated:
-            # Handle escalation case
+            # Handle escalation case after max retries
             jira_comment = (
                 f"❌ Automated fix attempts failed after {max_retries} tries. "
                 "Escalating to human reviewer."
@@ -200,10 +252,10 @@ class CommunicatorAgent(Agent):
             "test_passed": test_passed,
             "jira_updated": jira_updates_success,
             "github_updated": github_updates_success if github_pr_url else None,
-            "escalated": escalated,
+            "escalated": escalated or early_escalation,
+            "early_escalation": early_escalation,
             "retry_count": retry_count,
             "max_retries": max_retries,
             "updates": updates,
             "timestamp": datetime.now().isoformat()
         }
-

@@ -53,6 +53,6 @@ export type UpdateType = 'jira' | 'github' | 'system';
 export interface Update {
   timestamp: string;
   message: string;
-  type: 'jira' | 'github' | 'system' | 'other';
+  type: UpdateType;
   confidenceScore?: number;
 }
