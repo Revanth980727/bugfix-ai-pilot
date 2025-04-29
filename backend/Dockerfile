@@ -17,4 +17,3 @@ ENV PYTHONPATH=/app
 
 # Run the orchestrator 
 CMD ["python", "-m", "orchestrator.start_orchestrator"]
-

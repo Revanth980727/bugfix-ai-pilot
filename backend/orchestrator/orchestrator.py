@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import os
@@ -11,15 +10,15 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Import agent frameworks
-from ..agent_framework.planner_agent import PlannerAgent
-from ..agent_framework.developer_agent import DeveloperAgent
-from ..agent_framework.qa_agent import QAAgent 
-from ..agent_framework.communicator_agent import CommunicatorAgent
-from ..jira_service.jira_client import JiraClient
-from ..github_service.github_service import GitHubService
-from ..analytics_tracker import get_analytics_tracker
-from ..env import MAX_RETRIES
+# Direct imports instead of relative imports
+from agent_framework.planner_agent import PlannerAgent
+from agent_framework.developer_agent import DeveloperAgent
+from agent_framework.qa_agent import QAAgent 
+from agent_framework.communicator_agent import CommunicatorAgent
+from jira_service.jira_client import JiraClient
+from github_service.github_service import GitHubService
+from analytics_tracker import get_analytics_tracker
+from env import MAX_RETRIES
 
 # Configure logging
 logging.basicConfig(
@@ -62,7 +61,20 @@ class Orchestrator:
     
     async def fetch_eligible_tickets(self) -> List[Dict[str, Any]]:
         """Fetch eligible tickets from JIRA that need processing"""
-        # ... keep existing code (fetch eligible tickets method)
+        try:
+            tickets = await self.jira_client.fetch_tickets()
+            
+            # Filter tickets to only process those in "To Do" status
+            eligible_tickets = [
+                ticket for ticket in tickets
+                if ticket.get("status") == "To Do" and ticket.get("ticket_id")
+            ]
+            
+            return eligible_tickets
+        
+        except Exception as e:
+            logger.error(f"Error fetching eligible tickets: {str(e)}")
+            return []
     
     async def process_ticket(self, ticket: Dict[str, Any]) -> None:
         """Process a single ticket through the AI agent pipeline"""
@@ -467,28 +479,64 @@ class Orchestrator:
     
     async def run_agent(self, agent: Any, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run an agent with error handling and retry logic"""
-        # ... keep existing code (run agent method)
+        try:
+            # Set agent status to running
+            # agent.status = AgentStatus.RUNNING
+            
+            # Execute the agent's process method
+            result = await asyncio.to_thread(agent.process, input_data)
+            
+            # Set agent status based on result
+            # agent.status = AgentStatus.SUCCESS if "error" not in result else AgentStatus.FAILED
+            
+            return result
+        
+        except Exception as e:
+            logger.error(f"Error running agent {agent.name}: {str(e)}")
+            # agent.status = AgentStatus.FAILED
+            return {"error": str(e)}
     
     def get_status(self) -> Dict[str, Any]:
         """Get current status of the orchestrator"""
-        # ... keep existing code (get status method)
+        status = {
+            "active_tickets": self.active_tickets,
+            "agent_statuses": self.get_agent_statuses()
+        }
+        return status
     
     def get_agent_statuses(self) -> Dict[str, str]:
         """Get statuses of all agents for health check"""
-        # ... keep existing code (get agent statuses method)
+        return {
+            "planner": self.planner_agent.status.value,
+            "developer": self.developer_agent.status.value,
+            "qa": self.qa_agent.status.value,
+            "communicator": self.communicator_agent.status.value
+        }
 
-
-async def start_orchestrator():
-    """Initialize and start the orchestrator"""
-    # Ensure logs directory exists
-    os.makedirs("logs", exist_ok=True)
-    
-    orchestrator = Orchestrator()
-    await orchestrator.run_forever()
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(start_orchestrator())
-    except KeyboardInterrupt:
-        logger.info("Orchestrator stopped by user")
+    async def run_forever(self):
+        """Run the orchestrator in an infinite loop, processing tickets"""
+        logger.info("Starting orchestrator polling loop")
+        
+        while True:
+            try:
+                # Fetch eligible tickets
+                tickets = await self.fetch_eligible_tickets()
+                
+                if tickets:
+                    logger.info(f"Found {len(tickets)} eligible tickets to process")
+                    
+                    # Process each ticket
+                    for ticket in tickets:
+                        await self.process_ticket(ticket)
+                else:
+                    logger.debug("No eligible tickets found")
+                
+                # Wait for next poll interval
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                
+            except Exception as e:
+                logger.error(f"Error in orchestrator main loop: {str(e)}")
+                logger.error(traceback.format_exc())
+                
+                # Don't crash, just wait and try again
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
