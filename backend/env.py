@@ -2,7 +2,7 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables from root .env file
 load_dotenv()
 
 # GitHub configuration
@@ -23,6 +23,7 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '4'))
 PROJECT_TEST_COMMAND = os.getenv('PROJECT_TEST_COMMAND', 'npm test')
 LOG_RETENTION_DAYS = int(os.getenv('LOG_RETENTION_DAYS', '30'))
+RETRY_DELAY_SECONDS = int(os.getenv('RETRY_DELAY_SECONDS', '5'))
 
 def verify_env_vars():
     """Verify that all required environment variables are set."""

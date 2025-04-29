@@ -3,7 +3,6 @@ import os
 import sys
 import logging
 from datetime import datetime
-from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -81,8 +80,5 @@ def test_github_service():
         logger.info("To run GitHub tests, please set valid credentials in your .env file.")
 
 if __name__ == "__main__":
-    # Load environment variables
-    load_dotenv()
-    
     # Run tests
     test_github_service()

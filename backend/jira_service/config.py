@@ -1,9 +1,9 @@
 
 import os
-from dotenv import load_dotenv
 import logging
+from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables from root .env file
 load_dotenv()
 
 # JIRA Configuration

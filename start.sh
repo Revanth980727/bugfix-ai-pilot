@@ -6,9 +6,9 @@ echo "Starting BugFix AI system..."
 mkdir -p logs
 mkdir -p code_repo
 
-# Check if .env file exists
-if [ ! -f .env ]; then
-  echo "Error: .env file not found!"
+# Check if .env file exists at the root level
+if [ ! -f ./.env ]; then
+  echo "Error: .env file not found in the root directory!"
   echo "Please create an .env file based on .env.example before starting the system."
   exit 1
 fi

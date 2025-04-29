@@ -1,13 +1,14 @@
 
 import os
 import logging
+import sys
 from dotenv import load_dotenv
 
 # Configure logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("github-config")
 
-# Load environment variables
+# Load environment variables from root .env file
 load_dotenv()
 
 # GitHub configuration
