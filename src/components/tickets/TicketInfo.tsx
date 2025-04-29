@@ -7,6 +7,8 @@ import { CalendarClock, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
 import { EscalationBadge } from './EscalationBadge';
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Progress } from "@/components/ui/progress";
 
 interface TicketInfoProps {
   ticket: Ticket | null;
@@ -60,8 +62,13 @@ export function TicketInfo({ ticket, className = "" }: TicketInfoProps) {
   const statusColor = getStatusColor(ticket.status);
   const priorityColor = getPriorityColor(ticket.priority);
   const isEscalated = ticket.escalated || ticket.status?.toLowerCase()?.includes('escalated');
+  const isEarlyEscalation = isEscalated && (ticket.current_attempt || 0) < (ticket.max_attempts || 4);
   
   const formattedDate = ticket.updated ? format(new Date(ticket.updated), 'MMM d, yyyy h:mm a') : '';
+
+  const retryPercentage = ticket.max_attempts 
+    ? Math.min((ticket.current_attempt || 0) / ticket.max_attempts * 100, 100) 
+    : 0;
 
   return (
     <Card className={`${className}`}>
@@ -70,7 +77,9 @@ export function TicketInfo({ ticket, className = "" }: TicketInfoProps) {
           <Alert variant="destructive" className="mb-4">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
-              This ticket has been escalated for human review after multiple fix attempts failed
+              {isEarlyEscalation 
+                ? "This ticket has been early escalated for human review due to complexity factors" 
+                : "This ticket has been escalated for human review after multiple fix attempts failed"}
             </AlertDescription>
           </Alert>
         )}
@@ -85,12 +94,35 @@ export function TicketInfo({ ticket, className = "" }: TicketInfoProps) {
           </div>
           
           <div className="flex flex-wrap gap-2">
-            {isEscalated && <EscalationBadge />}
+            {isEscalated && (
+              <EscalationBadge 
+                isEarly={isEarlyEscalation} 
+                retryCount={ticket.current_attempt} 
+                maxRetries={ticket.max_attempts} 
+              />
+            )}
             
-            <Badge variant={isEscalated ? "destructive" : "outline"} className="flex items-center space-x-1">
-              <span>Retry Attempt:</span>
-              <span>{ticket.current_attempt || 0}/{ticket.max_attempts || 4}</span>
-            </Badge>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge 
+                    variant={isEscalated ? "destructive" : "outline"} 
+                    className="flex items-center space-x-1"
+                  >
+                    <span>Attempt:</span>
+                    <span>{ticket.current_attempt || 0}/{ticket.max_attempts || 4}</span>
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <div className="space-y-1 w-40">
+                    <p className="text-xs">
+                      Retry progress: {ticket.current_attempt || 0} of {ticket.max_attempts || 4} attempts used
+                    </p>
+                    <Progress value={retryPercentage} className="h-1" />
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             
             {ticket.priority && (
               <Badge className={`${priorityColor} text-white`}>

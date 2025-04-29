@@ -12,8 +12,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TicketListItem } from "@/hooks/useDashboardState";
 import { format } from 'date-fns';
-import { AlertTriangle, Clock } from 'lucide-react';
+import { AlertTriangle, Clock, RefreshCcw } from 'lucide-react';
 import { EscalationBadge } from './EscalationBadge';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Progress } from '@/components/ui/progress';
 
 interface TicketsListProps {
   tickets: TicketListItem[];
@@ -110,36 +112,74 @@ export function TicketsList({
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredTickets.map((ticket) => (
-                  <TableRow 
-                    key={ticket.id}
-                    className={`cursor-pointer hover:bg-muted/50 ${selectedTicketId === ticket.id ? 'bg-muted' : ''}`}
-                    onClick={() => onSelectTicket && onSelectTicket(ticket.id)}
-                  >
-                    <TableCell className="font-medium">{ticket.id}</TableCell>
-                    <TableCell className="max-w-[200px] truncate">
-                      <div className="flex items-center gap-2">
-                        {ticket.escalated && (
-                          <AlertTriangle className="h-4 w-4 text-destructive" />
-                        )}
-                        {ticket.title}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      <Badge className={`${getStatusColor(ticket.status)} text-xs text-white`}>
-                        {ticket.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell text-muted-foreground text-sm">
-                      {formatDate(ticket.updatedAt)}
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      <Badge variant={ticket.escalated ? "destructive" : "outline"} className="text-xs">
-                        <span>Attempt {ticket.retryCount || 0}/{ticket.maxRetries || 4}</span>
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))
+                filteredTickets.map((ticket) => {
+                  const isEarlyEscalation = ticket.escalated && 
+                    (ticket.retryCount || 0) < (ticket.maxRetries || 4);
+                    
+                  const retryPercentage = ticket.maxRetries 
+                    ? Math.min((ticket.retryCount || 0) / ticket.maxRetries * 100, 100) 
+                    : 0;
+                    
+                  return (
+                    <TableRow 
+                      key={ticket.id}
+                      className={`cursor-pointer hover:bg-muted/50 ${selectedTicketId === ticket.id ? 'bg-muted' : ''}`}
+                      onClick={() => onSelectTicket && onSelectTicket(ticket.id)}
+                    >
+                      <TableCell className="font-medium">{ticket.id}</TableCell>
+                      <TableCell className="max-w-[200px] truncate">
+                        <div className="flex items-center gap-2">
+                          {ticket.escalated && (
+                            <AlertTriangle className="h-4 w-4 text-destructive" />
+                          )}
+                          {ticket.title}
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell">
+                        <Badge className={`${getStatusColor(ticket.status)} text-xs text-white`}>
+                          {ticket.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell text-muted-foreground text-sm">
+                        {formatDate(ticket.updatedAt)}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className="flex items-center gap-2">
+                                <Badge 
+                                  variant={ticket.escalated ? "destructive" : "outline"} 
+                                  className="text-xs flex items-center gap-1"
+                                >
+                                  {ticket.retryCount ? <RefreshCcw className="h-3 w-3" /> : null}
+                                  <span>{ticket.retryCount || 0}/{ticket.maxRetries || 4}</span>
+                                </Badge>
+                                
+                                <Progress 
+                                  value={retryPercentage} 
+                                  className={`h-1.5 w-10 ${ticket.escalated ? "bg-red-100" : ""}`}
+                                />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <div>
+                                <p className="text-xs">
+                                  {ticket.escalated 
+                                    ? (isEarlyEscalation 
+                                        ? "Early escalation before max retries"
+                                        : "Escalated after max retries") 
+                                    : `${ticket.retryCount || 0} of ${ticket.maxRetries || 4} attempts used`
+                                  }
+                                </p>
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>

@@ -10,6 +10,7 @@ import { AgentStatus } from '@/hooks/useDashboardState';
 import { Update } from '@/types/ticket';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface CommunicatorAgentProps {
   status: AgentStatus;
@@ -51,6 +52,22 @@ export function CommunicatorAgent({
   };
 
   const isEscalated = earlyEscalation || (retryCount >= maxRetries);
+  
+  // Helper function to determine confidence badge color
+  const getConfidenceBadgeVariant = (score?: number) => {
+    if (score === undefined) return "outline";
+    if (score >= 80) return "success";
+    if (score >= 60) return "default";
+    return "destructive";
+  };
+  
+  // Helper function to get a descriptive label for the confidence score
+  const getConfidenceLabel = (score?: number) => {
+    if (score === undefined) return "Unknown";
+    if (score >= 80) return "High";
+    if (score >= 60) return "Medium";
+    return "Low";
+  };
 
   return (
     <AgentCard title="Communicator" type="communicator" status={status} progress={progress}>
@@ -60,9 +77,28 @@ export function CommunicatorAgent({
             <RefreshCcw className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">Attempt {retryCount}/{maxRetries}</span>
           </div>
-          {retryCount > 0 && (
-            <Progress value={(retryCount / maxRetries) * 100} className="h-2 w-24" />
-          )}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Progress 
+                  value={(retryCount / maxRetries) * 100} 
+                  className={`h-2 w-24 ${retryCount >= maxRetries ? "bg-red-200" : ""}`}
+                />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Retry progress: {retryCount} of {maxRetries} attempts used</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      )}
+      
+      {confidenceScore !== undefined && (
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">Confidence:</span>
+          <Badge variant={getConfidenceBadgeVariant(confidenceScore)}>
+            {getConfidenceLabel(confidenceScore)} ({confidenceScore}%)
+          </Badge>
         </div>
       )}
       
@@ -161,16 +197,18 @@ export function CommunicatorAgent({
                     {icon}
                   </div>
                   <div className="flex-1">
-                    {isEscalationMessage ? 
-                      <div className="text-amber-600 dark:text-amber-400">{update.message}</div> : 
-                      update.message
-                    }
-                    
-                    {update.confidenceScore !== undefined && (
-                      <Badge variant="outline" className="ml-1 text-xs">
-                        {update.confidenceScore}%
-                      </Badge>
-                    )}
+                    <div className={isEscalationMessage ? "text-amber-600 dark:text-amber-400" : ""}>
+                      {update.message}
+                      
+                      {update.confidenceScore !== undefined && (
+                        <Badge 
+                          variant={getConfidenceBadgeVariant(update.confidenceScore)} 
+                          className="ml-1 text-xs"
+                        >
+                          {update.confidenceScore}%
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                 </div>
               );

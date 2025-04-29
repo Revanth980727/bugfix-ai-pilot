@@ -58,11 +58,37 @@ export function useCommunicatorAgent() {
       setMaxRetries(maxAttempts);
     }
     
+    // Add communication updates for retry attempts
+    if (attemptCount && attemptCount > 0) {
+      const retryUpdate: Update = {
+        timestamp: new Date().toISOString(),
+        message: `Attempt ${attemptCount} of ${maxAttempts || 4}: ${isEarlyEscalation ? 'Escalated early' : 'Updating JIRA with latest fix details'}`,
+        type: 'system',
+        confidenceScore: confidence
+      };
+      
+      mockUpdates = [retryUpdate, ...mockUpdates];
+    }
+    
+    // Add escalation update if applicable
+    if (isEarlyEscalation || (attemptCount && maxAttempts && attemptCount >= maxAttempts)) {
+      const escalationUpdate: Update = {
+        timestamp: new Date().toISOString(),
+        message: isEarlyEscalation 
+          ? `Early escalation: ${reason || 'Complex issue requiring human review'}`
+          : `Escalated after ${maxAttempts} unsuccessful attempts. Assigning to human developer.`,
+        type: 'jira',
+        confidenceScore: confidence
+      };
+      
+      mockUpdates = [escalationUpdate, ...mockUpdates];
+    }
+    
     const interval = setInterval(() => {
       setProgress(prev => {
         if (prev >= 100) {
           clearInterval(interval);
-          setStatus('success');
+          setStatus(isEarlyEscalation || (attemptCount && maxAttempts && attemptCount >= maxAttempts) ? 'escalated' : 'success');
           setUpdates(mockUpdates);
           if (mockResult) {
             setResult(mockResult);
