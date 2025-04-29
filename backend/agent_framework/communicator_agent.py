@@ -4,9 +4,9 @@ import asyncio
 from datetime import datetime
 import time
 from .agent_base import Agent, AgentStatus
-from ..jira_service.jira_client import JiraClient
-from ..github_service.github_service import GitHubService
-from ..env import verify_github_repo_settings
+from backend.jira_service.jira_client import JiraClient
+from backend.github_service.github_service import GitHubService
+from backend.env import verify_github_repo_settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

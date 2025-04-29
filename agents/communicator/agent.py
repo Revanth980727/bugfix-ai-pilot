@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -19,17 +18,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("communicator-agent")
 
-# Import github_utils.py dynamically
+# Import github_utils directly - the file should be copied to the container
 try:
-    # Try first to import from backend package (regular import)
-    from backend.github_utils import create_branch, commit_changes, create_pull_request
-except ImportError:
-    # If that fails, try to load the module directly from the file
+    import github_utils
+    create_branch = github_utils.create_branch
+    commit_changes = github_utils.commit_changes
+    create_pull_request = github_utils.create_pull_request
+    logger.info("Successfully imported github_utils directly")
+except ImportError as e:
+    logger.error(f"Error importing github_utils directly: {str(e)}")
+    # Fallback to old approach
     try:
         # Construct a path to github_utils.py that could be mounted in the Docker container
         path_options = [
-            '/app/backend/github_utils.py',
-            '/app/github_utils.py'  # Fallback
+            '/app/github_utils.py',  # Local copy
+            '/app/backend/github_utils.py'  # Original path
         ]
         
         for path in path_options:

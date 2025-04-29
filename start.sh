@@ -19,9 +19,13 @@ if ! docker info > /dev/null 2>&1; then
   exit 1
 fi
 
-# Start the containers in detached mode
-echo "Starting Docker containers..."
-docker-compose down  # Stop any existing containers first
+# Stop any existing containers first
+echo "Stopping any existing containers..."
+docker-compose down 
+
+# Start the containers in detached mode with rebuilding
+echo "Building and starting Docker containers..."
+docker-compose build --no-cache
 docker-compose up -d
 
 # Check if services started successfully
@@ -29,6 +33,17 @@ if [ $? -eq 0 ]; then
   echo "System started successfully! Frontend available at http://localhost:3000"
   echo "To view logs, run: ./logs.sh"
   echo "To stop the system, run: ./stop.sh"
+  
+  # Wait a bit for services to initialize
+  echo "Waiting for services to initialize..."
+  sleep 5
+  
+  # Show logs of all containers to verify startup
+  echo "Checking initial container logs:"
+  docker-compose logs --tail=20
+  
+  echo ""
+  echo "For ongoing logs, run: docker-compose logs -f"
 else
   echo "Error starting the system."
   echo "Running docker-compose logs to help diagnose the issue:"

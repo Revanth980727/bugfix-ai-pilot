@@ -39,6 +39,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./code_repo:/app/code_repo
+      - ./backend:/app:ro  # Make backend code readable in the container
     depends_on:
       - planner
       - developer
@@ -149,11 +150,13 @@ services:
       - SLACK_CHANNEL=${SLACK_CHANNEL:-""}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONPATH=/app
     env_file:
       - ./.env
     volumes:
       - ./code_repo:/app/code_repo
       - ./logs:/app/logs
+      - ./backend/github_utils.py:/app/github_utils.py:ro  # Mount github_utils.py directly
     networks:
       - bugfix_network
     healthcheck:

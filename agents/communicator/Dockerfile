@@ -6,9 +6,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the agent code to the correct location
+# Copy the agent code and github utilities
 COPY ./communicator/agent.py /app/
 COPY ./utils /app/utils/
+COPY ../backend/github_utils.py /app/
 
 # Create necessary directories
 RUN mkdir -p /app/utils
