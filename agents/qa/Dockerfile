@@ -11,4 +11,7 @@ COPY . .
 # Ensure the mount point exists
 RUN mkdir -p /app/code_repo
 
-CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8003"]
+# Make sure uvicorn is in the PATH
+ENV PATH="/usr/local/bin:${PATH}"
+
+CMD ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8003"]

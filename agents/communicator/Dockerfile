@@ -18,4 +18,7 @@ RUN ln -sf /app/agents/utils /app/utils
 # Set Python path to include the app directory
 ENV PYTHONPATH=/app
 
-CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8004"]
+# Make sure uvicorn is in the PATH
+ENV PATH="/usr/local/bin:${PATH}"
+
+CMD ["python", "-m", "uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8004"]
