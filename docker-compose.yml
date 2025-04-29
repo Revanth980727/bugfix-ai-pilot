@@ -1,3 +1,4 @@
+
 version: '3.9'
 
 services:
@@ -130,8 +131,8 @@ services:
 
   communicator:
     build:
-      context: ./agents
-      dockerfile: ./communicator/Dockerfile
+      context: .
+      dockerfile: ./agents/communicator/Dockerfile
     ports:
       - "8004:8004"
     environment:
