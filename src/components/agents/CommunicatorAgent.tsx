@@ -3,12 +3,13 @@ import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
-import { GitPullRequest, MessageSquare, Github, AlertTriangle, Info } from 'lucide-react';
+import { GitPullRequest, MessageSquare, Github, AlertTriangle, Info, RefreshCcw } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
 import { AgentStatus } from '@/hooks/useDashboardState';
 import { Update } from '@/types/ticket';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 
 interface CommunicatorAgentProps {
   status: AgentStatus;
@@ -19,6 +20,8 @@ interface CommunicatorAgentProps {
   earlyEscalation?: boolean;
   escalationReason?: string;
   confidenceScore?: number;
+  retryCount?: number;
+  maxRetries?: number;
 }
 
 export function CommunicatorAgent({ 
@@ -29,7 +32,9 @@ export function CommunicatorAgent({
   jiraUrl,
   earlyEscalation,
   escalationReason,
-  confidenceScore
+  confidenceScore,
+  retryCount = 0,
+  maxRetries = 4
 }: CommunicatorAgentProps) {
   const { toast } = useToast();
   
@@ -45,8 +50,22 @@ export function CommunicatorAgent({
     }
   };
 
+  const isEscalated = earlyEscalation || (retryCount >= maxRetries);
+
   return (
     <AgentCard title="Communicator" type="communicator" status={status} progress={progress}>
+      {retryCount > 0 && maxRetries > 0 && (
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <RefreshCcw className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Attempt {retryCount}/{maxRetries}</span>
+          </div>
+          {retryCount > 0 && (
+            <Progress value={(retryCount / maxRetries) * 100} className="h-2 w-24" />
+          )}
+        </div>
+      )}
+      
       {status === 'idle' && !updates && (
         <div className="text-muted-foreground">
           Waiting for QA results...
@@ -65,12 +84,18 @@ export function CommunicatorAgent({
         </div>
       )}
       
-      {earlyEscalation && (
+      {isEscalated && (
         <div className="mb-3 p-2 border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 rounded-md flex items-start gap-2">
           <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5" />
           <div className="text-sm">
-            <p className="font-medium text-amber-800 dark:text-amber-300">Early Escalation</p>
-            <p className="text-amber-700 dark:text-amber-400">{escalationReason || "Ticket has been escalated early"}</p>
+            <p className="font-medium text-amber-800 dark:text-amber-300">
+              {earlyEscalation ? "Early Escalation" : "Escalated after max retries"}
+            </p>
+            <p className="text-amber-700 dark:text-amber-400">
+              {escalationReason || 
+               (earlyEscalation ? "Ticket has been escalated early" : 
+                `Maximum retry attempts (${maxRetries}) reached`)}
+            </p>
             {confidenceScore !== undefined && confidenceScore < 60 && (
               <p className="text-xs mt-1">Confidence score: {confidenceScore}%</p>
             )}

@@ -16,16 +16,30 @@ export function useCommunicatorAgent() {
   const [earlyEscalation, setEarlyEscalation] = useState(false);
   const [escalationReason, setEscalationReason] = useState<string | undefined>(undefined);
   const [confidenceScore, setConfidenceScore] = useState<number | undefined>(undefined);
+  const [retryCount, setRetryCount] = useState(0);
+  const [maxRetries, setMaxRetries] = useState(4);
 
   const simulateWork = (
     onComplete: () => void, 
     mockUpdates: Update[], 
     mockResult?: CommunicatorResult,
-    isEarlyEscalation?: boolean,
-    reason?: string,
-    confidence?: number
+    options?: {
+      isEarlyEscalation?: boolean;
+      reason?: string;
+      confidence?: number;
+      retryCount?: number;
+      maxRetries?: number;
+    }
   ) => {
     setStatus('working');
+    
+    const {
+      isEarlyEscalation,
+      reason,
+      confidence,
+      retryCount: attemptCount,
+      maxRetries: maxAttempts
+    } = options || {};
     
     if (isEarlyEscalation) {
       setEarlyEscalation(true);
@@ -34,6 +48,14 @@ export function useCommunicatorAgent() {
     
     if (confidence !== undefined) {
       setConfidenceScore(confidence);
+    }
+    
+    if (attemptCount !== undefined) {
+      setRetryCount(attemptCount);
+    }
+    
+    if (maxAttempts !== undefined) {
+      setMaxRetries(maxAttempts);
     }
     
     const interval = setInterval(() => {
@@ -61,6 +83,8 @@ export function useCommunicatorAgent() {
     setEarlyEscalation(false);
     setEscalationReason(undefined);
     setConfidenceScore(undefined);
+    setRetryCount(0);
+    setMaxRetries(4);
   };
 
   return {
@@ -72,6 +96,8 @@ export function useCommunicatorAgent() {
     earlyEscalation,
     escalationReason,
     confidenceScore,
+    retryCount,
+    maxRetries,
     simulateWork,
     reset
   };

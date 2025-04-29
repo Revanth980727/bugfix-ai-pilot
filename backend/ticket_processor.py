@@ -1,3 +1,4 @@
+
 import logging
 import asyncio
 import os
@@ -32,6 +33,8 @@ logger = logging.getLogger("ticket-processor")
 
 # Get retry delay from environment or default to 5 seconds
 RETRY_DELAY_SECONDS = int(os.environ.get('RETRY_DELAY_SECONDS', '5'))
+# Get confidence threshold from environment or default to 60%
+CONFIDENCE_THRESHOLD = int(os.environ.get('CONFIDENCE_THRESHOLD', '60'))
 
 async def process_ticket(ticket: Dict[str, Any]):
     """Process a single ticket through the enhanced agent workflow"""
@@ -57,7 +60,6 @@ async def process_ticket(ticket: Dict[str, Any]):
         
         # Step 1: Enhanced Planner Analysis
         logger.info(f"Sending ticket {ticket_id} to enhanced Planner agent")
-        await update_jira_ticket(ticket_id, "", "Planner analyzing bug")
         
         # Prepare enhanced input with additional ticket fields
         enhanced_ticket = ticket.copy()
@@ -66,12 +68,7 @@ async def process_ticket(ticket: Dict[str, Any]):
         if 'jira_id' in ticket and ('labels' not in ticket or 'attachments' not in ticket):
             try:
                 # This would fetch additional ticket data from JIRA in a real implementation
-                # For now, let's just log that we would do this
                 logger.info(f"Would fetch additional JIRA fields for ticket {ticket_id}")
-                
-                # Placeholder for fetched data
-                # enhanced_ticket['labels'] = ['bug', 'critical', 'backend']
-                # enhanced_ticket['attachments'] = ['screenshot.png', 'logs.txt']
             except Exception as e:
                 logger.warning(f"Could not fetch additional ticket data: {str(e)}")
         
@@ -96,6 +93,15 @@ async def process_ticket(ticket: Dict[str, Any]):
                 if valid_files > 0 or invalid_files > 0:
                     logger.info(f"Planner identified {valid_files} valid files and {invalid_files} invalid files")
             
+            # Notify JIRA about planner completion
+            await call_communicator_agent(
+                ticket_id=ticket_id,
+                diffs=None,
+                test_results=None,
+                commit_message=None,
+                agent_type="planner"
+            )
+            
             # Check if fallback was used
             if planner_analysis.get('using_fallback'):
                 logger.warning(f"Planner used fallback mechanism for ticket {ticket_id}")
@@ -118,19 +124,27 @@ async def process_ticket(ticket: Dict[str, Any]):
         
         while current_attempt <= MAX_RETRIES and not qa_passed:
             logger.info(f"Sending ticket {ticket_id} to Developer agent (attempt {current_attempt}/{MAX_RETRIES})")
-            update_ticket_status(ticket_id, "processing", {"current_attempt": current_attempt})
+            update_ticket_status(ticket_id, "processing", {
+                "current_attempt": current_attempt,
+                "max_attempts": MAX_RETRIES
+            })
             
             # Update JIRA
             if current_attempt == 1:
                 await update_jira_ticket(ticket_id, "", "Developer generating patch")
             else:
+                # Include detailed failure information from previous attempt for smart retries
+                previous_failure = ""
+                if retry_history and "failure_summary" in retry_history[-1].get("qa_results", {}):
+                    previous_failure = f" based on previous failure: {retry_history[-1]['qa_results']['failure_summary']}"
+                
                 await update_jira_ticket(
                     ticket_id,
                     "",
-                    f"Developer generating revised patch (attempt {current_attempt}/{MAX_RETRIES})"
+                    f"Developer generating revised patch (attempt {current_attempt}/{MAX_RETRIES}){previous_failure}"
                 )
             
-            # Developer context with QA feedback from previous attempts
+            # Developer context with QA feedback from previous attempts for smart retries
             developer_context = {"previousAttempts": retry_history}
             
             # Call Developer
@@ -147,6 +161,45 @@ async def process_ticket(ticket: Dict[str, Any]):
             
             if developer_response:
                 log_agent_output(ticket_id, "developer", developer_response)
+                
+                # Check for confidence score and consider early escalation
+                confidence_score = developer_response.get("confidence_score")
+                if confidence_score is not None and confidence_score < CONFIDENCE_THRESHOLD:
+                    logger.warning(f"Low confidence score ({confidence_score}%) detected, considering early escalation")
+                    
+                    # Update ticket status
+                    update_ticket_status(ticket_id, "escalated", {
+                        "escalated": True,
+                        "early_escalation": True,
+                        "escalation_reason": f"Low confidence patch ({confidence_score}%)",
+                        "confidence_score": confidence_score
+                    })
+                    
+                    # Call communicator for early escalation
+                    await call_communicator_agent(
+                        ticket_id=ticket_id,
+                        diffs=[],
+                        test_results=None,
+                        commit_message=None,
+                        early_escalation=True,
+                        early_escalation_reason=f"Low confidence patch ({confidence_score}%)",
+                        retry_count=current_attempt,
+                        max_retries=MAX_RETRIES,
+                        confidence_score=confidence_score
+                    )
+                    
+                    return
+                    
+                # Notify JIRA about developer patch
+                await call_communicator_agent(
+                    ticket_id=ticket_id,
+                    diffs=developer_response.get("diffs", []),
+                    test_results=None,
+                    commit_message=None,
+                    agent_type="developer",
+                    retry_count=current_attempt,
+                    max_retries=MAX_RETRIES
+                )
             else:
                 log_error(ticket_id, "developer", f"Developer patch generation failed on attempt {current_attempt}")
                 update_ticket_status(ticket_id, "error")
@@ -187,7 +240,7 @@ async def process_ticket(ticket: Dict[str, Any]):
             log_message = f"[Ticket: {ticket_id}] Retry {current_attempt}/{MAX_RETRIES} | QA Result: {result_status}{failure_info} | {timestamp}"
             logger.info(log_message)
             
-            # Store results for future retries
+            # Store results for future retries - key for smart retry logic
             retry_entry = {
                 "attempt": current_attempt,
                 "patch_content": developer_response.get("diffs", []),
@@ -195,40 +248,67 @@ async def process_ticket(ticket: Dict[str, Any]):
             }
             retry_history.append(retry_entry)
             
+            # Update ticket status with retry information
+            update_ticket_status(ticket_id, "processing", {
+                "retry_history": retry_history,
+                "current_attempt": current_attempt,
+                "max_attempts": MAX_RETRIES
+            })
+            
+            # Check for repeated failure patterns that might indicate we should escalate early
+            if not qa_passed and current_attempt >= 2 and len(retry_history) >= 2:
+                # Get the two most recent failure summaries
+                latest_failure = qa_response.get("failure_summary", "")
+                previous_failure = retry_history[-2]["qa_results"].get("failure_summary", "")
+                
+                # Simple check for similar failures - could be made more sophisticated
+                if latest_failure and previous_failure and latest_failure[:50] == previous_failure[:50]:
+                    logger.warning(f"Detected repeated failure pattern: '{latest_failure[:50]}...'")
+                    
+                    # Only escalate early if we've seen this pattern twice and have at least one more retry available
+                    if current_attempt < MAX_RETRIES:
+                        logger.warning(f"Early escalation due to repeated failure pattern")
+                        
+                        # Update ticket status
+                        update_ticket_status(ticket_id, "escalated", {
+                            "escalated": True,
+                            "early_escalation": True,
+                            "escalation_reason": "Repeated failure pattern detected",
+                        })
+                        
+                        # Call communicator for early escalation
+                        await call_communicator_agent(
+                            ticket_id=ticket_id,
+                            diffs=[],
+                            test_results=qa_response.get("test_results", []),
+                            commit_message=None,
+                            early_escalation=True,
+                            early_escalation_reason=f"Repeated failure pattern: {latest_failure[:100]}...",
+                            retry_count=current_attempt,
+                            max_retries=MAX_RETRIES,
+                            failure_details=latest_failure
+                        )
+                        
+                        return
+            
             if not qa_passed and current_attempt >= MAX_RETRIES:
                 # Max retries reached, escalate to human
                 update_ticket_status(ticket_id, "escalated", {"escalated": True})
                 
                 # Include failure summary in escalation note
                 failure_summary = qa_response.get("failure_summary", "Unknown error")
-                await update_jira_ticket(
-                    ticket_id,
-                    "Needs Review",
-                    f"BugFix AI: All {MAX_RETRIES} fix attempts failed. Last failure: {failure_summary}. This ticket requires human attention.",
-                    {"needs_human_review": True}
-                )
                 
                 # Call communicator for escalation
-                communicator_input = {
-                    "ticket_id": ticket_id,
-                    "test_passed": False,
-                    "escalated": True,
-                    "retry_count": current_attempt,
-                    "max_retries": MAX_RETRIES,
-                    "failure_summary": failure_summary
-                }
-                log_agent_input(ticket_id, "communicator_escalation", communicator_input)
-                
-                communicator_response = await call_communicator_agent(
-                    ticket_id,
-                    [],
-                    qa_response["test_results"],
-                    f"Failed after {MAX_RETRIES} attempts: {failure_summary}",
-                    escalated=True
+                await call_communicator_agent(
+                    ticket_id=ticket_id,
+                    diffs=[],
+                    test_results=qa_response.get("test_results", []),
+                    commit_message=None,
+                    escalated=True,
+                    retry_count=current_attempt,
+                    max_retries=MAX_RETRIES,
+                    failure_details=failure_summary
                 )
-                
-                if communicator_response:
-                    log_agent_output(ticket_id, "communicator_escalation", communicator_response)
                 
                 return
             
@@ -236,9 +316,6 @@ async def process_ticket(ticket: Dict[str, Any]):
                 # Wait before trying again
                 logger.info(f"Waiting {RETRY_DELAY_SECONDS} seconds before next retry")
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
-            else:
-                # Clear retry history on success
-                retry_history = []
             
             current_attempt += 1
         
@@ -248,21 +325,17 @@ async def process_ticket(ticket: Dict[str, Any]):
         # Step 5: Communicator for successful fix
         logger.info(f"Sending ticket {ticket_id} to Communicator agent")
         
-        communicator_input = {
-            "ticket_id": ticket_id,
-            "diffs": developer_response["diffs"],
-            "test_results": qa_response["test_results"],
-            "commit_message": developer_response["commit_message"],
-            "qa_passed": qa_passed,
-            "attempts": current_attempt - 1  # -1 because we increment at end of loop
-        }
-        log_agent_input(ticket_id, "communicator", communicator_input)
+        commit_message = developer_response.get("commit_message", f"Fix bug {ticket_id}")
+        if not commit_message.startswith(f"Fix {ticket_id}:"):
+            commit_message = f"Fix {ticket_id}: {commit_message}"
         
         communicator_response = await call_communicator_agent(
-            ticket_id,
-            developer_response["diffs"],
-            qa_response["test_results"],
-            developer_response["commit_message"]
+            ticket_id=ticket_id,
+            diffs=developer_response["diffs"],
+            test_results=qa_response.get("test_results", []),
+            commit_message=commit_message,
+            test_passed=True,
+            retry_count=current_attempt - 1  # -1 because we increment at end of loop
         )
         
         if communicator_response:
