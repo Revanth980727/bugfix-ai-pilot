@@ -9,9 +9,12 @@ from dotenv import load_dotenv
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("github-service-test")
 
+# Add the current directory to the path
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
 def test_github_service():
     """Test the GitHub service functionality"""
-    from github_service import GitHubService
+    from github_service.github_service import GitHubService
     
     # Initialize service
     service = GitHubService()
