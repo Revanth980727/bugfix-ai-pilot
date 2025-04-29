@@ -15,5 +15,5 @@ RUN mkdir -p /app/code_repo
 # Set up environment variables
 ENV PYTHONPATH=/app
 
-# Run the orchestrator 
+# Run the orchestrator with the correct Python module path
 CMD ["python", "-m", "orchestrator.start_orchestrator"]

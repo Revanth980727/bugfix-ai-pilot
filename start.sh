@@ -13,8 +13,15 @@ if [ ! -f ./.env ]; then
   exit 1
 fi
 
+# Check if Docker is running
+if ! docker info > /dev/null 2>&1; then
+  echo "Error: Docker is not running. Please start Docker and try again."
+  exit 1
+fi
+
 # Start the containers in detached mode
 echo "Starting Docker containers..."
+docker-compose down  # Stop any existing containers first
 docker-compose up -d
 
 # Check if services started successfully
@@ -26,6 +33,7 @@ else
   echo "Error starting the system."
   echo "Running docker-compose logs to help diagnose the issue:"
   docker-compose logs
-  echo "For more detailed logs, run: ./logs.sh"
+  echo "For more detailed logs of a specific service, run: docker-compose logs SERVICE_NAME"
+  echo "For example: docker-compose logs backend"
   echo "To stop the system, run: ./stop.sh"
 fi

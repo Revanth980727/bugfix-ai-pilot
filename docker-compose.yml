@@ -64,17 +64,15 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONPATH=/app
     env_file:
       - ./.env
     volumes:
       - ./code_repo:/app/code_repo
-      - ./logs:/app/logs/planner
-      - ./agents/utils:/app/utils
+      - ./logs:/app/logs
     networks:
       - bugfix_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/"] || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
@@ -91,17 +89,15 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - MAX_RETRIES=${MAX_RETRIES:-4}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONPATH=/app
     env_file:
       - ./.env
     volumes:
       - ./code_repo:/app/code_repo
-      - ./logs:/app/logs/developer
-      - ./agents/utils:/app/utils
+      - ./logs:/app/logs
     networks:
       - bugfix_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8002/"] || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
@@ -117,17 +113,15 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TEST_COMMAND=${PROJECT_TEST_COMMAND:-pytest}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONPATH=/app
     env_file:
       - ./.env
     volumes:
       - ./code_repo:/app/code_repo
-      - ./logs:/app/logs/qa
-      - ./agents/utils:/app/utils
+      - ./logs:/app/logs
     networks:
       - bugfix_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8003/"] || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
@@ -155,17 +149,15 @@ services:
       - SLACK_CHANNEL=${SLACK_CHANNEL:-""}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONPATH=/app
     env_file:
       - ./.env
     volumes:
-      - ./logs:/app/logs/communicator
       - ./code_repo:/app/code_repo
-      - ./agents/utils:/app/utils
+      - ./logs:/app/logs
     networks:
       - bugfix_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8004/"] || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
