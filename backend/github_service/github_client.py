@@ -11,11 +11,43 @@ logger = logging.getLogger("github-client")
 class GitHubClient:
     def __init__(self):
         self.client = Github(GITHUB_TOKEN)
-        self.repo = self.client.get_repo(f"{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
+        
+        # Verify token is valid
+        try:
+            if not GITHUB_TOKEN or GITHUB_TOKEN == "your_github_token_here":
+                logger.error("Invalid GitHub token. Please set a valid GITHUB_TOKEN in .env")
+                raise ValueError("Invalid GitHub token. Please set a valid GITHUB_TOKEN in .env")
+                
+            if not GITHUB_REPO_OWNER or not GITHUB_REPO_NAME:
+                logger.error("GitHub repository owner or name not specified")
+                raise ValueError("GitHub repository owner or name not specified")
+            
+            # Test authentication
+            self.client.get_user().login
+            
+            # Get repository reference
+            self.repo = self.client.get_repo(f"{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
+            logger.info(f"Successfully connected to GitHub repository: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
+            
+        except GithubException as e:
+            if e.status == 401:
+                logger.error("GitHub authentication failed: Bad credentials. Check your GITHUB_TOKEN.")
+                self.repo = None
+            elif e.status == 404:
+                logger.error(f"Repository {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME} not found. Check your repository settings.")
+                self.repo = None
+            else:
+                logger.error(f"GitHub API error: {str(e)}")
+                self.repo = None
+            raise
     
     def create_branch(self, branch_name: str, base_branch: str = None) -> Optional[str]:
         """Create a new branch from the specified base branch."""
         try:
+            if not self.repo:
+                logger.error("Repository connection not established")
+                return None
+                
             # Get the base branch
             if not base_branch:
                 base_branch = self.repo.default_branch
@@ -41,6 +73,10 @@ class GitHubClient:
                       commit_message: str) -> bool:
         """Commit multiple file changes to a branch."""
         try:
+            if not self.repo:
+                logger.error("Repository connection not established")
+                return False
+                
             # Get the latest commit on the branch
             ref = self.repo.get_git_ref(f"heads/{branch_name}")
             latest_commit = self.repo.get_git_commit(ref.object.sha)
@@ -81,6 +117,10 @@ class GitHubClient:
                           base_branch: str = None) -> Optional[str]:
         """Create a pull request from the specified branch."""
         try:
+            if not self.repo:
+                logger.error("Repository connection not established")
+                return None
+                
             if not base_branch:
                 base_branch = self.repo.default_branch
             

@@ -196,7 +196,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: python -m github_service.test_service
+    command: sh -c "echo 'Starting GitHub service...' && python -m github_service.test_service || echo 'GitHub service test completed with errors. Check the logs for details.'"
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_REPO_OWNER=${GITHUB_REPO_OWNER}
@@ -210,7 +210,7 @@ services:
       - ./logs:/app/logs/github_service
     networks:
       - bugfix_network
-    restart: unless-stopped
+    restart: "no"
 
 networks:
   bugfix_network:

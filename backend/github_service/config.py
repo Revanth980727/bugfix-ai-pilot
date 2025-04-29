@@ -1,6 +1,11 @@
 
 import os
+import logging
 from dotenv import load_dotenv
+
+# Configure logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("github-config")
 
 # Load environment variables
 load_dotenv()
@@ -22,9 +27,15 @@ def verify_config():
     missing_vars = [var for var, value in required_vars.items() if not value]
     
     if missing_vars:
-        raise EnvironmentError(
-            f"Missing required GitHub environment variables: {', '.join(missing_vars)}\n"
-            "Please check your .env file and ensure all required variables are set."
-        )
+        error_msg = f"Missing required GitHub environment variables: {', '.join(missing_vars)}"
+        logger.error(error_msg)
+        logger.error("Please check your .env file and ensure all required variables are set.")
+        return False
+        
+    # Check if token is a placeholder
+    if GITHUB_TOKEN == "your_github_token_here":
+        logger.error("GITHUB_TOKEN contains a placeholder value. Please set a valid GitHub token in your .env file.")
+        return False
 
+    logger.info("GitHub configuration validated successfully")
     return True
