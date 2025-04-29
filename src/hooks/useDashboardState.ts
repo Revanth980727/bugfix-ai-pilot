@@ -147,37 +147,41 @@ export const useDashboardState = () => {
         // Handle both old and new format for affected files
         let affectedFiles: string[] | AffectedFile[] = [];
         
-        // Fix: Use conditional check for properties instead of direct access
-        if (Array.isArray(plannerOutput.affected_files)) {
+        // Check if plannerOutput has affected_files or affectedFiles property
+        if (plannerOutput && 'affected_files' in plannerOutput && Array.isArray(plannerOutput.affected_files)) {
           // New format
           affectedFiles = plannerOutput.affected_files;
-        } else if (Array.isArray(plannerOutput.affectedFiles)) {
+        } else if (plannerOutput && 'affectedFiles' in plannerOutput && Array.isArray(plannerOutput.affectedFiles)) {
           // Old format
           affectedFiles = plannerOutput.affectedFiles;
         }
         
-        setPlannerAnalysis({
+        // Create base planner analysis object
+        const plannerAnalysis: PlannerAnalysis = {
           ticket_id: details.ticket.id || '',
-          bug_summary: plannerOutput.rootCause || plannerOutput.bug_summary || '',
+          bug_summary: '',  // Will be set below
           affected_files: affectedFiles,
-          error_type: plannerOutput.error_type || 'Unknown',
+          error_type: 'Unknown',  // Will be updated below if available
           affectedFiles: plannerOutput.affectedFiles || [],
           rootCause: plannerOutput.rootCause || '',
           suggestedApproach: plannerOutput.suggestedApproach || ''
-        });
-
-        if ('errorType' in plannerOutput) {
-          setPlannerAnalysis(prev => ({
-            ...prev!,
-            error_type: plannerOutput.errorType as string
-          }));
-        } else if ('error_type' in plannerOutput) {
-          setPlannerAnalysis(prev => ({
-            ...prev!,
-            error_type: plannerOutput.error_type as string
-          }));
+        };
+        
+        // Set bug_summary from either bug_summary or rootCause
+        if ('bug_summary' in plannerOutput) {
+          plannerAnalysis.bug_summary = plannerOutput.bug_summary as string;
+        } else if (plannerOutput.rootCause) {
+          plannerAnalysis.bug_summary = plannerOutput.rootCause;
         }
         
+        // Set error_type if available
+        if ('error_type' in plannerOutput) {
+          plannerAnalysis.error_type = plannerOutput.error_type as string;
+        } else if ('errorType' in plannerOutput && typeof plannerOutput.errorType === 'string') {
+          plannerAnalysis.error_type = plannerOutput.errorType;
+        }
+        
+        setPlannerAnalysis(plannerAnalysis);
         setPlannerProgress(100);
       }
       
