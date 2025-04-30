@@ -3,6 +3,7 @@ import asyncio
 import logging
 import signal
 import sys
+import traceback
 from typing import Dict, Set
 
 from . import config
@@ -28,10 +29,13 @@ class JiraService:
             # Validate configuration
             config.validate_config()
             
+            logger.info("Initializing JIRA service and agent framework...")
+            
             # Initialize JIRA client
             self.jira_client = JiraClient()
             
             # Initialize agents for processing
+            logger.info("Setting up agent instances...")
             self.planner_agent = PlannerAgent()
             self.developer_agent = DeveloperAgent()
             self.qa_agent = QAAgent()
@@ -62,6 +66,11 @@ class JiraService:
             current_status = ticket["status"]
             logger.info(f"Processing ticket {ticket_id} with status '{current_status}'")
             
+            # Check if we've already processed this ticket
+            if ticket_id in self.processed_tickets:
+                logger.info(f"Ticket {ticket_id} has already been processed. Skipping.")
+                return
+            
             # Add to processed tickets to avoid duplicate processing
             self.processed_tickets.add(ticket_id)
             
@@ -76,19 +85,60 @@ class JiraService:
                     logger.info(f"Ticket {ticket_id} marked as In Progress")
                     
                     # Trigger the agent workflow to process the ticket
+                    logger.info(f"Starting agent workflow for ticket {ticket_id}...")
                     asyncio.create_task(self.run_agent_workflow(ticket))
+                else:
+                    logger.error(f"Failed to update ticket {ticket_id} status to In Progress")
+            else:
+                logger.info(f"Ticket {ticket_id} is already in progress")
         except Exception as e:
             logger.error(f"Error processing ticket {ticket.get('ticket_id', 'unknown')}: {e}")
+            logger.error(traceback.format_exc())
     
     async def run_agent_workflow(self, ticket):
         """Run the complete agent workflow for a ticket"""
         ticket_id = ticket["ticket_id"]
-        logger.info(f"Starting agent workflow for ticket {ticket_id}")
+        logger.info(f"==== STARTING AGENT WORKFLOW FOR TICKET {ticket_id} ====")
         
         try:
             # Step 1: Run the planner agent
             logger.info(f"Running planner agent for ticket {ticket_id}")
-            planner_result = self.planner_agent.run(ticket)
+            
+            # Debug log the ticket content
+            logger.info(f"Ticket content for planner: {ticket}")
+            
+            # Create input for planner
+            planner_input = {
+                "ticket_id": ticket_id,
+                "title": ticket.get("title", "No title"),
+                "description": ticket.get("description", "No description"),
+                "status": ticket.get("status", "Unknown")
+            }
+            logger.info(f"Planner input: {planner_input}")
+            
+            # Run planner (synchronous)
+            try:
+                logger.info("Executing planner agent...")
+                planner_result = self.planner_agent.run(planner_input)
+                logger.info(f"Planner agent returned: {planner_result}")
+            except Exception as e:
+                logger.error(f"Error running planner agent: {e}")
+                logger.error(traceback.format_exc())
+                await self.jira_client.update_ticket(
+                    ticket_id, 
+                    "Needs Review", 
+                    f"Error running planner agent: {str(e)}"
+                )
+                return
+            
+            if not planner_result:
+                logger.warning(f"Planner agent returned no result for ticket {ticket_id}")
+                await self.jira_client.update_ticket(
+                    ticket_id, 
+                    "Needs Review", 
+                    "BugFix AI couldn't analyze this ticket properly: No result from planner"
+                )
+                return
             
             if planner_result.get("using_fallback", False):
                 logger.warning(f"Planner agent used fallback for ticket {ticket_id}")
@@ -108,12 +158,44 @@ class JiraService:
                 
                 # Add the ticket_id to planner_result
                 developer_input = {**planner_result, "ticket_id": ticket_id}
-                developer_result = self.developer_agent.run(developer_input)
+                logger.info(f"Developer input: {developer_input}")
+                
+                try:
+                    logger.info("Executing developer agent...")
+                    developer_result = self.developer_agent.run(developer_input)
+                    logger.info(f"Developer agent returned: {developer_result}")
+                except Exception as e:
+                    logger.error(f"Error running developer agent: {e}")
+                    logger.error(traceback.format_exc())
+                    if attempt == max_retries:
+                        await self.jira_client.update_ticket(
+                            ticket_id, 
+                            "Needs Review", 
+                            f"Error running developer agent after {max_retries} attempts: {str(e)}"
+                        )
+                        return
+                    continue
                 
                 # Step 3: Run the QA agent to test the fix
                 logger.info(f"Running QA agent for ticket {ticket_id} (attempt {attempt}/{max_retries})")
                 qa_input = {"ticket_id": ticket_id}
-                qa_result = self.qa_agent.run(qa_input)
+                logger.info(f"QA input: {qa_input}")
+                
+                try:
+                    logger.info("Executing QA agent...")
+                    qa_result = self.qa_agent.run(qa_input)
+                    logger.info(f"QA agent returned: {qa_result}")
+                except Exception as e:
+                    logger.error(f"Error running QA agent: {e}")
+                    logger.error(traceback.format_exc())
+                    if attempt == max_retries:
+                        await self.jira_client.update_ticket(
+                            ticket_id, 
+                            "Needs Review", 
+                            f"Error running QA agent after {max_retries} attempts: {str(e)}"
+                        )
+                        return
+                    continue
                 
                 # Check if tests passed
                 if qa_result.get("passed", False):
@@ -143,7 +225,30 @@ class JiraService:
                 "planner_result": planner_result,
                 "qa_result": qa_result if 'qa_result' in locals() else {"passed": False}
             }
-            self.communicator_agent.run(communicator_input)
+            logger.info(f"Communicator input: {communicator_input}")
+            
+            try:
+                logger.info("Executing communicator agent...")
+                communicator_result = self.communicator_agent.run(communicator_input)
+                logger.info(f"Communicator agent returned: {communicator_result}")
+            except Exception as e:
+                logger.error(f"Error running communicator agent: {e}")
+                logger.error(traceback.format_exc())
+                
+                # Even if communicator fails, we should update the ticket status
+                if success:
+                    await self.jira_client.update_ticket(
+                        ticket_id,
+                        "Done",
+                        "BugFix AI successfully fixed the issue, but failed to create PR."
+                    )
+                else:
+                    await self.jira_client.update_ticket(
+                        ticket_id,
+                        "Needs Review",
+                        f"BugFix AI couldn't fix the issue after {max_retries} attempts. Human review needed."
+                    )
+                return
             
             # Update the ticket status based on the final result
             if success:
@@ -161,25 +266,32 @@ class JiraService:
                 
         except Exception as e:
             logger.error(f"Error in agent workflow for ticket {ticket_id}: {str(e)}")
+            logger.error(traceback.format_exc())
             # Update ticket as failed
             await self.jira_client.update_ticket(
                 ticket_id,
                 "Needs Review",
                 f"Error in agent workflow: {str(e)}"
             )
+        finally:
+            logger.info(f"==== COMPLETED AGENT WORKFLOW FOR TICKET {ticket_id} ====")
     
     async def poll_tickets(self):
         """Poll JIRA for new bug tickets"""
         try:
+            logger.info("Polling JIRA for bug tickets...")
             tickets = await self.jira_client.fetch_bug_tickets()
             
+            logger.info(f"Found {len(tickets)} tickets to process")
             for ticket in tickets:
                 ticket_id = ticket.get("ticket_id")
                 if ticket_id and ticket_id not in self.processed_tickets:
+                    logger.info(f"Found new ticket to process: {ticket_id}")
                     await self.process_ticket(ticket)
         
         except Exception as e:
             logger.error(f"Error during ticket polling: {e}")
+            logger.error(traceback.format_exc())
     
     async def start_polling(self):
         """Start the polling loop"""
@@ -191,6 +303,7 @@ class JiraService:
                 await self.poll_tickets()
             except Exception as e:
                 logger.error(f"Error in polling loop: {e}")
+                logger.error(traceback.format_exc())
             
             await asyncio.sleep(self.poll_interval)
     
