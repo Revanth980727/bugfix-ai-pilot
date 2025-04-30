@@ -1,4 +1,3 @@
-
 import logging
 import os
 from typing import List, Dict, Any, Optional
@@ -27,7 +26,7 @@ class JiraClient:
     
     async def fetch_bug_tickets(self) -> List[Dict[str, Any]]:
         """
-        Fetch bug tickets from JIRA that are in To Do or Open status
+        Fetch bug tickets from JIRA that are in To Do, Open, or In Progress status
         
         Returns:
             List of ticket dictionaries with fields mapped to standard format
@@ -35,8 +34,8 @@ class JiraClient:
         try:
             logger.info("Fetching bug tickets from JIRA")
             
-            # Build JQL query to find bug tickets in To Do or Open status
-            jql = f"issuetype = Bug AND (status = \"To Do\" OR status = Open) AND project = {self.project_key}"
+            # Build JQL query to find bug tickets including In Progress status
+            jql = f"issuetype = Bug AND (status = \"To Do\" OR status = Open OR status = \"In Progress\") AND project = {self.project_key}"
             
             # Fields to retrieve
             fields = "summary,description,status,issuetype,created,updated,assignee,reporter,priority"
@@ -69,22 +68,51 @@ class JiraClient:
                 for issue in issues:
                     # Handle description field which might be complex JSON or plain text
                     description = issue["fields"].get("description", "")
-                    if isinstance(description, dict):
-                        # Extract text from Atlassian Document Format
-                        desc_text = self._extract_text_from_adf(description)
-                    else:
-                        desc_text = str(description)
+                    desc_text = ""
+                    
+                    # Enhanced error handling for description field
+                    try:
+                        if description is None:
+                            desc_text = ""
+                        elif isinstance(description, dict):
+                            # Extract text from Atlassian Document Format
+                            desc_text = self._extract_text_from_adf(description)
+                            # If we couldn't extract text, provide a fallback message
+                            if not desc_text.strip():
+                                desc_text = "No readable description available"
+                        else:
+                            desc_text = str(description)
+                    except Exception as e:
+                        logger.error(f"Error processing description for {issue['key']}: {str(e)}")
+                        desc_text = "Error processing description"
+                    
+                    # Safely extract fields with null checks
+                    status_name = "Unknown"
+                    if issue["fields"].get("status") and isinstance(issue["fields"]["status"], dict):
+                        status_name = issue["fields"]["status"].get("name", "Unknown")
+                        
+                    reporter_name = "Unknown"
+                    if issue["fields"].get("reporter") and isinstance(issue["fields"]["reporter"], dict):
+                        reporter_name = issue["fields"]["reporter"].get("displayName", "Unknown")
+                        
+                    assignee_name = "Unassigned"
+                    if issue["fields"].get("assignee") and isinstance(issue["fields"]["assignee"], dict):
+                        assignee_name = issue["fields"]["assignee"].get("displayName", "Unassigned")
+                        
+                    priority_name = "Medium"
+                    if issue["fields"].get("priority") and isinstance(issue["fields"]["priority"], dict):
+                        priority_name = issue["fields"]["priority"].get("name", "Medium")
                     
                     ticket = {
                         "ticket_id": issue["key"],
-                        "title": issue["fields"]["summary"],
+                        "title": issue["fields"].get("summary", "No title"),
                         "description": desc_text,
-                        "status": issue["fields"]["status"]["name"],
-                        "created": issue["fields"]["created"],
-                        "updated": issue["fields"]["updated"],
-                        "reporter": issue["fields"]["reporter"]["displayName"],
-                        "assignee": issue["fields"].get("assignee", {}).get("displayName", "Unassigned"),
-                        "priority": issue["fields"]["priority"]["name"] if "priority" in issue["fields"] else "Medium"
+                        "status": status_name,
+                        "created": issue["fields"].get("created", ""),
+                        "updated": issue["fields"].get("updated", ""),
+                        "reporter": reporter_name,
+                        "assignee": assignee_name,
+                        "priority": priority_name
                     }
                     tickets.append(ticket)
                 
@@ -111,14 +139,20 @@ class JiraClient:
         
         # Process content array
         content = doc.get("content", [])
+        if content is None:  # Additional null check
+            return ""
+            
         for item in content:
+            if not item or not isinstance(item, dict):
+                continue
+                
             # Handle paragraph
             if item.get("type") == "paragraph":
                 paragraph_text = self._process_content_item(item)
                 if paragraph_text:
                     text_parts.append(paragraph_text)
             # Handle other types like headings, lists, etc.
-            elif "text" in item:
+            elif item.get("text"):
                 text_parts.append(item["text"])
                 
         return "\n".join(text_parts)
@@ -140,10 +174,16 @@ class JiraClient:
         
         # Process content array
         content = item.get("content", [])
+        if content is None:  # Additional null check
+            return ""
+            
         for subitem in content:
-            if "text" in subitem:
+            if not subitem or not isinstance(subitem, dict):
+                continue
+                
+            if subitem.get("text"):
                 text_parts.append(subitem["text"])
-            elif subitem.get("content"):
+            elif subitem.get("content") and isinstance(subitem.get("content"), list):
                 text_parts.append(self._process_content_item(subitem))
                 
         return " ".join(text_parts)

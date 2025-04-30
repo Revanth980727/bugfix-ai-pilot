@@ -1,4 +1,3 @@
-
 import logging
 import os
 import httpx
@@ -28,12 +27,18 @@ async def call_planner_agent(ticket: Dict[str, Any]):
         if not ticket_id:
             logger.error("Ticket missing required field: ticket_id")
             return None
+        
+        # Ensure description field is not None
+        description = ticket.get("description", "")
+        if description is None:
+            description = ""
+            logger.warning(f"Ticket {ticket_id} has None description, using empty string")
             
         # Create a request payload with all available ticket information
         payload = {
             "ticket_id": ticket_id,
             "title": ticket.get("title", ""),
-            "description": ticket.get("description", ""),
+            "description": description,
             "repository": ticket.get("repository", "main")
         }
         

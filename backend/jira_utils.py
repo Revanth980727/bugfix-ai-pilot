@@ -159,7 +159,7 @@ async def fetch_jira_tickets() -> List[Dict[str, Any]]:
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             # Include In Progress tickets as well to ensure workflow continuation
-            jql_query = 'labels = Bug AND (status = "To Do" OR status = "In Progress")'
+            jql_query = 'labels = Bug AND (status = "To Do" OR status = "In Progress" OR status = "Open")'
             
             response = await client.get(
                 f"{JIRA_URL}/rest/api/3/search",
@@ -229,23 +229,47 @@ async def fetch_jira_tickets() -> List[Dict[str, Any]]:
                 # Handle description which might be in Atlassian Document Format
                 description = ""
                 if fields.get("description"):
-                    if isinstance(fields["description"], dict):
-                        # Try to extract text from ADF
+                    # Add additional null check and ensure we're not trying to access None values
+                    desc_field = fields["description"]
+                    if isinstance(desc_field, dict):
+                        # Try to extract text from ADF with enhanced error handling
                         try:
-                            desc_content = fields["description"].get("content", [])
+                            desc_content = desc_field.get("content", [])
+                            if desc_content is None:  # Additional null check
+                                desc_content = []
+                                
                             desc_parts = []
                             for content in desc_content:
+                                if not content or not isinstance(content, dict):
+                                    continue
+                                    
                                 if content.get("type") == "paragraph":
                                     paragraph_content = content.get("content", [])
+                                    if paragraph_content is None:
+                                        continue
+                                        
                                     for text in paragraph_content:
-                                        if text.get("text"):
-                                            desc_parts.append(text["text"])
+                                        if not text or not isinstance(text, dict):
+                                            continue
+                                            
+                                        text_value = text.get("text")
+                                        if text_value:
+                                            desc_parts.append(text_value)
+                                        
                             description = "\n".join(desc_parts)
+                            
+                            # If we couldn't extract any text, provide a fallback
+                            if not description:
+                                logger.warning(f"Failed to extract description text for {ticket_id} - using fallback")
+                                description = "No readable description available"
+                                
                         except Exception as e:
                             logger.warning(f"Failed to parse description for {ticket_id}: {e}")
                             description = "Error extracting description"
+                    elif desc_field is None:
+                        description = ""
                     else:
-                        description = str(fields["description"])
+                        description = str(desc_field)
                 
                 new_tickets.append({
                     "ticket_id": ticket_id,
