@@ -18,17 +18,31 @@ class CommunicatorAgent(Agent):
         self.jira_client = JiraClient()
         self.github_service = GitHubService()
         self.max_api_retries = 3  # Maximum retries for API calls
+        # Define fallback status transitions for different JIRA workflows
+        self.status_fallbacks = {
+            "Resolved": ["Done", "Ready for Release", "Fixed", "Closed", "In Review"]
+        }
         
     async def _update_jira_ticket(self, ticket_id: str, status: str, comment: str) -> bool:
         """Update JIRA ticket with status and comment with retry logic"""
         retry_count = 0
         while retry_count < self.max_api_retries:
             try:
+                # Try the requested status first
                 success = await self.jira_client.update_ticket(ticket_id, status, comment)
                 if success:
                     logger.info(f"Successfully updated JIRA ticket {ticket_id}")
                     return success
                 else:
+                    # If the requested status failed, try fallback statuses if available
+                    if status in self.status_fallbacks:
+                        for fallback_status in self.status_fallbacks[status]:
+                            logger.info(f"Trying fallback status '{fallback_status}' for ticket {ticket_id}")
+                            fallback_success = await self.jira_client.update_ticket(ticket_id, fallback_status, comment)
+                            if fallback_success:
+                                logger.info(f"Successfully updated JIRA ticket {ticket_id} with fallback status '{fallback_status}'")
+                                return True
+                    
                     logger.warning(f"Failed to update JIRA ticket {ticket_id}, retrying ({retry_count + 1}/{self.max_api_retries})")
                     retry_count += 1
                     if retry_count < self.max_api_retries:
@@ -194,10 +208,10 @@ class CommunicatorAgent(Agent):
                 "confidenceScore": confidence_score
             })
             
-            # Update JIRA
+            # Update JIRA - try "Done" first since that worked in the logs
             jira_updates_success = await self._update_jira_ticket(
                 ticket_id,
-                "Resolved",
+                "Done",  # Changed from "Resolved" to "Done" based on the logs
                 jira_comment
             )
             

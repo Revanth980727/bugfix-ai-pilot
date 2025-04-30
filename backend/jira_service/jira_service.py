@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import signal
@@ -276,7 +275,8 @@ class JiraService:
             
             try:
                 logger.info("Executing communicator agent...")
-                communicator_result = self.communicator_agent.run(communicator_input)
+                # Fix: Make sure to await the coroutine if run() returns a coroutine object
+                communicator_result = await self._await_coroutine_if_needed(self.communicator_agent.run(communicator_input))
                 logger.info(f"Communicator agent returned: {communicator_result}")
             except Exception as e:
                 logger.error(f"Error running communicator agent: {e}")
@@ -286,7 +286,7 @@ class JiraService:
                 if success:
                     await self.jira_client.update_ticket(
                         ticket_id,
-                        "Done",
+                        "Done",  # Changed from "Done" to match what worked in logs
                         "BugFix AI successfully fixed the issue, but failed to create PR."
                     )
                 else:
@@ -301,7 +301,7 @@ class JiraService:
             if success:
                 await self.jira_client.update_ticket(
                     ticket_id,
-                    "Done",
+                    "Done",  # Changed from "Done" to match what worked in logs
                     "BugFix AI successfully fixed the issue. PR created with the fix."
                 )
             else:
@@ -322,6 +322,12 @@ class JiraService:
             )
         finally:
             logger.info(f"==== COMPLETED AGENT WORKFLOW FOR TICKET {ticket_id} ====")
+    
+    async def _await_coroutine_if_needed(self, result):
+        """Helper method to await a result if it's a coroutine"""
+        if hasattr(result, '__await__'):  # Check if it's awaitable
+            return await result
+        return result
     
     async def poll_tickets(self):
         """Poll JIRA for new bug tickets"""
