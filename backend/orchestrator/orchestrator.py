@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import os
@@ -437,10 +436,14 @@ class Orchestrator:
             with open(f"{log_dir}/communicator_input.json", 'w') as f:
                 json.dump(communicator_input, f, indent=2)
             
+            # FIXED: Await the coroutine before trying to use its result
             communicator_result = await self.run_agent(self.communicator_agent, communicator_input)
             
+            # Write the result, not the coroutine
             with open(f"{log_dir}/communicator_output.json", 'w') as f:
-                json.dump(communicator_result, f, indent=2)
+                # Ensure the result is JSON serializable
+                serializable_result = self._ensure_json_serializable(communicator_result)
+                json.dump(serializable_result, f, indent=2)
             
             # Update ticket tracking
             self.active_tickets[ticket_id]["status"] = "completed"
@@ -450,6 +453,7 @@ class Orchestrator:
             
         except Exception as e:
             logger.error(f"Error finalizing successful fix for ticket {ticket_id}: {str(e)}")
+            logger.error(traceback.format_exc())
             # Even if PR creation fails, we still have the fix locally
             # Mark as needing review
             await self.jira_client.update_ticket(
@@ -496,58 +500,78 @@ class Orchestrator:
                 "early_escalation": early,
                 "early_escalation_reason": reason if early else None,
                 "confidence_score": confidence,
-                "failure_summary": str(failure_summary)  # Ensure it's a string
+                "failure_summary": str(failure_summary)
             }
             
             log_dir = f"logs/{ticket_id}"
-            with open(f"{log_dir}/communicator_input_escalation.json", 'w') as f:
+            os.makedirs(log_dir, exist_ok=True)
+            
+            with open(f"{log_dir}/communicator_escalation_input.json", 'w') as f:
                 json.dump(communicator_input, f, indent=2)
             
-            # Run communicator agent
-            communicator_result = await self.run_agent(self.communicator_agent, communicator_input)
-            
-            # Save result to file
-            if communicator_result is not None:
-                with open(f"{log_dir}/communicator_output_escalation.json", 'w') as f:
-                    json.dump(communicator_result, f, indent=2)
-            
-            # Create escalation message
-            escalation_message = ""
-            if early:
-                escalation_message = f"Early escalation: {reason}"
-                if confidence is not None:
-                    escalation_message += f" (confidence score: {confidence}%)"
-            else:
-                escalation_message = f"Automatic retry limit ({MAX_RETRIES}) reached. Last failure: {failure_summary}"
+            try:
+                # FIXED: Await the coroutine before trying to use its result
+                communicator_result = await self.run_agent(self.communicator_agent, communicator_input)
                 
-            # Update JIRA ticket with escalation message
-            jira_result = await self.jira_client.update_ticket(
-                ticket_id,
-                "Needs Review",
-                escalation_message
-            )
-            
-            if early:
-                logger.info(f"Ticket {ticket_id} has been escalated early after attempt {attempt}: {reason}")
-            else:
-                logger.info(f"Ticket {ticket_id} has been escalated after {attempt} failed attempts")
-            
+                # Ensure the result is serializable before writing
+                serializable_result = self._ensure_json_serializable(communicator_result)
+                
+                with open(f"{log_dir}/communicator_output.json", 'w') as f:
+                    json.dump(serializable_result, f, indent=2)
+                    
+                # Update JIRA with escalation
+                await self.jira_client.update_ticket(
+                    ticket_id,
+                    "Needs Review",
+                    f"BugFix AI was unable to fix this issue after {attempt} attempts. Human review needed. Failure details: {failure_summary}"
+                )
+                
+            except Exception as e:
+                logger.error(f"Error escalating ticket {ticket_id}: {str(e)}")
+                logger.error(traceback.format_exc())
+                # Try to update JIRA even if communicator fails
+                await self.jira_client.update_ticket(
+                    ticket_id,
+                    "Needs Review",
+                    f"BugFix AI was unable to fix this issue after {attempt} attempts. Human review needed."
+                )
         except Exception as e:
             logger.error(f"Error escalating ticket {ticket_id}: {str(e)}")
             logger.error(traceback.format_exc())
     
-    async def run_agent(self, agent: Any, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Run an agent with error handling and retry logic"""
-        try:
-            # Execute the agent's process method
-            result = await asyncio.to_thread(agent.run, input_data)
-            return result
+    async def run_agent(self, agent, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Run an agent and ensure we get a usable result back
         
+        This wrapper handles both regular functions and async functions (coroutines)
+        """
+        try:
+            # Call the agent's run method
+            if asyncio.iscoroutinefunction(agent.run):
+                # If it's async, await it
+                result = await agent.run(input_data)
+            else:
+                # If it's synchronous, just call it directly
+                result = agent.run(input_data)
+            
+            return result
         except Exception as e:
-            logger.error(f"Error running agent {agent.name}: {str(e)}")
-            # agent.status = AgentStatus.FAILED
+            logger.error(f"Error running {agent.name if hasattr(agent, 'name') else 'unknown'} agent: {str(e)}")
+            logger.error(traceback.format_exc())
             return {"error": str(e)}
     
+    def _ensure_json_serializable(self, obj):
+        """Recursively ensures that an object is JSON serializable"""
+        if isinstance(obj, dict):
+            return {k: self._ensure_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._ensure_json_serializable(i) for i in obj]
+        elif hasattr(obj, '__await__'):  # Detect coroutines
+            return f"[Coroutine: {type(obj).__name__}]"
+        elif hasattr(obj, '__dict__'):  # Handle custom objects
+            return str(obj)
+        else:
+            return obj
+
     def get_status(self) -> Dict[str, Any]:
         """Get current status of the orchestrator"""
         status = {

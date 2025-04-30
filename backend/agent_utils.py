@@ -205,11 +205,8 @@ async def call_communicator_agent(
         if confidence_score is not None:
             payload["confidence_score"] = confidence_score
         
-        # Ensure payload is JSON serializable
-        for key in list(payload.keys()):
-            if hasattr(payload[key], '__await__'):  # Check if it's a coroutine
-                logger.warning(f"Removing non-serializable coroutine '{key}' from payload")
-                payload[key] = f"[Coroutine: {key}]"  # Replace with descriptive string
+        # Ensure payload is JSON serializable by removing any non-serializable objects
+        payload = _ensure_json_serializable(payload)
                 
         logger.info(f"Calling Communicator agent with payload: {payload}")
         
@@ -234,3 +231,16 @@ async def call_communicator_agent(
     except Exception as e:
         logger.error(f"Error calling Communicator agent: {str(e)}")
         return None
+
+def _ensure_json_serializable(obj):
+    """Recursively ensures that an object is JSON serializable"""
+    if isinstance(obj, dict):
+        return {k: _ensure_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_ensure_json_serializable(i) for i in obj]
+    elif hasattr(obj, '__await__'):  # Detect coroutines
+        return f"[Coroutine: {type(obj).__name__}]"
+    elif hasattr(obj, '__dict__'):  # Handle custom objects
+        return str(obj)
+    else:
+        return obj
