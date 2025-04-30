@@ -1,3 +1,4 @@
+
 import asyncio
 import logging
 import os
@@ -484,6 +485,7 @@ class Orchestrator:
             # Run communicator agent for escalation
             logger.info(f"Running CommunicatorAgent for escalation of ticket {ticket_id}")
             
+            # Prepare communicator input - make sure it's JSON serializable
             communicator_input = {
                 "ticket_id": ticket_id,
                 "test_passed": False,
@@ -494,19 +496,22 @@ class Orchestrator:
                 "early_escalation": early,
                 "early_escalation_reason": reason if early else None,
                 "confidence_score": confidence,
-                "failure_summary": failure_summary
+                "failure_summary": str(failure_summary)  # Ensure it's a string
             }
             
             log_dir = f"logs/{ticket_id}"
             with open(f"{log_dir}/communicator_input_escalation.json", 'w') as f:
                 json.dump(communicator_input, f, indent=2)
             
+            # Run communicator agent
             communicator_result = await self.run_agent(self.communicator_agent, communicator_input)
             
-            with open(f"{log_dir}/communicator_output_escalation.json", 'w') as f:
-                json.dump(communicator_result, f, indent=2)
+            # Save result to file
+            if communicator_result is not None:
+                with open(f"{log_dir}/communicator_output_escalation.json", 'w') as f:
+                    json.dump(communicator_result, f, indent=2)
             
-            # Update JIRA ticket with escalation message including failure summary
+            # Create escalation message
             escalation_message = ""
             if early:
                 escalation_message = f"Early escalation: {reason}"
@@ -515,7 +520,8 @@ class Orchestrator:
             else:
                 escalation_message = f"Automatic retry limit ({MAX_RETRIES}) reached. Last failure: {failure_summary}"
                 
-            await self.jira_client.update_ticket(
+            # Update JIRA ticket with escalation message
+            jira_result = await self.jira_client.update_ticket(
                 ticket_id,
                 "Needs Review",
                 escalation_message
@@ -528,19 +534,13 @@ class Orchestrator:
             
         except Exception as e:
             logger.error(f"Error escalating ticket {ticket_id}: {str(e)}")
+            logger.error(traceback.format_exc())
     
     async def run_agent(self, agent: Any, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run an agent with error handling and retry logic"""
         try:
-            # Set agent status to running
-            # agent.status = AgentStatus.RUNNING
-            
             # Execute the agent's process method
-            result = await asyncio.to_thread(agent.process, input_data)
-            
-            # Set agent status based on result
-            # agent.status = AgentStatus.SUCCESS if "error" not in result else AgentStatus.FAILED
-            
+            result = await asyncio.to_thread(agent.run, input_data)
             return result
         
         except Exception as e:

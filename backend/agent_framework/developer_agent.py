@@ -1,3 +1,4 @@
+
 import os
 import re
 import json
@@ -291,8 +292,15 @@ class DeveloperAgent(Agent):
         
         # Factor 1: Check if we modified files that were expected
         if expected_files and file_changes:
+            # Process expected_files list - handle both string and dict formats
+            expected_file_basenames = []
+            for file_item in expected_files:
+                if isinstance(file_item, dict) and 'file' in file_item:
+                    expected_file_basenames.append(file_item['file'].split("/")[-1])
+                elif isinstance(file_item, str):
+                    expected_file_basenames.append(file_item.split("/")[-1])
+            
             modified_files = [change["file_path"].split("/")[-1] for change in file_changes]
-            expected_file_basenames = [f.split("/")[-1] for f in expected_files]
             
             matched_files = sum(1 for f in modified_files if f in expected_file_basenames)
             unexpected_files = sum(1 for f in modified_files if f not in expected_file_basenames)
@@ -353,7 +361,20 @@ class DeveloperAgent(Agent):
         
         # Extract data from input
         summary = input_data.get("summary", "")
-        likely_files = input_data.get("affected_files", [])
+        
+        # Handle affected_files which could be a list of strings or a list of dicts
+        affected_files = input_data.get("affected_files", [])
+        likely_files = []
+        
+        # Process affected_files to get a list of strings
+        if isinstance(affected_files, list):
+            for item in affected_files:
+                if isinstance(item, str):
+                    likely_files.append(item)
+                elif isinstance(item, dict) and "file" in item:
+                    # If it's a dict, extract the file path
+                    likely_files.append(item["file"])
+        
         likely_modules = input_data.get("affected_modules", [])
         likely_functions = input_data.get("affected_functions", [])
         errors = input_data.get("errors_identified", [])
@@ -383,7 +404,7 @@ class DeveloperAgent(Agent):
             patch_results = self._apply_patch(file_changes)
             
             # Calculate confidence score
-            confidence_score = self.calculate_confidence_score(file_changes, likely_files, patch_results)
+            confidence_score = self.calculate_confidence_score(file_changes, affected_files, patch_results)
             
             # Prepare output
             output = {

@@ -1,3 +1,4 @@
+
 import logging
 import os
 import httpx
@@ -198,12 +199,18 @@ async def call_communicator_agent(
         if max_retries > 0:
             payload["max_retries"] = max_retries
         if failure_details:
-            payload["failure_details"] = failure_details
+            payload["failure_details"] = str(failure_details)  # Ensure it's a string
         if agent_type:
             payload["agent_type"] = agent_type
         if confidence_score is not None:
             payload["confidence_score"] = confidence_score
         
+        # Ensure payload is JSON serializable
+        for key in list(payload.keys()):
+            if hasattr(payload[key], '__await__'):  # Check if it's a coroutine
+                logger.warning(f"Removing non-serializable coroutine '{key}' from payload")
+                payload[key] = f"[Coroutine: {key}]"  # Replace with descriptive string
+                
         logger.info(f"Calling Communicator agent with payload: {payload}")
         
         async with httpx.AsyncClient(timeout=120.0) as client:
