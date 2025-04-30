@@ -62,7 +62,8 @@ class Orchestrator:
     async def fetch_eligible_tickets(self) -> List[Dict[str, Any]]:
         """Fetch eligible tickets from JIRA that need processing"""
         try:
-            tickets = await self.jira_client.fetch_tickets()
+            # Changed from fetch_tickets to fetch_bug_tickets to match the actual method name in JiraClient
+            tickets = await self.jira_client.fetch_bug_tickets()
             
             # Filter tickets to only process those in "To Do" status
             eligible_tickets = [
@@ -75,7 +76,7 @@ class Orchestrator:
         except Exception as e:
             logger.error(f"Error fetching eligible tickets: {str(e)}")
             return []
-    
+
     async def process_ticket(self, ticket: Dict[str, Any]) -> None:
         """Process a single ticket through the AI agent pipeline"""
         ticket_id = ticket["ticket_id"]
