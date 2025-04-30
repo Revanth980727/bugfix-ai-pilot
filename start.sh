@@ -6,6 +6,10 @@ echo "Starting BugFix AI system..."
 mkdir -p logs
 mkdir -p code_repo
 
+# Ensure directories have proper permissions
+chmod 777 logs
+chmod 777 code_repo
+
 # Check if .env file exists at the root level
 if [ ! -f ./.env ]; then
   echo "Error: .env file not found in the root directory!"
@@ -25,7 +29,7 @@ docker-compose down
 
 # Start the containers in detached mode with rebuilding
 echo "Building and starting Docker containers..."
-docker-compose build --no-cache
+docker-compose build
 docker-compose up -d
 
 # Check if services started successfully

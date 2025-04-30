@@ -1,4 +1,3 @@
-
 version: '3.9'
 
 services:
@@ -40,7 +39,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./code_repo:/app/code_repo
-      - ./backend:/app:ro  # Make backend code readable in the container
+      - ./backend:/app
     depends_on:
       - planner
       - developer
@@ -157,7 +156,7 @@ services:
     volumes:
       - ./code_repo:/app/code_repo
       - ./logs:/app/logs
-      - ./backend/github_utils.py:/app/github_utils.py:ro  # Mount github_utils.py directly
+      - ./backend/github_utils.py:/app/github_utils.py
     networks:
       - bugfix_network
     healthcheck:

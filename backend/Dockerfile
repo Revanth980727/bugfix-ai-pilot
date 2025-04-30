@@ -6,11 +6,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/logs && chmod 777 /app/logs
+RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 
-# Create necessary directories
-RUN mkdir -p /app/logs
-RUN mkdir -p /app/code_repo
+COPY . .
 
 # Set up environment variables
 ENV PYTHONPATH=/app
