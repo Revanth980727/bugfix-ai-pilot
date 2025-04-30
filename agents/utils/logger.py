@@ -2,91 +2,110 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional
-import sys
-import json
+import traceback
 
 class Logger:
-    """A simple logger to track agent activities with timestamps"""
+    """Enhanced logging utility for agents"""
     
-    def __init__(self, name: str, log_file: Optional[str] = None, log_level: str = None):
+    def __init__(self, name, log_to_file=True):
         """
-        Initialize a logger with a name and optional log file path
+        Initialize logger with name
         
         Args:
-            name: Name of the logger/agent
-            log_file: Path to log file (if None, will use 'logs/{name}_{date}.log')
-            log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+            name: Name for the logger
+            log_to_file: Whether to log to a file (in addition to console)
         """
         self.name = name
         
-        # Set log level from environment or parameter or default to INFO
-        log_level = log_level or os.environ.get('LOG_LEVEL', 'INFO').upper()
-        numeric_level = getattr(logging, log_level, logging.INFO)
-        
-        # Create logs directory if it doesn't exist
-        os.makedirs("logs", exist_ok=True)
-        
-        # Set up log file if not provided
-        if not log_file:
-            date_str = datetime.now().strftime("%Y%m%d")
-            log_file = f"logs/{name}_{date_str}.log"
-        
-        # Configure logging
+        # Create logger with appropriate name
         self.logger = logging.getLogger(name)
-        self.logger.setLevel(numeric_level)
         
-        # Clear existing handlers if any (useful for testing/reloading)
-        if self.logger.hasHandlers():
-            self.logger.handlers.clear()
+        # Only add handlers if they don't exist
+        if not self.logger.handlers:
+            self.logger.setLevel(logging.INFO)
+            
+            # Create console handler
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            
+            # Create formatter
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            
+            # Add formatter to console handler
+            console_handler.setFormatter(formatter)
+            
+            # Add console handler to logger
+            self.logger.addHandler(console_handler)
+            
+            # Add file handler if requested
+            if log_to_file:
+                # Create logs directory if it doesn't exist
+                os.makedirs("logs", exist_ok=True)
+                
+                # Create file handler
+                log_file = f"logs/{name}_{datetime.now().strftime('%Y%m%d')}.log"
+                file_handler = logging.FileHandler(log_file)
+                file_handler.setLevel(logging.INFO)
+                file_handler.setFormatter(formatter)
+                
+                # Add file handler to logger
+                self.logger.addHandler(file_handler)
         
-        # Add file handler
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(numeric_level)
-        
-        # Add console handler
-        console_handler = logging.StreamHandler(sys.stdout)  # Use stdout instead of stderr
-        console_handler.setLevel(numeric_level)
-        
-        # Create formatter
-        formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
-        file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
-        
-        # Add handlers to logger
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
+        # Keep track of current task for timing
+        self.current_task = None
+        self.task_start_time = None
     
-    def info(self, message: str) -> None:
-        """Log info message"""
+    def start_task(self, task_name):
+        """
+        Start timing a task
+        
+        Args:
+            task_name: Name of the task to time
+        """
+        self.current_task = task_name
+        self.task_start_time = datetime.now()
+        self.logger.info(f"Starting task: {task_name}")
+    
+    def end_task(self, task_name, success=True):
+        """
+        End timing a task and log the duration
+        
+        Args:
+            task_name: Name of the task that was timed
+            success: Whether the task completed successfully
+        """
+        if self.task_start_time and self.current_task == task_name:
+            duration = datetime.now() - self.task_start_time
+            status = "completed successfully" if success else "failed"
+            self.logger.info(f"Task {task_name} {status} in {duration.total_seconds():.2f} seconds")
+            self.current_task = None
+            self.task_start_time = None
+    
+    def debug(self, message):
+        """Log a debug message"""
+        self.logger.debug(message)
+    
+    def info(self, message):
+        """Log an info message"""
         self.logger.info(message)
     
-    def error(self, message: str) -> None:
-        """Log error message"""
-        self.logger.error(message)
-    
-    def warning(self, message: str) -> None:
-        """Log warning message"""
+    def warning(self, message):
+        """Log a warning message"""
         self.logger.warning(message)
     
-    def debug(self, message: str) -> None:
-        """Log debug message"""
-        self.logger.debug(message)
+    def error(self, message, exc_info=None):
+        """
+        Log an error message, optionally with exception info
         
-    def critical(self, message: str) -> None:
-        """Log critical message"""
-        self.logger.critical(message)
-    
-    def start_task(self, task_name: str) -> None:
-        """Log start of a task"""
-        self.info(f"Starting {task_name}")
-        
-    def end_task(self, task_name: str, success: bool = True) -> None:
-        """Log end of a task"""
-        status = "successfully" if success else "with failures"
-        self.info(f"Completed {task_name} {status}")
-        
-    def log_dict(self, message: str, data: dict) -> None:
-        """Log a dictionary as JSON"""
-        json_str = json.dumps(data, indent=2)
-        self.info(f"{message}: {json_str}")
+        Args:
+            message: Error message to log
+            exc_info: Boolean or exception to include stack trace
+        """
+        if exc_info is True:
+            # Include the stack trace in the log
+            self.logger.error(f"{message}\n{traceback.format_exc()}")
+        else:
+            self.logger.error(message)

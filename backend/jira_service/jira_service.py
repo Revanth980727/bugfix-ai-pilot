@@ -7,6 +7,16 @@ from typing import Dict, Set
 
 from . import config
 from .jira_client import JiraClient
+# Import the agent controller to process tickets
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from agent_framework.planner_agent import PlannerAgent
+from agent_framework.developer_agent import DeveloperAgent
+from agent_framework.qa_agent import QAAgent
+from agent_framework.communicator_agent import CommunicatorAgent
 
 # Set up logging
 logger = config.setup_logging()
@@ -20,6 +30,12 @@ class JiraService:
             
             # Initialize JIRA client
             self.jira_client = JiraClient()
+            
+            # Initialize agents for processing
+            self.planner_agent = PlannerAgent()
+            self.developer_agent = DeveloperAgent()
+            self.qa_agent = QAAgent()
+            self.communicator_agent = CommunicatorAgent()
             
             # Track processed tickets to avoid duplicates
             self.processed_tickets: Set[str] = set()
@@ -49,9 +65,7 @@ class JiraService:
             # Add to processed tickets to avoid duplicate processing
             self.processed_tickets.add(ticket_id)
             
-            # Example: Update ticket status and add comment
-            # In a real implementation, this would integrate with the ticket_processor.py to
-            # handle the actual processing of the ticket through the agent workflow
+            # Mark ticket as in progress in JIRA
             if ticket_id not in self.tickets_in_progress:
                 # This is a new ticket, set it to "In Progress" and add initial comment
                 comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
@@ -61,10 +75,98 @@ class JiraService:
                     self.tickets_in_progress[ticket_id] = ticket
                     logger.info(f"Ticket {ticket_id} marked as In Progress")
                     
-                    # Here you would integrate with the rest of your agent workflow
-                    # For example, by sending this ticket to your ticket_processor
+                    # Trigger the agent workflow to process the ticket
+                    asyncio.create_task(self.run_agent_workflow(ticket))
         except Exception as e:
             logger.error(f"Error processing ticket {ticket.get('ticket_id', 'unknown')}: {e}")
+    
+    async def run_agent_workflow(self, ticket):
+        """Run the complete agent workflow for a ticket"""
+        ticket_id = ticket["ticket_id"]
+        logger.info(f"Starting agent workflow for ticket {ticket_id}")
+        
+        try:
+            # Step 1: Run the planner agent
+            logger.info(f"Running planner agent for ticket {ticket_id}")
+            planner_result = self.planner_agent.run(ticket)
+            
+            if planner_result.get("using_fallback", False):
+                logger.warning(f"Planner agent used fallback for ticket {ticket_id}")
+                await self.jira_client.update_ticket(
+                    ticket_id, 
+                    "Needs Review", 
+                    f"BugFix AI couldn't analyze this ticket properly: {planner_result.get('bug_summary', 'Unknown error')}"
+                )
+                return
+            
+            # Step 2: Run the developer agent with the planner results
+            max_retries = 4
+            success = False
+            
+            for attempt in range(1, max_retries + 1):
+                logger.info(f"Running developer agent for ticket {ticket_id} (attempt {attempt}/{max_retries})")
+                
+                # Add the ticket_id to planner_result
+                developer_input = {**planner_result, "ticket_id": ticket_id}
+                developer_result = self.developer_agent.run(developer_input)
+                
+                # Step 3: Run the QA agent to test the fix
+                logger.info(f"Running QA agent for ticket {ticket_id} (attempt {attempt}/{max_retries})")
+                qa_input = {"ticket_id": ticket_id}
+                qa_result = self.qa_agent.run(qa_input)
+                
+                # Check if tests passed
+                if qa_result.get("passed", False):
+                    success = True
+                    break
+                    
+                # If this is the last attempt and tests failed, escalate
+                if attempt == max_retries:
+                    logger.warning(f"All {max_retries} attempts failed for ticket {ticket_id}")
+                    break
+                    
+                # Add a comment about the failed attempt
+                await self.jira_client.update_ticket(
+                    ticket_id,
+                    "In Progress",
+                    f"Attempt {attempt}/{max_retries} failed. Retrying with improved fix."
+                )
+                
+                # Wait before the next attempt
+                await asyncio.sleep(5)
+            
+            # Step 4: Run the communicator agent to update the ticket
+            logger.info(f"Running communicator agent for ticket {ticket_id}")
+            communicator_input = {
+                "ticket_id": ticket_id,
+                "success": success,
+                "planner_result": planner_result,
+                "qa_result": qa_result if 'qa_result' in locals() else {"passed": False}
+            }
+            self.communicator_agent.run(communicator_input)
+            
+            # Update the ticket status based on the final result
+            if success:
+                await self.jira_client.update_ticket(
+                    ticket_id,
+                    "Done",
+                    "BugFix AI successfully fixed the issue. PR created with the fix."
+                )
+            else:
+                await self.jira_client.update_ticket(
+                    ticket_id,
+                    "Needs Review",
+                    f"BugFix AI couldn't fix the issue after {max_retries} attempts. Human review needed."
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in agent workflow for ticket {ticket_id}: {str(e)}")
+            # Update ticket as failed
+            await self.jira_client.update_ticket(
+                ticket_id,
+                "Needs Review",
+                f"Error in agent workflow: {str(e)}"
+            )
     
     async def poll_tickets(self):
         """Poll JIRA for new bug tickets"""
