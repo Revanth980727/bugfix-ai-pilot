@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -7,6 +8,7 @@ import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import httpx
+import asyncio
 
 # Add the project root to the Python path
 sys.path.append('/app')
@@ -18,18 +20,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger("communicator-agent")
 
-# Import github_utils directly - the file should be copied to the container
+# Import GitHub service from backend
 try:
-    import github_utils
-    create_branch = github_utils.create_branch
-    commit_changes = github_utils.commit_changes
-    create_pull_request = github_utils.create_pull_request
-    logger.info("Successfully imported github_utils directly")
-except ImportError as e:
-    logger.error(f"Error importing github_utils directly: {str(e)}")
-    # Fallback to old approach
+    # First try to import directly from the github_service package
+    from backend.github_service.github_service import GitHubService
+    github_service = GitHubService()
+    logger.info("Successfully imported GitHubService from backend package")
+except ImportError:
     try:
-        # Construct a path to github_utils.py that could be mounted in the Docker container
+        # Fallback to using the github_utils
+        import github_utils
+        create_branch = github_utils.create_branch
+        commit_changes = github_utils.commit_changes
+        create_pull_request = github_utils.create_pull_request
+        logger.info("Successfully imported github_utils directly")
+    except ImportError as e:
+        logger.error(f"Error importing GitHub utilities: {str(e)}")
+        # Try to find github_utils.py in the container
         path_options = [
             '/app/github_utils.py',  # Local copy
             '/app/backend/github_utils.py'  # Original path
@@ -44,7 +51,6 @@ except ImportError as e:
                 github_utils = importlib.util.module_from_spec(spec)
                 
                 # Add an env module to the system modules to avoid import errors
-                # This is a mock/stub for the env module
                 sys.modules["env"] = type("env", (), {
                     "GITHUB_TOKEN": os.environ.get("GITHUB_TOKEN")
                 })
@@ -59,10 +65,7 @@ except ImportError as e:
                 
                 break
         else:
-            raise FileNotFoundError("Could not find github_utils.py")
-    except Exception as e:
-        logger.error(f"Error importing github_utils: {str(e)}")
-        raise
+            logger.error("Could not find GitHub utilities - PR creation will be unavailable")
 
 app = FastAPI(title="BugFix AI Communicator Agent")
 
@@ -102,50 +105,99 @@ async def deploy_fix(request: DeployRequest):
     logger.info(f"Deploying fix for ticket {request.ticket_id}")
     
     try:
-        # Create a branch for the fix
-        branch_name = create_branch(
-            request.repository,
-            request.ticket_id,
-            "main"  # Use main branch as base
-        )
-        
-        if not branch_name:
-            raise HTTPException(status_code=500, detail="Failed to create branch")
-        
-        # Format the diffs for the commit
-        file_changes = []
-        for diff in request.diffs:
-            file_changes.append({
-                "filename": diff.filename,
-                "content": diff.diff
-            })
-        
-        # Commit the changes
-        commit_success = commit_changes(
-            request.repository,
-            branch_name,
-            file_changes,
-            request.commit_message
-        )
-        
-        if not commit_success:
-            raise HTTPException(status_code=500, detail="Failed to commit changes")
-        
-        # Create pull request
-        pr_url = create_pull_request(
-            request.repository,
-            branch_name,
-            request.ticket_id,
-            f"Fix for {request.ticket_id}",
-            f"Automated bug fix for {request.ticket_id}\n\nThis PR contains the following changes:\n" + 
-            "\n".join([f"- {diff.filename}: {diff.explanation}" for diff in request.diffs])
-        )
+        # Check if we're using the GitHub service or github_utils
+        if 'github_service' in globals():
+            # Create a branch for the fix
+            branch_name = github_service.create_fix_branch(
+                request.ticket_id,
+                "main"  # Use main branch as base
+            )
+            
+            if not branch_name:
+                raise HTTPException(status_code=500, detail="Failed to create branch")
+            
+            # Format the diffs for the commit
+            file_changes = []
+            for diff in request.diffs:
+                file_changes.append({
+                    "filename": diff.filename,
+                    "content": diff.diff
+                })
+            
+            # Commit the changes
+            commit_success = github_service.commit_bug_fix(
+                branch_name,
+                file_changes,
+                request.ticket_id,
+                request.commit_message
+            )
+            
+            if not commit_success:
+                raise HTTPException(status_code=500, detail="Failed to commit changes")
+            
+            # Create pull request
+            pr_url = github_service.create_fix_pr(
+                branch_name,
+                request.ticket_id,
+                f"Fix for {request.ticket_id}",
+                f"Automated bug fix for {request.ticket_id}\n\nThis PR contains the following changes:\n" + 
+                "\n".join([f"- {diff.filename}: {diff.explanation}" for diff in request.diffs])
+            )
+        else:
+            # Fallback to github_utils
+            branch_name = create_branch(
+                request.repository,
+                request.ticket_id,
+                "main"  # Use main branch as base
+            )
+            
+            if not branch_name:
+                raise HTTPException(status_code=500, detail="Failed to create branch")
+            
+            # Format the diffs for the commit
+            file_changes = []
+            for diff in request.diffs:
+                file_changes.append({
+                    "filename": diff.filename,
+                    "content": diff.diff
+                })
+            
+            # Commit the changes
+            commit_success = commit_changes(
+                request.repository,
+                branch_name,
+                file_changes,
+                request.commit_message
+            )
+            
+            if not commit_success:
+                raise HTTPException(status_code=500, detail="Failed to commit changes")
+            
+            # Create pull request
+            pr_url = create_pull_request(
+                request.repository,
+                branch_name,
+                request.ticket_id,
+                f"Fix for {request.ticket_id}",
+                f"Automated bug fix for {request.ticket_id}\n\nThis PR contains the following changes:\n" + 
+                "\n".join([f"- {diff.filename}: {diff.explanation}" for diff in request.diffs])
+            )
         
         # Update JIRA ticket status
         jira_success = await update_jira_ticket(request.ticket_id, pr_url)
         
         # Send notifications
         await send_notifications(request.ticket_id, pr_url, request.repository)
+        
+        # Add a comment to the PR
+        if pr_url and 'github_service' in globals():
+            comment = f"This PR was created automatically by BugFix AI to fix issue {request.ticket_id}"
+            try:
+                # Extract PR number from URL if needed
+                pr_number = pr_url.split('/')[-1]
+                await github_service.add_pr_comment(pr_number, comment)
+            except Exception as e:
+                logger.error(f"Failed to add comment to PR {pr_url}: {str(e)}")
         
         logger.info(f"Deployment successful for ticket {request.ticket_id}, PR created at {pr_url}")
         
@@ -181,8 +233,8 @@ async def update_jira_ticket(ticket_id: str, pr_url: Optional[str] = None) -> bo
                     "content": [{
                         "type": "paragraph",
                         "content": [{
-                            "type": "text",
-                            "text": f"Bug fix implemented by BugFix AI. Pull request: {pr_url}"
+                            "text": f"Bug fix implemented by BugFix AI. Pull request: {pr_url}",
+                            "type": "text"
                         }]
                     }]
                 }

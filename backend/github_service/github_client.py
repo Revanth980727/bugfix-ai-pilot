@@ -177,3 +177,41 @@ class GitHubClient:
             logger.error(f"Failed to create pull request: {str(e)}")
             return None
 
+    def add_pr_comment(self, pr_number: int, comment: str) -> bool:
+        """
+        Add a comment to a pull request
+        
+        Args:
+            pr_number: The PR number
+            comment: The comment text
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not self.repo:
+                logger.error("Repository connection not established")
+                return False
+                
+            # Convert pr_number to int if it's a string
+            if isinstance(pr_number, str) and pr_number.isdigit():
+                pr_number = int(pr_number)
+                
+            logger.info(f"Adding comment to PR #{pr_number}")
+            
+            # Get PR and add comment
+            pr = self.repo.get_pull(pr_number)
+            pr.create_issue_comment(comment)
+            
+            logger.info(f"Successfully added comment to PR #{pr_number}")
+            return True
+                
+        except GithubException as e:
+            if e.status == 404:
+                logger.error(f"PR #{pr_number} not found. Check PR number.")
+            else:
+                logger.error(f"Error adding comment to PR #{pr_number}: {str(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error adding comment to PR #{pr_number}: {str(e)}")
+            return False
