@@ -11,6 +11,7 @@ logger = logging.getLogger("github-client")
 class GitHubClient:
     def __init__(self):
         self.client = Github(GITHUB_TOKEN)
+        self.token = GITHUB_TOKEN
         
         # Verify token is valid
         try:
@@ -40,6 +41,32 @@ class GitHubClient:
                 logger.error(f"GitHub API error: {str(e)}")
                 self.repo = None
             raise
+    
+    def get_file_content(self, file_path: str, branch: str = None) -> str:
+        """Get the content of a file from the repository"""
+        try:
+            if not self.repo:
+                logger.error("Repository connection not established")
+                return ""
+                
+            # If branch is not specified, use the default branch
+            if not branch:
+                branch = self.repo.default_branch
+                
+            # Get the file content
+            file_content = self.repo.get_contents(file_path, ref=branch)
+            
+            # If file_content is a list, it means it's a directory
+            if isinstance(file_content, list):
+                logger.error(f"{file_path} is a directory, not a file")
+                return ""
+                
+            # Decode content if it's a file
+            return file_content.decoded_content.decode('utf-8')
+            
+        except GithubException as e:
+            logger.error(f"Failed to get file content for {file_path}: {str(e)}")
+            return ""
     
     def create_branch(self, branch_name: str, base_branch: str = None) -> Optional[str]:
         """Create a new branch from the specified base branch."""
@@ -113,8 +140,8 @@ class GitHubClient:
             logger.error(f"Failed to commit changes: {str(e)}")
             return False
     
-    def create_pull_request(self, branch_name: str, title: str, body: str,
-                          base_branch: str = None) -> Optional[str]:
+    def create_pull_request(self, title: str, body: str,
+                          head_branch: str, base_branch: str = None) -> Optional[str]:
         """Create a pull request from the specified branch."""
         try:
             if not self.repo:
@@ -127,7 +154,7 @@ class GitHubClient:
             # Check for existing PR
             existing_prs = self.repo.get_pulls(
                 state='open',
-                head=f"{GITHUB_REPO_OWNER}:{branch_name}",
+                head=f"{GITHUB_REPO_OWNER}:{head_branch}",
                 base=base_branch
             )
             
@@ -139,7 +166,7 @@ class GitHubClient:
             pr = self.repo.create_pull(
                 title=title,
                 body=body,
-                head=branch_name,
+                head=head_branch,
                 base=base_branch
             )
             
@@ -149,3 +176,4 @@ class GitHubClient:
         except GithubException as e:
             logger.error(f"Failed to create pull request: {str(e)}")
             return None
+

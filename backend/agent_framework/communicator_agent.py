@@ -99,6 +99,64 @@ class CommunicatorAgent(Agent):
         logger.error(f"Failed to post GitHub comment to PR {pr_url} after {self.max_api_retries} attempts")
         return False
 
+    async def _apply_gpt_fixes_to_code(self, ticket_id: str, gpt_output: Dict[str, Any]) -> bool:
+        """Apply GPT-suggested fixes to code and commit to GitHub"""
+        try:
+            # Create a new branch for the fix
+            branch_name = self.github_service.create_fix_branch(ticket_id)
+            if not branch_name:
+                logger.error(f"Failed to create branch for ticket {ticket_id}")
+                return False
+                
+            # Extract file paths and GPT response
+            raw_gpt_response = gpt_output.get("raw_gpt_response", "")
+            files_modified = gpt_output.get("files_modified", [])
+            
+            # If no specific files were identified, try to extract from the GPT response
+            if not files_modified and raw_gpt_response:
+                import re
+                file_pattern = r'---FILE: (.*?)---'
+                file_matches = re.findall(file_pattern, raw_gpt_response, re.DOTALL)
+                files_modified = [f.strip() for f in file_matches]
+            
+            # Apply changes to each file
+            success = False
+            if files_modified and raw_gpt_response:
+                for file_path in files_modified:
+                    # If file path starts with /path/to, it's likely a placeholder
+                    if file_path.startswith("/path/to/"):
+                        logger.warning(f"Skipping placeholder file path: {file_path}")
+                        continue
+                        
+                    # Apply changes to this file
+                    file_success = self.github_service.apply_file_changes_from_gpt(
+                        branch_name, file_path, raw_gpt_response, ticket_id
+                    )
+                    success = success or file_success
+                    
+            # Create a pull request if changes were applied
+            if success:
+                pr_url = self.github_service.create_fix_pr(
+                    branch_name, 
+                    ticket_id, 
+                    f"Fix for {ticket_id}", 
+                    f"Applied GPT-suggested fixes for {ticket_id}"
+                )
+                
+                if pr_url:
+                    # Add the GPT response as a comment on the PR
+                    await self._post_github_comment(
+                        pr_url, 
+                        f"# GPT-4 Analysis\n\n```\n{raw_gpt_response}\n```"
+                    )
+                    return True
+                    
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error applying GPT fixes to code: {str(e)}")
+            return False
+
     async def format_agent_comment(self, agent_type: str, message: str, attempt: int = None, max_attempts: int = None) -> str:
         """Format a structured comment for a specific agent type"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -125,6 +183,9 @@ class CommunicatorAgent(Agent):
         failure_details = input_data.get("failure_details", "")
         failure_summary = input_data.get("failure_summary", "")
         
+        # Get developer results which might contain GPT output
+        developer_result = input_data.get("developer_result", {})
+        
         if not ticket_id:
             raise ValueError("ticket_id is required")
         
@@ -136,6 +197,10 @@ class CommunicatorAgent(Agent):
         
         # Timestamp for updates
         timestamp = datetime.now().isoformat()
+        
+        # Try to apply GPT fixes to code if available
+        if developer_result and not test_passed:
+            await self._apply_gpt_fixes_to_code(ticket_id, developer_result)
         
         if early_escalation:
             # Handle early escalation (before max retries)
