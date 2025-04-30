@@ -19,24 +19,30 @@ async def call_planner_agent(ticket: Dict[str, Any]):
     """Send ticket information to the enhanced Planner agent"""
     try:
         # Ensure ticket is not None and has required fields
-        if not ticket:
-            logger.error("Ticket object is None")
+        if not ticket or not isinstance(ticket, dict):
+            logger.error("Ticket object is None or not a dictionary")
+            return None
+            
+        # Validate required fields exist
+        ticket_id = ticket.get("ticket_id", "")
+        if not ticket_id:
+            logger.error("Ticket missing required field: ticket_id")
             return None
             
         # Create a request payload with all available ticket information
         payload = {
-            "ticket_id": ticket.get("ticket_id", ""),
+            "ticket_id": ticket_id,
             "title": ticket.get("title", ""),
             "description": ticket.get("description", ""),
             "repository": ticket.get("repository", "main")
         }
         
         # Add labels if available
-        if "labels" in ticket:
+        if "labels" in ticket and ticket["labels"] is not None:
             payload["labels"] = ticket["labels"]
             
         # Add attachments if available
-        if "attachments" in ticket:
+        if "attachments" in ticket and ticket["attachments"] is not None:
             payload["attachments"] = ticket["attachments"]
         
         logger.info(f"Calling Planner agent with payload: {payload}")
@@ -67,8 +73,8 @@ async def call_developer_agent(planner_analysis: Dict[str, Any], attempt: int, c
     """Send planner analysis to Developer agent"""
     try:
         # Ensure planner_analysis is not None
-        if not planner_analysis:
-            logger.error("Planner analysis is None")
+        if not planner_analysis or not isinstance(planner_analysis, dict):
+            logger.error("Planner analysis is None or not a dictionary")
             return None
             
         payload = {
@@ -77,7 +83,7 @@ async def call_developer_agent(planner_analysis: Dict[str, Any], attempt: int, c
         }
         
         # Add context information (like previous QA results) if available
-        if context:
+        if context and isinstance(context, dict):
             payload["context"] = context
         
         logger.info(f"Calling Developer agent with payload: {payload}")
@@ -108,8 +114,8 @@ async def call_qa_agent(developer_response: Dict[str, Any]):
     """Send developer's changes to QA agent"""
     try:
         # Ensure developer_response is not None
-        if not developer_response:
-            logger.error("Developer response is None")
+        if not developer_response or not isinstance(developer_response, dict):
+            logger.error("Developer response is None or not a dictionary")
             return None
             
         logger.info(f"Calling QA agent with payload: {developer_response}")
@@ -153,6 +159,11 @@ async def call_communicator_agent(
 ):
     """Send results to Communicator agent with enhanced error handling"""
     try:
+        # Validate ticket_id
+        if not ticket_id:
+            logger.error("Missing required parameter: ticket_id")
+            return None
+            
         # Handle default parameters
         if diffs is None:
             diffs = []

@@ -57,6 +57,9 @@ class Orchestrator:
         # Track active tickets
         self.active_tickets = {}
         
+        # Track processed tickets to avoid duplicates with JIRA service
+        self.processed_tickets = set()
+        
         logger.info("Orchestrator initialized")
     
     async def fetch_eligible_tickets(self) -> List[Dict[str, Any]]:
@@ -65,21 +68,59 @@ class Orchestrator:
             # Changed from fetch_tickets to fetch_bug_tickets to match the actual method name in JiraClient
             tickets = await self.jira_client.fetch_bug_tickets()
             
-            # Filter tickets to only process those in "To Do" status
-            eligible_tickets = [
-                ticket for ticket in tickets
-                if ticket.get("status") == "To Do" and ticket.get("ticket_id")
-            ]
+            if not tickets:
+                return []
+                
+            # Filter tickets to process - now include 'In Progress' tickets not already being processed
+            eligible_tickets = []
+            
+            for ticket in tickets:
+                if not ticket or not isinstance(ticket, dict):
+                    continue
+                    
+                ticket_id = ticket.get("ticket_id")
+                if not ticket_id:
+                    continue
+                    
+                status = ticket.get("status", "Unknown")
+                
+                # Check if this is a ticket we should process
+                # Include "In Progress" tickets that we haven't processed yet
+                if (status == "To Do" or 
+                    (status == "In Progress" and ticket_id not in self.processed_tickets and 
+                     ticket_id not in self.active_tickets)):
+                    eligible_tickets.append(ticket)
             
             return eligible_tickets
         
         except Exception as e:
             logger.error(f"Error fetching eligible tickets: {str(e)}")
+            logger.error(traceback.format_exc())
             return []
 
     async def process_ticket(self, ticket: Dict[str, Any]) -> None:
         """Process a single ticket through the AI agent pipeline"""
-        ticket_id = ticket["ticket_id"]
+        # Validate ticket
+        if not ticket or not isinstance(ticket, dict):
+            logger.error("Invalid ticket object: not a dictionary or None")
+            return
+            
+        ticket_id = ticket.get("ticket_id")
+        if not ticket_id:
+            logger.error("Invalid ticket: missing ticket_id")
+            return
+            
+        # Check if already processed or active
+        if ticket_id in self.processed_tickets:
+            logger.info(f"Ticket {ticket_id} has already been processed. Skipping.")
+            return
+            
+        if ticket_id in self.active_tickets:
+            logger.info(f"Ticket {ticket_id} is already being processed. Skipping.")
+            return
+            
+        # Add to processed tickets set
+        self.processed_tickets.add(ticket_id)
         
         # Mark ticket as being processed
         self.active_tickets[ticket_id] = {
@@ -95,6 +136,15 @@ class Orchestrator:
         # Create log directory for this ticket
         log_dir = f"logs/{ticket_id}"
         os.makedirs(log_dir, exist_ok=True)
+        
+        # Set ticket to In Progress if it's not already
+        current_status = ticket.get("status", "Unknown")
+        if current_status != "In Progress":
+            # Update JIRA ticket to In Progress
+            comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
+            success = await self.jira_client.update_ticket(ticket_id, "In Progress", comment)
+            if not success:
+                logger.error(f"Failed to update ticket {ticket_id} to In Progress. Continuing anyway.")
         
         try:
             # STEP 1: Run planner agent
@@ -112,7 +162,8 @@ class Orchestrator:
             planner_result = await self.run_agent(self.planner_agent, planner_input)
             
             if not planner_result or "error" in planner_result:
-                raise Exception(f"PlannerAgent failed: {planner_result.get('error', 'Unknown error')}")
+                error_msg = planner_result.get("error", "Unknown error") if planner_result else "No result"
+                raise Exception(f"PlannerAgent failed: {error_msg}")
             
             with open(f"{log_dir}/planner_output.json", 'w') as f:
                 json.dump(planner_result, f, indent=2)

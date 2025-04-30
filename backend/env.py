@@ -12,8 +12,8 @@ GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME')
 GITHUB_DEFAULT_BRANCH = os.getenv('GITHUB_DEFAULT_BRANCH', 'main')
 
 # JIRA configuration - standardize naming
-JIRA_API_TOKEN = os.getenv('JIRA_TOKEN') or os.getenv('JIRA_API_TOKEN')
-JIRA_USERNAME = os.getenv('JIRA_USER') or os.getenv('JIRA_USERNAME')
+JIRA_API_TOKEN = os.getenv('JIRA_API_TOKEN') or os.getenv('JIRA_TOKEN')
+JIRA_USERNAME = os.getenv('JIRA_USERNAME') or os.getenv('JIRA_USER')
 JIRA_URL = os.getenv('JIRA_URL')
 JIRA_PROJECT_KEY = os.getenv('JIRA_PROJECT_KEY', '')
 JIRA_POLL_INTERVAL = int(os.getenv('JIRA_POLL_INTERVAL', '30'))
@@ -32,6 +32,7 @@ RETRY_DELAY_SECONDS = int(os.getenv('RETRY_DELAY_SECONDS', '5'))
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
 # For backward compatibility - use consistently named vars
+# These are now deprecated but kept for backward compatibility
 JIRA_USER = JIRA_USERNAME
 JIRA_TOKEN = JIRA_API_TOKEN
 
@@ -52,6 +53,10 @@ def verify_env_vars():
             f"Missing required environment variables: {', '.join(missing_vars)}\n"
             "Please check your .env file and ensure all required variables are set."
         )
+    
+    # Validate JIRA_URL format - ensure it doesn't end with a double slash
+    if JIRA_URL and JIRA_URL.endswith('/'):
+        print(f"Warning: JIRA_URL ends with a slash. This might cause double slashes in API calls.")
     
     print(f"Environment verified: All required variables are set")
     print(f"JIRA configuration: URL={JIRA_URL}, User={JIRA_USERNAME}, Project={JIRA_PROJECT_KEY}")

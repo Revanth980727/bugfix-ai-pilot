@@ -62,8 +62,17 @@ class JiraService:
     async def process_ticket(self, ticket):
         """Process a single ticket"""
         try:
-            ticket_id = ticket["ticket_id"]
-            current_status = ticket["status"]
+            # First ensure ticket is a valid dictionary
+            if not ticket or not isinstance(ticket, dict):
+                logger.error("Invalid ticket object received: not a dictionary or None")
+                return
+                
+            ticket_id = ticket.get("ticket_id")
+            if not ticket_id:
+                logger.error("Invalid ticket: missing ticket_id")
+                return
+                
+            current_status = ticket.get("status", "Unknown")
             logger.info(f"Processing ticket {ticket_id} with status '{current_status}'")
             
             # Check if we've already processed this ticket
@@ -84,10 +93,12 @@ class JiraService:
                     self.tickets_in_progress[ticket_id] = ticket
                     logger.info(f"Ticket {ticket_id} marked as In Progress")
                     
-                    # Trigger the agent workflow to process the ticket
-                    logger.info(f"Starting agent workflow for ticket {ticket_id}...")
                     # Create a new task so it runs independently
-                    asyncio.create_task(self.run_agent_workflow(ticket))
+                    # Important: We need to ensure this is actually called
+                    logger.info(f"Starting agent workflow for ticket {ticket_id}...")
+                    task = asyncio.create_task(self.run_agent_workflow(ticket))
+                    # Add a callback to handle errors
+                    task.add_done_callback(lambda t: self.handle_workflow_completion(t, ticket_id))
                 else:
                     logger.error(f"Failed to update ticket {ticket_id} status to In Progress")
             else:
@@ -96,9 +107,29 @@ class JiraService:
             logger.error(f"Error processing ticket {ticket.get('ticket_id', 'unknown')}: {e}")
             logger.error(traceback.format_exc())
     
+    def handle_workflow_completion(self, task, ticket_id):
+        """Handle completion of agent workflow task"""
+        try:
+            # Check if the task raised an exception
+            if task.exception():
+                logger.error(f"Agent workflow for ticket {ticket_id} failed with exception: {task.exception()}")
+        except asyncio.CancelledError:
+            logger.warning(f"Agent workflow for ticket {ticket_id} was cancelled")
+        except Exception as e:
+            logger.error(f"Error handling workflow completion for {ticket_id}: {e}")
+            logger.error(traceback.format_exc())
+    
     async def run_agent_workflow(self, ticket):
         """Run the complete agent workflow for a ticket"""
-        ticket_id = ticket["ticket_id"]
+        if not ticket or not isinstance(ticket, dict):
+            logger.error("Invalid ticket object passed to run_agent_workflow")
+            return
+            
+        ticket_id = ticket.get("ticket_id")
+        if not ticket_id:
+            logger.error("Invalid ticket: missing ticket_id")
+            return
+            
         logger.info(f"==== STARTING AGENT WORKFLOW FOR TICKET {ticket_id} ====")
         
         try:
@@ -108,7 +139,7 @@ class JiraService:
             # Debug log the ticket content
             logger.info(f"Ticket content for planner: {ticket}")
             
-            # Create input for planner
+            # Create input for planner with validation
             planner_input = {
                 "ticket_id": ticket_id,
                 "title": ticket.get("title", "No title"),
@@ -298,10 +329,22 @@ class JiraService:
             logger.info("Polling JIRA for bug tickets...")
             tickets = await self.jira_client.fetch_bug_tickets()
             
+            if not tickets:
+                logger.info("No tickets found to process")
+                return
+                
             logger.info(f"Found {len(tickets)} tickets to process")
             for ticket in tickets:
+                if not ticket:
+                    logger.warning("Received empty ticket data, skipping")
+                    continue
+                    
                 ticket_id = ticket.get("ticket_id")
-                if ticket_id and ticket_id not in self.processed_tickets:
+                if not ticket_id:
+                    logger.warning("Received ticket without ID, skipping")
+                    continue
+                    
+                if ticket_id not in self.processed_tickets:
                     logger.info(f"Found new ticket to process: {ticket_id}")
                     await self.process_ticket(ticket)
         

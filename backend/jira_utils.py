@@ -158,7 +158,8 @@ async def fetch_jira_tickets() -> List[Dict[str, Any]]:
         auth = (JIRA_USER, JIRA_TOKEN)
         
         async with httpx.AsyncClient(timeout=30.0) as client:
-            jql_query = 'labels = Bug AND status = "To Do"'
+            # Include In Progress tickets as well to ensure workflow continuation
+            jql_query = 'labels = Bug AND (status = "To Do" OR status = "In Progress")'
             
             response = await client.get(
                 f"{JIRA_URL}/rest/api/3/search",
@@ -171,7 +172,7 @@ async def fetch_jira_tickets() -> List[Dict[str, Any]]:
                 return []
                 
             data = response.json()
-            issues = data.get("issues")
+            issues = data.get("issues", [])
             
             if not issues:
                 logger.info("No new bug tickets found in JIRA")
@@ -180,18 +181,29 @@ async def fetch_jira_tickets() -> List[Dict[str, Any]]:
             new_tickets = []
             
             for issue in issues:
-                ticket_id = issue["key"]
-                fields = issue["fields"]
+                if not issue:
+                    continue
+                    
+                ticket_id = issue.get("key")
+                if not ticket_id:
+                    continue
+                    
+                fields = issue.get("fields", {})
+                if not fields:
+                    logger.warning(f"No fields found in ticket {ticket_id}, skipping")
+                    continue
                 
                 # Safely extract fields with proper error handling
                 acceptance_criteria = fields.get("acceptanceCriteria", "")
                 
                 attachments = []
                 for attachment in fields.get("attachments", []):
+                    if not attachment:
+                        continue
                     attachments.append({
-                        "filename": attachment["filename"],
-                        "content_url": attachment["content"],
-                        "mime_type": attachment["mimeType"]
+                        "filename": attachment.get("filename", "unknown"),
+                        "content_url": attachment.get("content", ""),
+                        "mime_type": attachment.get("mimeType", "application/octet-stream")
                     })
                 
                 # Safely get assignee
@@ -209,20 +221,46 @@ async def fetch_jira_tickets() -> List[Dict[str, Any]]:
                 if fields.get("priority"):
                     priority = fields["priority"].get("name", "Normal")
                 
+                # Safe extraction of status
+                status = "Unknown"
+                if fields.get("status") and isinstance(fields["status"], dict):
+                    status = fields["status"].get("name", "Unknown")
+                
+                # Handle description which might be in Atlassian Document Format
+                description = ""
+                if fields.get("description"):
+                    if isinstance(fields["description"], dict):
+                        # Try to extract text from ADF
+                        try:
+                            desc_content = fields["description"].get("content", [])
+                            desc_parts = []
+                            for content in desc_content:
+                                if content.get("type") == "paragraph":
+                                    paragraph_content = content.get("content", [])
+                                    for text in paragraph_content:
+                                        if text.get("text"):
+                                            desc_parts.append(text["text"])
+                            description = "\n".join(desc_parts)
+                        except Exception as e:
+                            logger.warning(f"Failed to parse description for {ticket_id}: {e}")
+                            description = "Error extracting description"
+                    else:
+                        description = str(fields["description"])
+                
                 new_tickets.append({
                     "ticket_id": ticket_id,
-                    "title": fields["summary"],
-                    "description": fields.get("description", ""),
-                    "created": fields["created"],
+                    "title": fields.get("summary", "No title"),
+                    "description": description,
+                    "created": fields.get("created", ""),
                     "acceptance_criteria": acceptance_criteria,
                     "attachments": attachments,
-                    "status": fields["status"]["name"],
+                    "status": status,
                     "priority": priority,
                     "reporter": reporter,
                     "assignee": assignee
                 })
             
-            logger.info(f"Found {len(new_tickets)} new bug tickets")
+            logger.info(f"Found {len(new_tickets)} bug tickets")
             return new_tickets
     except Exception as e:
         logger.error(f"Error fetching JIRA tickets: {str(e)}")
