@@ -1,4 +1,3 @@
-
 import os
 import json
 import requests
@@ -14,14 +13,14 @@ class JiraClient:
         
         # Get credentials from environment variables
         self.jira_url = os.environ.get("JIRA_URL")
-        self.jira_user = os.environ.get("JIRA_USER")
-        self.jira_token = os.environ.get("JIRA_TOKEN")
+        self.jira_user = os.environ.get("JIRA_USERNAME") or os.environ.get("JIRA_USER")
+        self.jira_token = os.environ.get("JIRA_API_TOKEN") or os.environ.get("JIRA_TOKEN")
         self.project_key = os.environ.get("JIRA_PROJECT_KEY", "")
         
         if not all([self.jira_url, self.jira_user, self.jira_token]):
             self.logger.error("Missing required JIRA environment variables")
             raise EnvironmentError(
-                "Missing JIRA credentials. Please set JIRA_URL, JIRA_USER, and JIRA_TOKEN environment variables."
+                "Missing JIRA credentials. Please set JIRA_URL, JIRA_USER/JIRA_USERNAME, and JIRA_TOKEN/JIRA_API_TOKEN environment variables."
             )
             
         # Set up auth and headers
@@ -256,4 +255,3 @@ class JiraClient:
         
         # If we only had a comment and no status update, return comment result
         return True if not status else False
-

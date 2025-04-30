@@ -18,8 +18,8 @@ class JiraClient:
     def __init__(self):
         """Initialize JIRA client with credentials from config"""
         self.jira_url = config.JIRA_URL
-        self.jira_user = config.JIRA_USER
-        self.jira_token = config.JIRA_TOKEN
+        self.jira_user = config.JIRA_USERNAME
+        self.jira_token = config.JIRA_API_TOKEN
         self.auth = (self.jira_user, self.jira_token)
         self.project_key = config.JIRA_PROJECT_KEY
         
@@ -67,10 +67,18 @@ class JiraClient:
                 # Map JIRA fields to standard ticket format
                 tickets = []
                 for issue in issues:
+                    # Handle description field which might be complex JSON or plain text
+                    description = issue["fields"].get("description", "")
+                    if isinstance(description, dict):
+                        # Extract text from Atlassian Document Format
+                        desc_text = self._extract_text_from_adf(description)
+                    else:
+                        desc_text = str(description)
+                    
                     ticket = {
                         "ticket_id": issue["key"],
                         "title": issue["fields"]["summary"],
-                        "description": issue["fields"].get("description", ""),
+                        "description": desc_text,
                         "status": issue["fields"]["status"]["name"],
                         "created": issue["fields"]["created"],
                         "updated": issue["fields"]["updated"],
@@ -85,6 +93,60 @@ class JiraClient:
         except Exception as e:
             logger.error(f"Error fetching bug tickets: {e}")
             return []
+    
+    def _extract_text_from_adf(self, doc: Dict[str, Any]) -> str:
+        """
+        Extract plain text from Atlassian Document Format (ADF)
+        
+        Args:
+            doc: The ADF document as a dictionary
+            
+        Returns:
+            Extracted plain text
+        """
+        if not doc or not isinstance(doc, dict):
+            return ""
+            
+        text_parts = []
+        
+        # Process content array
+        content = doc.get("content", [])
+        for item in content:
+            # Handle paragraph
+            if item.get("type") == "paragraph":
+                paragraph_text = self._process_content_item(item)
+                if paragraph_text:
+                    text_parts.append(paragraph_text)
+            # Handle other types like headings, lists, etc.
+            elif "text" in item:
+                text_parts.append(item["text"])
+                
+        return "\n".join(text_parts)
+    
+    def _process_content_item(self, item: Dict[str, Any]) -> str:
+        """
+        Process a content item from ADF
+        
+        Args:
+            item: The content item
+            
+        Returns:
+            Extracted text from the item
+        """
+        if not item or not isinstance(item, dict):
+            return ""
+            
+        text_parts = []
+        
+        # Process content array
+        content = item.get("content", [])
+        for subitem in content:
+            if "text" in subitem:
+                text_parts.append(subitem["text"])
+            elif subitem.get("content"):
+                text_parts.append(self._process_content_item(subitem))
+                
+        return " ".join(text_parts)
     
     async def update_ticket(self, ticket_id: str, status: str, comment: str) -> bool:
         """

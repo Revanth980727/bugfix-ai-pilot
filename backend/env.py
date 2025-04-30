@@ -12,9 +12,10 @@ GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME')
 GITHUB_DEFAULT_BRANCH = os.getenv('GITHUB_DEFAULT_BRANCH', 'main')
 
 # JIRA configuration
-JIRA_TOKEN = os.getenv('JIRA_TOKEN')
-JIRA_USER = os.getenv('JIRA_USER')
+JIRA_API_TOKEN = os.getenv('JIRA_TOKEN') or os.getenv('JIRA_API_TOKEN')
+JIRA_USERNAME = os.getenv('JIRA_USER') or os.getenv('JIRA_USERNAME')
 JIRA_URL = os.getenv('JIRA_URL')
+JIRA_PROJECT_KEY = os.getenv('JIRA_PROJECT_KEY', '')
 
 # OpenAI configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -29,8 +30,8 @@ def verify_env_vars():
     """Verify that all required environment variables are set."""
     required_vars = {
         'GITHUB_TOKEN': GITHUB_TOKEN,
-        'JIRA_TOKEN': JIRA_TOKEN,
-        'JIRA_USER': JIRA_USER,
+        'JIRA_API_TOKEN': JIRA_API_TOKEN,
+        'JIRA_USERNAME': JIRA_USERNAME,
         'JIRA_URL': JIRA_URL,
         'OPENAI_API_KEY': OPENAI_API_KEY
     }
