@@ -1,9 +1,9 @@
+
 import logging
 import os
 import httpx
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-from pydantic import BaseModel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +18,11 @@ COMMUNICATOR_URL = os.getenv("COMMUNICATOR_URL", "http://communicator:8004")
 async def call_planner_agent(ticket: Dict[str, Any]):
     """Send ticket information to the enhanced Planner agent"""
     try:
+        # Ensure ticket is not None and has required fields
+        if not ticket:
+            logger.error("Ticket object is None")
+            return None
+            
         # Create a request payload with all available ticket information
         payload = {
             "ticket_id": ticket.get("ticket_id", ""),
@@ -34,6 +39,8 @@ async def call_planner_agent(ticket: Dict[str, Any]):
         if "attachments" in ticket:
             payload["attachments"] = ticket["attachments"]
         
+        logger.info(f"Calling Planner agent with payload: {payload}")
+        
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 f"{PLANNER_URL}/analyze",
@@ -41,10 +48,17 @@ async def call_planner_agent(ticket: Dict[str, Any]):
             )
             
             if response.status_code != 200:
-                logger.error(f"Planner agent error: {response.status_code}")
+                logger.error(f"Planner agent error: {response.status_code}, {response.text}")
                 return None
-                
-            return response.json()
+            
+            # Safely parse JSON response
+            try:
+                result = response.json()
+                logger.info(f"Planner agent returned: {result}")
+                return result
+            except Exception as json_error:
+                logger.error(f"Failed to parse Planner agent response: {str(json_error)}")
+                return None
     except Exception as e:
         logger.error(f"Error calling Planner agent: {str(e)}")
         return None
@@ -52,6 +66,11 @@ async def call_planner_agent(ticket: Dict[str, Any]):
 async def call_developer_agent(planner_analysis: Dict[str, Any], attempt: int, context: Dict[str, Any] = None):
     """Send planner analysis to Developer agent"""
     try:
+        # Ensure planner_analysis is not None
+        if not planner_analysis:
+            logger.error("Planner analysis is None")
+            return None
+            
         payload = {
             "analysis": planner_analysis,
             "attempt": attempt
@@ -61,6 +80,8 @@ async def call_developer_agent(planner_analysis: Dict[str, Any], attempt: int, c
         if context:
             payload["context"] = context
         
+        logger.info(f"Calling Developer agent with payload: {payload}")
+        
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 f"{DEVELOPER_URL}/generate",
@@ -68,10 +89,17 @@ async def call_developer_agent(planner_analysis: Dict[str, Any], attempt: int, c
             )
             
             if response.status_code != 200:
-                logger.error(f"Developer agent error: {response.status_code}")
+                logger.error(f"Developer agent error: {response.status_code}, {response.text}")
                 return None
-                
-            return response.json()
+            
+            # Safely parse JSON response
+            try:
+                result = response.json()
+                logger.info(f"Developer agent returned: {result}")
+                return result
+            except Exception as json_error:
+                logger.error(f"Failed to parse Developer agent response: {str(json_error)}")
+                return None
     except Exception as e:
         logger.error(f"Error calling Developer agent: {str(e)}")
         return None
@@ -79,6 +107,13 @@ async def call_developer_agent(planner_analysis: Dict[str, Any], attempt: int, c
 async def call_qa_agent(developer_response: Dict[str, Any]):
     """Send developer's changes to QA agent"""
     try:
+        # Ensure developer_response is not None
+        if not developer_response:
+            logger.error("Developer response is None")
+            return None
+            
+        logger.info(f"Calling QA agent with payload: {developer_response}")
+        
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 f"{QA_URL}/test",
@@ -86,25 +121,74 @@ async def call_qa_agent(developer_response: Dict[str, Any]):
             )
             
             if response.status_code != 200:
-                logger.error(f"QA agent error: {response.status_code}")
+                logger.error(f"QA agent error: {response.status_code}, {response.text}")
                 return None
-                
-            return response.json()
+            
+            # Safely parse JSON response
+            try:
+                result = response.json()
+                logger.info(f"QA agent returned: {result}")
+                return result
+            except Exception as json_error:
+                logger.error(f"Failed to parse QA agent response: {str(json_error)}")
+                return None
     except Exception as e:
         logger.error(f"Error calling QA agent: {str(e)}")
         return None
 
-async def call_communicator_agent(ticket_id: str, diffs: List[Dict[str, Any]], 
-                                test_results: List[Dict[str, Any]], commit_message: str):
-    """Send results to Communicator agent"""
+async def call_communicator_agent(
+    ticket_id: str,
+    diffs: List[Dict[str, Any]] = None,
+    test_results: List[Dict[str, Any]] = None,
+    commit_message: str = None,
+    test_passed: bool = False,
+    escalated: bool = False,
+    early_escalation: bool = False,
+    early_escalation_reason: str = None,
+    retry_count: int = 0,
+    max_retries: int = 4,
+    failure_details: str = None,
+    agent_type: str = None,
+    confidence_score: int = None
+):
+    """Send results to Communicator agent with enhanced error handling"""
     try:
+        # Handle default parameters
+        if diffs is None:
+            diffs = []
+        if test_results is None:
+            test_results = []
+            
+        # Build payload with all possible parameters
         payload = {
             "ticket_id": ticket_id,
             "diffs": diffs,
             "test_results": test_results,
-            "commit_message": commit_message,
-            "repository": "main"  # This would be configurable in a real implementation
+            "repository": "main",  # This would be configurable in a real implementation
+            "test_passed": test_passed
         }
+        
+        # Add optional parameters only if they have values
+        if commit_message:
+            payload["commit_message"] = commit_message
+        if escalated:
+            payload["escalated"] = escalated
+        if early_escalation:
+            payload["early_escalation"] = early_escalation
+        if early_escalation_reason:
+            payload["early_escalation_reason"] = early_escalation_reason
+        if retry_count > 0:
+            payload["retry_count"] = retry_count
+        if max_retries > 0:
+            payload["max_retries"] = max_retries
+        if failure_details:
+            payload["failure_details"] = failure_details
+        if agent_type:
+            payload["agent_type"] = agent_type
+        if confidence_score is not None:
+            payload["confidence_score"] = confidence_score
+        
+        logger.info(f"Calling Communicator agent with payload: {payload}")
         
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
@@ -113,10 +197,17 @@ async def call_communicator_agent(ticket_id: str, diffs: List[Dict[str, Any]],
             )
             
             if response.status_code != 200:
-                logger.error(f"Communicator agent error: {response.status_code}")
+                logger.error(f"Communicator agent error: {response.status_code}, {response.text}")
                 return None
-                
-            return response.json()
+            
+            # Safely parse JSON response
+            try:
+                result = response.json()
+                logger.info(f"Communicator agent returned: {result}")
+                return result
+            except Exception as json_error:
+                logger.error(f"Failed to parse Communicator agent response: {str(json_error)}")
+                return None
     except Exception as e:
         logger.error(f"Error calling Communicator agent: {str(e)}")
         return None

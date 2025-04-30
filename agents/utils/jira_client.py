@@ -34,7 +34,7 @@ class JiraClient:
             "Content-Type": "application/json"
         }
         
-        self.logger.info("JIRA client initialized successfully")
+        self.logger.info(f"JIRA client initialized for {self.jira_url}")
         
     def get_ticket(self, ticket_id: str) -> Dict[str, Any]:
         """
@@ -82,14 +82,14 @@ class JiraClient:
         
         # Build JQL query for open bugs
         project_clause = f"project = {self.project_key}" if self.project_key else ""
-        jql = f"type = Bug AND status in ('Open', 'To Do')"
+        jql = f"issuetype = Bug AND (status = \"To Do\" OR status = Open)"
         if project_clause:
             jql += f" AND {project_clause}"
         
         params = {
             "jql": jql,
             "maxResults": max_results,
-            "fields": "summary,description,status,created,updated,assignee,reporter,priority"
+            "fields": "summary,description,status,issuetype,created,updated,assignee,reporter,priority"
         }
         
         self.logger.info(f"Fetching open bugs with JQL: {jql}")
@@ -140,10 +140,10 @@ class JiraClient:
                 
             ticket = {
                 "ticket_id": ticket_id,
-                "title": fields["summary"],
+                "title": fields.get("summary", "No title"),
                 "description": description_text,
-                "status": fields["status"]["name"],
-                "created": fields["created"],
+                "status": fields.get("status", {}).get("name", "Unknown") if fields.get("status") else "Unknown",
+                "created": fields.get("created", ""),
                 "updated": fields.get("updated", ""),
                 "assignee": assignee,
                 "reporter": fields.get("reporter", {}).get("displayName", "Unknown") if fields.get("reporter") else "Unknown",
@@ -153,7 +153,7 @@ class JiraClient:
             self.logger.debug(f"Processed ticket {ticket_id}: {json.dumps(ticket)[:500]}...")
             tickets.append(ticket)
             
-        self.logger.info(f"Found {len(tickets)} open bug tickets")
+        self.logger.info(f"Found {len(tickets)} open bug tickets to process")
         return tickets
     
     def _extract_text_from_adf(self, adf_doc: Dict[str, Any]) -> str:
@@ -233,7 +233,7 @@ class JiraClient:
                 self.logger.error(f"Failed to add comment to {ticket_id}: {response.status_code}, {response.text}")
                 return False
                 
-            self.logger.info(f"Comment added to {ticket_id} successfully")
+            self.logger.info(f"Successfully added comment to {ticket_id}")
             return True
         except Exception as e:
             self.logger.error(f"Exception adding comment to {ticket_id}: {str(e)}")
@@ -326,7 +326,7 @@ class JiraClient:
                     self.logger.error(f"Failed to update status for {ticket_id}: {transition_result.status_code}, {transition_result.text}")
                     return False
                 
-                self.logger.info(f"Successfully updated ticket {ticket_id} to '{status}'")
+                self.logger.info(f"Successfully updated ticket {ticket_id} status to '{status}'")
                 return True
             except Exception as e:
                 self.logger.error(f"Exception updating ticket {ticket_id}: {str(e)}")
@@ -345,8 +345,9 @@ class JiraClient:
         self.logger.info("Fetching bug tickets from JIRA")
         try:
             # Call the synchronous method - in real async code, this would be awaitable
-            return self.get_open_bugs()
+            tickets = self.get_open_bugs()
+            self.logger.info(f"Found {len(tickets)} bug tickets to process")
+            return tickets
         except Exception as e:
             self.logger.error(f"Error fetching bug tickets: {str(e)}")
             return []
-

@@ -11,7 +11,7 @@ GITHUB_REPO_OWNER = os.getenv('GITHUB_REPO_OWNER')
 GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME')
 GITHUB_DEFAULT_BRANCH = os.getenv('GITHUB_DEFAULT_BRANCH', 'main')
 
-# JIRA configuration
+# JIRA configuration - standardize naming
 JIRA_API_TOKEN = os.getenv('JIRA_TOKEN') or os.getenv('JIRA_API_TOKEN')
 JIRA_USERNAME = os.getenv('JIRA_USER') or os.getenv('JIRA_USERNAME')
 JIRA_URL = os.getenv('JIRA_URL')
@@ -30,6 +30,10 @@ RETRY_DELAY_SECONDS = int(os.getenv('RETRY_DELAY_SECONDS', '5'))
 
 # Log configuration
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+
+# For backward compatibility - use consistently named vars
+JIRA_USER = JIRA_USERNAME
+JIRA_TOKEN = JIRA_API_TOKEN
 
 def verify_env_vars():
     """Verify that all required environment variables are set."""
@@ -82,4 +86,3 @@ def print_env_debug():
     print(f"MAX_RETRIES: {MAX_RETRIES}")
     print(f"LOG_LEVEL: {LOG_LEVEL}")
     print("================================\n")
-

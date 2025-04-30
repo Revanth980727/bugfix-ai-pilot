@@ -86,6 +86,7 @@ class JiraService:
                     
                     # Trigger the agent workflow to process the ticket
                     logger.info(f"Starting agent workflow for ticket {ticket_id}...")
+                    # Create a new task so it runs independently
                     asyncio.create_task(self.run_agent_workflow(ticket))
                 else:
                     logger.error(f"Failed to update ticket {ticket_id} status to In Progress")
@@ -119,8 +120,13 @@ class JiraService:
             # Run planner (synchronous)
             try:
                 logger.info("Executing planner agent...")
-                planner_result = self.planner_agent.run(planner_input)
-                logger.info(f"Planner agent returned: {planner_result}")
+                # Create a more robust way to run the planner
+                if hasattr(self.planner_agent, 'run') and callable(self.planner_agent.run):
+                    planner_result = self.planner_agent.run(planner_input)
+                    logger.info(f"Planner agent returned: {planner_result}")
+                else:
+                    logger.error("Planner agent doesn't have a 'run' method")
+                    planner_result = None
             except Exception as e:
                 logger.error(f"Error running planner agent: {e}")
                 logger.error(traceback.format_exc())
@@ -140,12 +146,22 @@ class JiraService:
                 )
                 return
             
-            if planner_result.get("using_fallback", False):
-                logger.warning(f"Planner agent used fallback for ticket {ticket_id}")
+            # Only if the planner result is a dictionary, check for using_fallback
+            if isinstance(planner_result, dict):
+                if planner_result.get("using_fallback", False):
+                    logger.warning(f"Planner agent used fallback for ticket {ticket_id}")
+                    await self.jira_client.update_ticket(
+                        ticket_id, 
+                        "Needs Review", 
+                        f"BugFix AI couldn't analyze this ticket properly: {planner_result.get('bug_summary', 'Unknown error')}"
+                    )
+                    return
+            else:
+                logger.warning(f"Unexpected planner result type: {type(planner_result)}")
                 await self.jira_client.update_ticket(
                     ticket_id, 
                     "Needs Review", 
-                    f"BugFix AI couldn't analyze this ticket properly: {planner_result.get('bug_summary', 'Unknown error')}"
+                    "BugFix AI received unexpected response type from planner"
                 )
                 return
             
@@ -197,8 +213,8 @@ class JiraService:
                         return
                     continue
                 
-                # Check if tests passed
-                if qa_result.get("passed", False):
+                # Check if tests passed - ensure qa_result is a dictionary and has 'passed' key
+                if isinstance(qa_result, dict) and qa_result.get("passed", False):
                     success = True
                     break
                     
