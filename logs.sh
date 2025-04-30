@@ -9,5 +9,6 @@ else
   docker-compose logs -f "$1"
 fi
 
+echo ""
 echo "Usage: ./logs.sh [service_name]"
 echo "Available services: frontend, backend, planner, developer, qa, communicator, jira_service, github_service"

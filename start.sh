@@ -6,9 +6,9 @@ echo "Starting BugFix AI system..."
 mkdir -p logs
 mkdir -p code_repo
 
-# Ensure directories have proper permissions
-chmod 777 logs
-chmod 777 code_repo
+# Ensure directories have proper permissions (works on both Linux and Windows with Git Bash)
+chmod 777 logs 2>/dev/null || echo "Warning: Could not set permissions on logs directory (this is normal on Windows)"
+chmod 777 code_repo 2>/dev/null || echo "Warning: Could not set permissions on code_repo directory (this is normal on Windows)"
 
 # Check if .env file exists at the root level
 if [ ! -f ./.env ]; then
@@ -19,7 +19,7 @@ fi
 
 # Check if Docker is running
 if ! docker info > /dev/null 2>&1; then
-  echo "Error: Docker is not running. Please start Docker and try again."
+  echo "Error: Docker is not running. Please start Docker Desktop and try again."
   exit 1
 fi
 
