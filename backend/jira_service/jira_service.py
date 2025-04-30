@@ -41,30 +41,30 @@ class JiraService:
     
     async def process_ticket(self, ticket):
         """Process a single ticket"""
-        ticket_id = ticket["ticket_id"]
-        current_status = ticket["status"]
-        logger.info(f"Processing ticket {ticket_id} with status '{current_status}'")
-        
-        # Add to processed tickets to avoid duplicate processing
-        self.processed_tickets.add(ticket_id)
-        
-        # Example: Update ticket status and add comment
-        # In a real implementation, this would integrate with the ticket_processor.py to
-        # handle the actual processing of the ticket through the agent workflow
-        if ticket_id not in self.tickets_in_progress:
-            # This is a new ticket, set it to "In Progress" and add initial comment
-            comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
-            success = await self.jira_client.update_ticket(ticket_id, "In Progress", comment)
+        try:
+            ticket_id = ticket["ticket_id"]
+            current_status = ticket["status"]
+            logger.info(f"Processing ticket {ticket_id} with status '{current_status}'")
             
-            if success:
-                self.tickets_in_progress[ticket_id] = ticket
-                logger.info(f"Ticket {ticket_id} marked as In Progress")
+            # Add to processed tickets to avoid duplicate processing
+            self.processed_tickets.add(ticket_id)
+            
+            # Example: Update ticket status and add comment
+            # In a real implementation, this would integrate with the ticket_processor.py to
+            # handle the actual processing of the ticket through the agent workflow
+            if ticket_id not in self.tickets_in_progress:
+                # This is a new ticket, set it to "In Progress" and add initial comment
+                comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
+                success = await self.jira_client.update_ticket(ticket_id, "In Progress", comment)
                 
-                # Here you would integrate with the rest of your agent workflow
-                # For example, by sending this ticket to your ticket_processor
-        
-        # Note: In a complete implementation, you would need to integrate this with
-        # your existing ticket_processor.py to handle the full agent workflow
+                if success:
+                    self.tickets_in_progress[ticket_id] = ticket
+                    logger.info(f"Ticket {ticket_id} marked as In Progress")
+                    
+                    # Here you would integrate with the rest of your agent workflow
+                    # For example, by sending this ticket to your ticket_processor
+        except Exception as e:
+            logger.error(f"Error processing ticket {ticket.get('ticket_id', 'unknown')}: {e}")
     
     async def poll_tickets(self):
         """Poll JIRA for new bug tickets"""
@@ -72,8 +72,8 @@ class JiraService:
             tickets = await self.jira_client.fetch_bug_tickets()
             
             for ticket in tickets:
-                ticket_id = ticket["ticket_id"]
-                if ticket_id not in self.processed_tickets:
+                ticket_id = ticket.get("ticket_id")
+                if ticket_id and ticket_id not in self.processed_tickets:
                     await self.process_ticket(ticket)
         
         except Exception as e:

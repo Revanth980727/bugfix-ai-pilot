@@ -84,7 +84,13 @@ class JiraClient:
             return []
         
         tickets = []
-        for issue in response.get("issues", []):
+        # Fix: Check if 'issues' key exists in response
+        issues = response.get("issues")
+        if not issues:
+            logger.info("No issues found in JIRA response")
+            return []
+            
+        for issue in issues:
             ticket = {
                 "ticket_id": issue["key"],
                 "title": issue["fields"]["summary"],
@@ -92,9 +98,12 @@ class JiraClient:
                 "status": issue["fields"]["status"]["name"],
                 "created": issue["fields"]["created"],
                 "updated": issue["fields"]["updated"],
-                "assignee": issue["fields"].get("assignee", {}).get("displayName", "Unassigned"),
-                "reporter": issue["fields"]["reporter"]["displayName"],
-                "priority": issue["fields"]["priority"]["name"]
+                # Fix: Safely handle missing assignee
+                "assignee": issue["fields"].get("assignee", {}).get("displayName", "Unassigned") if issue["fields"].get("assignee") else "Unassigned",
+                # Fix: Safely handle missing reporter
+                "reporter": issue["fields"].get("reporter", {}).get("displayName", "Unknown") if issue["fields"].get("reporter") else "Unknown",
+                # Fix: Safely handle missing priority
+                "priority": issue["fields"].get("priority", {}).get("name", "Normal") if issue["fields"].get("priority") else "Normal"
             }
             tickets.append(ticket)
             
@@ -117,7 +126,8 @@ class JiraClient:
         
         # Find the transition ID for the target status
         transition_id = None
-        for transition in transitions_response.get("transitions", []):
+        transitions = transitions_response.get("transitions", [])
+        for transition in transitions:
             if status.lower() in transition["name"].lower():
                 transition_id = transition["id"]
                 break
@@ -192,3 +202,4 @@ class JiraClient:
             success = success and status_success
         
         return success
+

@@ -70,12 +70,14 @@ class JiraClient:
         
         # Build JQL query for open bugs
         project_clause = f"project = {self.project_key}" if self.project_key else ""
-        jql = f"type = Bug AND status in ('Open', 'To Do') {project_clause}"
+        jql = f"type = Bug AND status in ('Open', 'To Do')"
+        if project_clause:
+            jql += f" AND {project_clause}"
         
         params = {
             "jql": jql,
             "maxResults": max_results,
-            "fields": "summary,description,status,created,updated"
+            "fields": "summary,description,status,created,updated,assignee,reporter,priority"
         }
         
         self.logger.info(f"Fetching open bugs with JQL: {jql}")
@@ -93,15 +95,30 @@ class JiraClient:
         data = response.json()
         tickets = []
         
-        for issue in data.get("issues", []):
+        issues = data.get("issues", [])
+        if not issues:
+            self.logger.info("No open bug tickets found")
+            return []
+            
+        for issue in issues:
             ticket_id = issue["key"]
+            fields = issue["fields"]
+            
+            # Safely extract fields
+            assignee = "Unassigned"
+            if fields.get("assignee"):
+                assignee = fields["assignee"].get("displayName", "Unassigned")
+                
             tickets.append({
                 "ticket_id": ticket_id,
-                "title": issue["fields"]["summary"],
-                "description": issue["fields"].get("description", ""),
-                "status": issue["fields"]["status"]["name"],
-                "created": issue["fields"]["created"],
-                "updated": issue["fields"].get("updated", "")
+                "title": fields["summary"],
+                "description": fields.get("description", ""),
+                "status": fields["status"]["name"],
+                "created": fields["created"],
+                "updated": fields.get("updated", ""),
+                "assignee": assignee,
+                "reporter": fields.get("reporter", {}).get("displayName", "Unknown") if fields.get("reporter") else "Unknown",
+                "priority": fields.get("priority", {}).get("name", "Normal") if fields.get("priority") else "Normal"
             })
             
         self.logger.info(f"Found {len(tickets)} open bug tickets")
@@ -140,19 +157,24 @@ class JiraClient:
         }
         
         self.logger.info(f"Adding comment to ticket {ticket_id}")
-        response = requests.post(
-            url,
-            json=payload,
-            auth=self.auth,
-            headers=self.headers
-        )
         
-        if response.status_code not in (201, 200):
-            self.logger.error(f"Failed to add comment to {ticket_id}: {response.status_code}, {response.text}")
-            return False
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                auth=self.auth,
+                headers=self.headers
+            )
             
-        self.logger.info(f"Comment added to {ticket_id} successfully")
-        return True
+            if response.status_code not in (201, 200):
+                self.logger.error(f"Failed to add comment to {ticket_id}: {response.status_code}, {response.text}")
+                return False
+                
+            self.logger.info(f"Comment added to {ticket_id} successfully")
+            return True
+        except Exception as e:
+            self.logger.error(f"Exception adding comment to {ticket_id}: {str(e)}")
+            return False
     
     def update_ticket(self, ticket_id: str, status: str, comment: Optional[str] = None) -> bool:
         """
@@ -166,58 +188,72 @@ class JiraClient:
         Returns:
             Success status (True/False)
         """
-        # First, get the list of available transitions
-        transitions_url = f"{self.jira_url}/rest/api/3/issue/{ticket_id}/transitions"
-        
-        self.logger.info(f"Fetching available transitions for {ticket_id}")
-        transitions_response = requests.get(
-            transitions_url,
-            auth=self.auth,
-            headers=self.headers
-        )
-        
-        if transitions_response.status_code != 200:
-            self.logger.error(f"Failed to get transitions for {ticket_id}: {transitions_response.status_code}")
-            return False
-            
-        transitions = transitions_response.json().get("transitions", [])
-        transition_id = None
-        
-        # Find the transition that matches our target status
-        for transition in transitions:
-            if transition["to"]["name"].lower() == status.lower():
-                transition_id = transition["id"]
-                break
-                
-        if not transition_id:
-            self.logger.error(f"No transition found for status '{status}' on ticket {ticket_id}")
-            return False
-            
-        # Perform the transition
-        transition_payload = {
-            "transition": {
-                "id": transition_id
-            }
-        }
-        
-        self.logger.info(f"Updating ticket {ticket_id} to status '{status}'")
-        transition_result = requests.post(
-            transitions_url,
-            json=transition_payload,
-            auth=self.auth,
-            headers=self.headers
-        )
-        
-        if transition_result.status_code not in (204, 200):
-            self.logger.error(f"Failed to update status for {ticket_id}: {transition_result.status_code}")
-            return False
-            
-        # Add comment if provided
+        # First add comment if provided
         if comment:
             comment_result = self.add_comment(ticket_id, comment)
             if not comment_result:
-                self.logger.warning(f"Status updated but failed to add comment to {ticket_id}")
-                return False
+                self.logger.warning(f"Failed to add comment to {ticket_id}")
+                # Continue anyway to try status update
+
+        # Only proceed with status update if status is provided
+        if status:
+            # Get the list of available transitions
+            transitions_url = f"{self.jira_url}/rest/api/3/issue/{ticket_id}/transitions"
+            
+            try:
+                self.logger.info(f"Fetching available transitions for {ticket_id}")
+                transitions_response = requests.get(
+                    transitions_url,
+                    auth=self.auth,
+                    headers=self.headers
+                )
                 
-        self.logger.info(f"Successfully updated ticket {ticket_id} to '{status}'")
-        return True
+                if transitions_response.status_code != 200:
+                    self.logger.error(f"Failed to get transitions for {ticket_id}: {transitions_response.status_code}")
+                    return False
+                    
+                transitions = transitions_response.json().get("transitions", [])
+                if not transitions:
+                    self.logger.warning(f"No transitions available for ticket {ticket_id}")
+                    return False
+                    
+                transition_id = None
+                
+                # Find the transition that matches our target status
+                for transition in transitions:
+                    if transition["to"]["name"].lower() == status.lower():
+                        transition_id = transition["id"]
+                        break
+                        
+                if not transition_id:
+                    self.logger.error(f"No transition found for status '{status}' on ticket {ticket_id}")
+                    return False
+                    
+                # Perform the transition
+                transition_payload = {
+                    "transition": {
+                        "id": transition_id
+                    }
+                }
+                
+                self.logger.info(f"Updating ticket {ticket_id} to status '{status}'")
+                transition_result = requests.post(
+                    transitions_url,
+                    json=transition_payload,
+                    auth=self.auth,
+                    headers=self.headers
+                )
+                
+                if transition_result.status_code not in (204, 200):
+                    self.logger.error(f"Failed to update status for {ticket_id}: {transition_result.status_code}, {transition_result.text}")
+                    return False
+                
+                self.logger.info(f"Successfully updated ticket {ticket_id} to '{status}'")
+                return True
+            except Exception as e:
+                self.logger.error(f"Exception updating ticket {ticket_id}: {str(e)}")
+                return False
+        
+        # If we only had a comment and no status update, return comment result
+        return True if not status else False
+

@@ -14,6 +14,10 @@ logger = logging.getLogger("jira-utils")
 async def update_jira_ticket(ticket_id: str, status: str, comment: str, pr_url: Optional[str] = None) -> bool:
     """Update JIRA ticket status and add a comment"""
     try:
+        if not all([JIRA_URL, JIRA_USER, JIRA_TOKEN]):
+            logger.error("Missing JIRA credentials in environment variables")
+            return False
+            
         async with httpx.AsyncClient(timeout=30.0) as client:
             auth = (JIRA_USER, JIRA_TOKEN)
             
@@ -76,23 +80,64 @@ async def update_jira_ticket(ticket_id: str, status: str, comment: str, pr_url: 
                     if transition_response.status_code not in [200, 204]:
                         logger.error(f"Failed to transition JIRA ticket {ticket_id}")
                         return False
+                else:
+                    logger.warning(f"No transition found for status '{status}' for ticket {ticket_id}")
             
             # If PR URL is provided, update the ticket with PR link
             if pr_url:
-                fields_update = {
-                    "fields": {
-                        "customfield_10045": pr_url  # Assuming this is the PR URL field
-                    }
-                }
-                
-                update_response = await client.put(
-                    f"{JIRA_URL}/rest/api/3/issue/{ticket_id}",
-                    json=fields_update,
-                    auth=auth
-                )
-                
-                if update_response.status_code not in [200, 204]:
-                    logger.error(f"Failed to update PR URL for JIRA ticket {ticket_id}")
+                # Try to find the PR URL field - this might need customization based on your JIRA instance
+                try:
+                    # First fetch available fields to find the PR URL field
+                    fields_response = await client.get(
+                        f"{JIRA_URL}/rest/api/3/field",
+                        auth=auth
+                    )
+                    
+                    pr_field_id = None
+                    if fields_response.status_code == 200:
+                        fields = fields_response.json()
+                        for field in fields:
+                            if "PR" in field.get("name", "") or "Pull Request" in field.get("name", ""):
+                                pr_field_id = field["id"]
+                                break
+                    
+                    if pr_field_id:
+                        fields_update = {
+                            "fields": {
+                                pr_field_id: pr_url
+                            }
+                        }
+                        
+                        update_response = await client.put(
+                            f"{JIRA_URL}/rest/api/3/issue/{ticket_id}",
+                            json=fields_update,
+                            auth=auth
+                        )
+                        
+                        if update_response.status_code not in [200, 204]:
+                            logger.error(f"Failed to update PR URL for JIRA ticket {ticket_id}")
+                    else:
+                        # Fall back to adding PR URL to comment
+                        pr_comment = f"Pull Request created: {pr_url}"
+                        await client.post(
+                            f"{JIRA_URL}/rest/api/3/issue/{ticket_id}/comment",
+                            json={
+                                "body": {
+                                    "type": "doc",
+                                    "version": 1,
+                                    "content": [{
+                                        "type": "paragraph",
+                                        "content": [{
+                                            "type": "text",
+                                            "text": pr_comment
+                                        }]
+                                    }]
+                                }
+                            },
+                            auth=auth
+                        )
+                except Exception as e:
+                    logger.error(f"Error updating PR URL field: {str(e)}")
                     # Continue anyway, this is not critical
             
             logger.info(f"Successfully updated JIRA ticket {ticket_id}")
@@ -105,6 +150,10 @@ async def update_jira_ticket(ticket_id: str, status: str, comment: str, pr_url: 
 async def fetch_jira_tickets() -> List[Dict[str, Any]]:
     """Poll the JIRA API for new tickets labeled as Bug"""
     try:
+        if not all([JIRA_URL, JIRA_USER, JIRA_TOKEN]):
+            logger.error("Missing JIRA credentials in environment variables")
+            return []
+            
         logger.info("Fetching new bug tickets from JIRA")
         auth = (JIRA_USER, JIRA_TOKEN)
         
@@ -122,31 +171,55 @@ async def fetch_jira_tickets() -> List[Dict[str, Any]]:
                 return []
                 
             data = response.json()
+            issues = data.get("issues")
+            
+            if not issues:
+                logger.info("No new bug tickets found in JIRA")
+                return []
+                
             new_tickets = []
             
-            for issue in data.get("issues", []):
+            for issue in issues:
                 ticket_id = issue["key"]
-                acceptance_criteria = issue["fields"].get("acceptanceCriteria", "")
+                fields = issue["fields"]
+                
+                # Safely extract fields with proper error handling
+                acceptance_criteria = fields.get("acceptanceCriteria", "")
                 
                 attachments = []
-                for attachment in issue["fields"].get("attachments", []):
+                for attachment in fields.get("attachments", []):
                     attachments.append({
                         "filename": attachment["filename"],
                         "content_url": attachment["content"],
                         "mime_type": attachment["mimeType"]
                     })
-                    
+                
+                # Safely get assignee
+                assignee = "Unassigned"
+                if fields.get("assignee"):
+                    assignee = fields["assignee"].get("displayName", "Unassigned")
+                
+                # Safely get reporter
+                reporter = "Unknown"
+                if fields.get("reporter"):
+                    reporter = fields["reporter"].get("displayName", "Unknown")
+                
+                # Safely get priority
+                priority = "Normal"
+                if fields.get("priority"):
+                    priority = fields["priority"].get("name", "Normal")
+                
                 new_tickets.append({
                     "ticket_id": ticket_id,
-                    "title": issue["fields"]["summary"],
-                    "description": issue["fields"].get("description", ""),
-                    "created": issue["fields"]["created"],
+                    "title": fields["summary"],
+                    "description": fields.get("description", ""),
+                    "created": fields["created"],
                     "acceptance_criteria": acceptance_criteria,
                     "attachments": attachments,
-                    "status": issue["fields"]["status"]["name"],
-                    "priority": issue["fields"]["priority"]["name"],
-                    "reporter": issue["fields"]["reporter"]["displayName"],
-                    "assignee": issue["fields"].get("assignee", {}).get("displayName", "Unassigned")
+                    "status": fields["status"]["name"],
+                    "priority": priority,
+                    "reporter": reporter,
+                    "assignee": assignee
                 })
             
             logger.info(f"Found {len(new_tickets)} new bug tickets")
@@ -154,4 +227,3 @@ async def fetch_jira_tickets() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching JIRA tickets: {str(e)}")
         return []
-
