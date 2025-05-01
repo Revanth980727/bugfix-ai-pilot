@@ -30,6 +30,7 @@ export function useCommunicatorAgent() {
     isValid: boolean;
     rejectionReason?: string;
     validationMetrics?: ValidationMetrics;
+    validationScore?: number;
   } | undefined>(undefined);
 
   const simulateWork = (
@@ -47,6 +48,7 @@ export function useCommunicatorAgent() {
         isValid: boolean;
         rejectionReason?: string;
         validationMetrics?: ValidationMetrics;
+        validationScore?: number;
       };
     }
   ) => {
@@ -104,10 +106,11 @@ export function useCommunicatorAgent() {
       const validationUpdate: Update = {
         timestamp: new Date().toISOString(),
         message: patchValidation.isValid 
-          ? "✅ Patch validation passed - All file paths and diffs are valid"
-          : `❌ Patch validation failed: ${patchValidation.rejectionReason}`,
+          ? `✅ Patch validation passed - All file paths and diffs are valid ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`
+          : `❌ Patch validation failed: ${patchValidation.rejectionReason} ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`,
         type: 'system',
-        confidenceScore: confidence
+        confidenceScore: confidence,
+        metadata: patchValidation
       };
       
       mockUpdates = [validationUpdate, ...mockUpdates];
@@ -139,6 +142,21 @@ export function useCommunicatorAgent() {
       };
       
       mockUpdates = [confidenceUpdate, ...mockUpdates];
+    }
+    
+    // Add validation metrics if available
+    if (patchValidation?.validationMetrics) {
+      const metrics = patchValidation.validationMetrics;
+      const metricsUpdate: Update = {
+        timestamp: new Date().toISOString(),
+        message: `Patch validation metrics: ${metrics.validPatches}/${metrics.totalPatches} patches valid`,
+        type: 'system',
+        metadata: {
+          validationDetails: metrics
+        }
+      };
+      
+      mockUpdates = [metricsUpdate, ...mockUpdates];
     }
     
     const interval = setInterval(() => {

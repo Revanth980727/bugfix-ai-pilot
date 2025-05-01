@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent_framework.communicator_agent import CommunicatorAgent
 from agent_framework.agent_base import AgentStatus
+from github_service.patch_validator import PatchValidator
 
 @pytest.mark.asyncio
 async def test_communicator_agent():
@@ -41,6 +42,13 @@ async def test_communicator_agent():
         "reasons": [],
         "confidence_boost": 10
     })
+    
+    # Initialize patch validator
+    agent.patch_validator = PatchValidator()
+    agent.patch_validator.set_github_client(agent.github_service)
+    agent.patch_validator._is_valid_file_path = MagicMock(return_value=True)
+    agent.patch_validator._is_valid_diff_syntax = MagicMock(return_value=True)
+    agent.patch_validator._check_for_placeholders = MagicMock(return_value=[])
     
     # Test successful case
     success_input = {
@@ -161,10 +169,10 @@ async def test_patch_validation(agent):
     """Test validation of LLM-generated patches"""
     logger.info("Testing patch validation logic...")
     
-    # Mock patch validation functions
-    agent.validate_file_exists = MagicMock(return_value=True)
-    agent.validate_diff_syntax = MagicMock(return_value=True)
-    agent.check_for_placeholders = MagicMock(return_value=False)
+    # Configure patch validator mocks
+    agent.patch_validator._is_valid_file_path = MagicMock(return_value=True)
+    agent.patch_validator._is_valid_diff_syntax = MagicMock(return_value=True)
+    agent.patch_validator._check_for_placeholders = MagicMock(return_value=[])
     
     # Test case with valid patch
     valid_patch_input = {
@@ -205,7 +213,12 @@ async def test_patch_validation(agent):
         "max_retries": 4
     }
     
-    # Override validation for this test
+    # Reset mocks for invalid path test
+    agent.patch_validator._is_valid_file_path = MagicMock(return_value=False) 
+    agent.patch_validator._is_valid_diff_syntax = MagicMock(return_value=True)
+    agent.patch_validator._check_for_placeholders = MagicMock(return_value=["path_placeholder:/path/to/"])
+    
+    # Override GitHub service validation for this test
     agent.github_service.validate_patch = MagicMock(return_value={
         "valid": False,
         "reasons": ["Placeholder path detected"],
@@ -231,6 +244,11 @@ async def test_patch_validation(agent):
         "max_retries": 4
     }
     
+    # Reset mocks for syntax error test
+    agent.patch_validator._is_valid_file_path = MagicMock(return_value=True)
+    agent.patch_validator._is_valid_diff_syntax = MagicMock(return_value=False)
+    agent.patch_validator._check_for_placeholders = MagicMock(return_value=[])
+    
     # Override validation for this test
     agent.github_service.validate_patch = MagicMock(return_value={
         "valid": False,
@@ -241,7 +259,88 @@ async def test_patch_validation(agent):
     result = await agent.run(syntax_error_input)
     logger.info(f"Syntax error validation result: {result}")
     assert not result.get("patch_valid", True), "Syntactically invalid patch should be rejected"
-    assert "syntax_error" in result.get("rejection_reason", ""), "Syntax error should be mentioned"
+    assert "syntax_error" in result.get("rejection_reason", "") or "diff_syntax_invalid" in result.get("rejection_reason", ""), "Syntax error should be mentioned"
+
+    # Test confidence score adjustment based on validation results
+    confidence_input = {
+        "ticket_id": "TEST-131",
+        "test_passed": True,
+        "patches": [
+            {
+                "file_path": "real_file.py",
+                "diff": "@@ -10,5 +10,7 @@\n import os\n+import logging\n+\n def main():\n-    print('Hello')\n+    logging.info('Hello')\n     return True"
+            }
+        ],
+        "confidence_score": 75,  # Initial confidence
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    # Reset mocks for confidence score test
+    agent.patch_validator._is_valid_file_path = MagicMock(return_value=True)
+    agent.patch_validator._is_valid_diff_syntax = MagicMock(return_value=True)
+    agent.patch_validator._check_for_placeholders = MagicMock(return_value=[])
+    
+    # Valid patch should boost confidence
+    agent.github_service.validate_patch = MagicMock(return_value={
+        "valid": True,
+        "reasons": [],
+        "confidence_boost": 10
+    })
+    
+    result = await agent.run(confidence_input)
+    logger.info(f"Confidence adjustment test result: {result}")
+    assert result.get("confidence_score", 0) > 75, "Confidence should be boosted for valid patches"
+    
+    # Multiple validation failures
+    multi_failure_input = {
+        "ticket_id": "TEST-132",
+        "test_passed": True,
+        "patches": [
+            {"file_path": "real_file.py", "diff": "@@ -1,1 +1,1 @@\n-old\n+new"},
+            {"file_path": "/fake/path.py", "diff": "invalid diff"},
+            {"file_path": "example.py", "diff": "@@ -1,1 +1,1 @@\n-test\n+# TODO: implement me"}
+        ],
+        "confidence_score": 80,
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    # Setup complex validation scenario
+    def validate_patch(patch):
+        if "real_file.py" in patch["file_path"]:
+            return {"valid": True, "confidence_boost": 5}
+        elif "/fake/" in patch["file_path"]:
+            return {"valid": False, "confidence_penalty": 20, "rejection_reason": "file_path_invalid"}
+        else:
+            return {"valid": False, "confidence_penalty": 15, "rejection_reason": "contains_placeholders"}
+    
+    agent.github_service.validate_patch = MagicMock(side_effect=validate_patch)
+    
+    # Configure patch validator for this test
+    def mock_is_valid_file_path(file_path):
+        return "/fake/" not in file_path
+        
+    def mock_is_valid_diff_syntax(diff):
+        return "invalid diff" not in diff
+        
+    def mock_check_for_placeholders(file_path, diff):
+        if "example.py" in file_path or "TODO" in diff:
+            return ["placeholder_detected"]
+        return []
+    
+    agent.patch_validator._is_valid_file_path = MagicMock(side_effect=mock_is_valid_file_path)
+    agent.patch_validator._is_valid_diff_syntax = MagicMock(side_effect=mock_is_valid_diff_syntax)
+    agent.patch_validator._check_for_placeholders = MagicMock(side_effect=lambda path, diff: mock_check_for_placeholders(path, diff))
+    
+    result = await agent.run(multi_failure_input)
+    logger.info(f"Multiple validation failures test result: {result}")
+    
+    assert not result.get("patch_valid", True), "Multiple failures should mark patch as invalid"
+    assert result.get("confidence_score", 80) < 80, "Confidence should decrease with multiple failures"
+    assert "validation_metrics" in result, "Validation metrics should be included"
+    if "validation_metrics" in result:
+        assert result["validation_metrics"].get("rejectedPatches", 0) == 2, "Should have 2 rejected patches"
 
 if __name__ == "__main__":
     asyncio.run(test_communicator_agent())
