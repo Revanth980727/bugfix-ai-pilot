@@ -62,4 +62,5 @@ export interface Update {
   message: string;
   type: UpdateType;
   confidenceScore?: number;
+  metadata?: any; // Added metadata property to support validation results and other additional data
 }
