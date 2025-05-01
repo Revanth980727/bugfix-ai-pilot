@@ -140,6 +140,48 @@ class GitHubClient:
             logger.error(f"Failed to commit changes: {str(e)}")
             return False
     
+    def check_for_existing_pr(self, head_branch: str, base_branch: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Check if a PR already exists for the specified branches
+        
+        Args:
+            head_branch: Source branch
+            base_branch: Target branch
+            
+        Returns:
+            Dict with PR details or None if no PR exists
+        """
+        try:
+            if not self.repo:
+                logger.error("Repository connection not established")
+                return None
+                
+            if not base_branch:
+                base_branch = self.repo.default_branch
+                
+            # Look for open PRs with matching head and base branches
+            existing_prs = self.repo.get_pulls(
+                state='open',
+                head=f"{GITHUB_REPO_OWNER}:{head_branch}",
+                base=base_branch
+            )
+            
+            # Return the first matching PR if any
+            for pr in existing_prs:
+                logger.info(f"Found existing PR #{pr.number}: {pr.html_url}")
+                return {
+                    'number': pr.number,
+                    'url': pr.html_url,
+                    'title': pr.title,
+                    'body': pr.body
+                }
+                
+            return None
+            
+        except GithubException as e:
+            logger.error(f"Error checking for existing PRs: {str(e)}")
+            return None
+    
     def create_pull_request(self, title: str, body: str,
                           head_branch: str, base_branch: str = None) -> Optional[str]:
         """Create a pull request from the specified branch."""
@@ -151,18 +193,13 @@ class GitHubClient:
             if not base_branch:
                 base_branch = self.repo.default_branch
             
-            # Check for existing PR
-            existing_prs = self.repo.get_pulls(
-                state='open',
-                head=f"{GITHUB_REPO_OWNER}:{head_branch}",
-                base=base_branch
-            )
+            # Check for existing PR first
+            existing_pr = self.check_for_existing_pr(head_branch, base_branch)
+            if existing_pr:
+                logger.info(f"Using existing PR: {existing_pr['url']}")
+                return existing_pr['url']
             
-            for pr in existing_prs:
-                logger.info(f"Pull request already exists: {pr.html_url}")
-                return pr.html_url
-            
-            # Create new PR
+            # Create new PR if none exists
             pr = self.repo.create_pull(
                 title=title,
                 body=body,
@@ -170,10 +207,23 @@ class GitHubClient:
                 base=base_branch
             )
             
-            logger.info(f"Created pull request: {pr.html_url}")
+            logger.info(f"Created new pull request: {pr.html_url}")
             return pr.html_url
             
         except GithubException as e:
+            if e.status == 422:
+                # This often means a PR already exists but wasn't found by check_for_existing_pr
+                # Try to find it again with a broader search
+                logger.warning(f"PR creation failed with 422 status, may already exist. Attempting broader search.")
+                try:
+                    # Look for any open PRs from this head branch
+                    for pr in self.repo.get_pulls(state='open'):
+                        if pr.head.ref == head_branch:
+                            logger.info(f"Found existing PR after error: {pr.html_url}")
+                            return pr.html_url
+                except Exception as search_error:
+                    logger.error(f"Error in broader PR search: {str(search_error)}")
+                    
             logger.error(f"Failed to create pull request: {str(e)}")
             return None
 
@@ -200,18 +250,36 @@ class GitHubClient:
             logger.info(f"Adding comment to PR #{pr_number}")
             
             # Get PR and add comment
-            pr = self.repo.get_pull(pr_number)
-            pr.create_issue_comment(comment)
-            
-            logger.info(f"Successfully added comment to PR #{pr_number}")
-            return True
+            try:
+                pr = self.repo.get_pull(pr_number)
+                pr.create_issue_comment(comment)
                 
-        except GithubException as e:
-            if e.status == 404:
-                logger.error(f"PR #{pr_number} not found. Check PR number.")
-            else:
-                logger.error(f"Error adding comment to PR #{pr_number}: {str(e)}")
-            return False
+                logger.info(f"Successfully added comment to PR #{pr_number}")
+                return True
+                
+            except GithubException as pr_error:
+                if pr_error.status == 404:
+                    # The PR number might be invalid, try to extract it from a URL
+                    if isinstance(pr_number, str) and '/' in pr_number:
+                        # Try extracting PR number from URL
+                        parts = pr_number.split('/')
+                        pr_id = next((part for part in parts if part.isdigit()), None)
+                        
+                        if pr_id:
+                            try:
+                                # Try again with extracted number
+                                pr_number = int(pr_id)
+                                pr = self.repo.get_pull(pr_number)
+                                pr.create_issue_comment(comment)
+                                logger.info(f"Successfully added comment to PR #{pr_number} after URL extraction")
+                                return True
+                            except Exception as inner_error:
+                                logger.error(f"Failed to add comment after URL extraction: {str(inner_error)}")
+                                return False
+                                
+                logger.error(f"PR #{pr_number} not found or cannot be accessed: {str(pr_error)}")
+                return False
+                
         except Exception as e:
             logger.error(f"Unexpected error adding comment to PR #{pr_number}: {str(e)}")
             return False

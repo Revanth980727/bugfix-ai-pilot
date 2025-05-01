@@ -175,6 +175,14 @@ class GitHubService:
         
         return '\n'.join(result_lines)
     
+    def check_for_existing_pr(self, branch_name: str, base_branch: str = None) -> Optional[Dict[str, Any]]:
+        """Check if a PR already exists for the specified branch."""
+        if not self.client:
+            logger.error("GitHub client not initialized")
+            return None
+            
+        return self.client.check_for_existing_pr(branch_name, base_branch)
+    
     def create_fix_pr(self, branch_name: str, ticket_id: str, title: str,
                      description: str, base_branch: str = None) -> Optional[str]:
         """Create a pull request for the bug fix."""
@@ -201,12 +209,12 @@ class GitHubService:
             base_branch=base_branch
         )
     
-    async def add_pr_comment(self, pr_number: str, comment: str) -> bool:
+    def add_pr_comment(self, pr_identifier, comment: str) -> bool:
         """
         Add a comment to a pull request
         
         Args:
-            pr_number: The PR number or ID
+            pr_identifier: PR number or URL 
             comment: The comment text
             
         Returns:
@@ -218,19 +226,16 @@ class GitHubService:
         
         try:
             # Extract PR number from URL if needed
-            if isinstance(pr_number, str) and not pr_number.isdigit():
-                # If pr_number is a URL, extract the number
-                url_match = re.search(r'/pull/(\d+)', pr_number)
+            pr_number = pr_identifier
+            if isinstance(pr_identifier, str):
+                # If it's a URL, extract the number
+                url_match = re.search(r'/pull/(\d+)', pr_identifier)
                 if url_match:
                     pr_number = url_match.group(1)
             
-            # Convert to int if it's a string with digits
-            if isinstance(pr_number, str) and pr_number.isdigit():
-                pr_number = int(pr_number)
-                
-            # Use the GitHubClient instance to add the comment
+            # Use the client to add the comment
             return self.client.add_pr_comment(pr_number, comment)
             
         except Exception as e:
-            logger.error(f"Error adding comment to PR {pr_number}: {str(e)}")
+            logger.error(f"Error adding comment to PR {pr_identifier}: {str(e)}")
             return False

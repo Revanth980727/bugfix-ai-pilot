@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -116,33 +115,39 @@ async def deploy_fix(request: DeployRequest):
             if not branch_name:
                 raise HTTPException(status_code=500, detail="Failed to create branch")
             
-            # Format the diffs for the commit
-            file_changes = []
-            for diff in request.diffs:
-                file_changes.append({
-                    "filename": diff.filename,
-                    "content": diff.diff
-                })
-            
-            # Commit the changes
-            commit_success = github_service.commit_bug_fix(
-                branch_name,
-                file_changes,
-                request.ticket_id,
-                request.commit_message
-            )
-            
-            if not commit_success:
-                raise HTTPException(status_code=500, detail="Failed to commit changes")
-            
-            # Create pull request
-            pr_url = github_service.create_fix_pr(
-                branch_name,
-                request.ticket_id,
-                f"Fix for {request.ticket_id}",
-                f"Automated bug fix for {request.ticket_id}\n\nThis PR contains the following changes:\n" + 
-                "\n".join([f"- {diff.filename}: {diff.explanation}" for diff in request.diffs])
-            )
+            # Check if PR already exists
+            existing_pr = github_service.check_for_existing_pr(branch_name, "main")
+            if existing_pr:
+                logger.info(f"Found existing PR for branch {branch_name}: {existing_pr['url']}")
+                pr_url = existing_pr['url']
+            else:
+                # Format the diffs for the commit
+                file_changes = []
+                for diff in request.diffs:
+                    file_changes.append({
+                        "filename": diff.filename,
+                        "content": diff.diff
+                    })
+                
+                # Commit the changes
+                commit_success = github_service.commit_bug_fix(
+                    branch_name,
+                    file_changes,
+                    request.ticket_id,
+                    request.commit_message
+                )
+                
+                if not commit_success:
+                    raise HTTPException(status_code=500, detail="Failed to commit changes")
+                
+                # Create pull request
+                pr_url = github_service.create_fix_pr(
+                    branch_name,
+                    request.ticket_id,
+                    f"Fix for {request.ticket_id}",
+                    f"Automated bug fix for {request.ticket_id}\n\nThis PR contains the following changes:\n" + 
+                    "\n".join([f"- {diff.filename}: {diff.explanation}" for diff in request.diffs])
+                )
         else:
             # Fallback to github_utils
             branch_name = create_branch(
@@ -191,13 +196,18 @@ async def deploy_fix(request: DeployRequest):
         
         # Add a comment to the PR
         if pr_url and 'github_service' in globals():
-            comment = f"This PR was created automatically by BugFix AI to fix issue {request.ticket_id}"
+            comment = f"This PR was created automatically by BugFix AI to fix issue {request.ticket_id}\n\n"
+            comment += "Test results:\n"
+            for test in request.test_results:
+                status_emoji = "✅" if test.status == "passed" else "❌"
+                comment += f"- {status_emoji} {test.name}: {test.status}\n"
+            
             try:
-                # Extract PR number from URL if needed
-                pr_number = pr_url.split('/')[-1]
-                await github_service.add_pr_comment(pr_number, comment)
+                comment_success = github_service.add_pr_comment(pr_url, comment)
+                if not comment_success:
+                    logger.warning(f"Failed to add comment to PR {pr_url}")
             except Exception as e:
-                logger.error(f"Failed to add comment to PR {pr_url}: {str(e)}")
+                logger.error(f"Error adding comment to PR {pr_url}: {str(e)}")
         
         logger.info(f"Deployment successful for ticket {request.ticket_id}, PR created at {pr_url}")
         
