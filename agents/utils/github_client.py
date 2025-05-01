@@ -226,5 +226,49 @@ class GitHubClient:
         except Exception as e:
             self.logger.error(f"Unexpected error adding comment to PR #{pr_number}: {str(e)}")
             return False
+
+    def find_pr_for_branch(self, branch_name: str, base_branch: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Find a pull request associated with a specific branch
+        
+        Args:
+            branch_name: Name of the branch to search for
+            base_branch: Base branch name (defaults to default_branch if not specified)
+            
+        Returns:
+            PR information dictionary if found, None otherwise
+        """
+        if not base_branch:
+            base_branch = self.default_branch
+            
+        url = f"{self.repo_api_url}/pulls"
+        params = {
+            "head": f"{self.repo_owner}:{branch_name}",
+            "base": base_branch,
+            "state": "open"
+        }
+        
+        self.logger.info(f"Searching for PRs from branch {branch_name} to {base_branch}")
+        response = requests.get(url, headers=self.headers, params=params)
+        
+        if response.status_code != 200:
+            self.logger.error(f"Failed to search for PRs: {response.status_code}, {response.text}")
+            return None
+            
+        prs = response.json()
+        if not prs:
+            self.logger.info(f"No PR found for branch {branch_name}")
+            return None
+            
+        pr = prs[0]  # Use the first matching PR
+        self.logger.info(f"Found PR #{pr['number']} for branch {branch_name}")
+        
+        return {
+            "number": pr["number"],
+            "url": pr["html_url"],
+            "title": pr["title"],
+            "state": pr["state"],
+            "created_at": pr["created_at"]
+        }
         
     # ... keep existing code (patch application logic)

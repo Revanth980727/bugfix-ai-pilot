@@ -1,3 +1,4 @@
+
 from typing import Dict, Any, Optional
 import logging
 import asyncio
@@ -61,20 +62,55 @@ class CommunicatorAgent(Agent):
         
         logger.error(f"Failed to update JIRA ticket {ticket_id} after {self.max_api_retries} attempts")
         return False
+    
+    async def _get_valid_pr_url(self, ticket_id: str, github_pr_url: str = None) -> Optional[str]:
+        """
+        Get a valid PR URL for a ticket, either from the provided URL or by looking up the branch
+        
+        Args:
+            ticket_id: The JIRA ticket ID
+            github_pr_url: Optional PR URL already provided
             
-    async def _post_github_comment(self, pr_url: str, comment: str) -> bool:
+        Returns:
+            Optional[str]: Valid PR URL if found, None otherwise
+        """
+        # First check if we already have a valid PR URL
+        if github_pr_url and isinstance(github_pr_url, str):
+            # Verify this is a proper PR URL with numeric PR number
+            url_match = re.search(r'/pull/(\d+)', github_pr_url)
+            if url_match and url_match.group(1).isdigit():
+                logger.info(f"Using provided PR URL: {github_pr_url}")
+                return github_pr_url
+            else:
+                logger.warning(f"Provided PR URL is invalid: {github_pr_url}")
+        
+        # Try to find a PR for this ticket by looking up the branch
+        pr_info = self.github_service.find_pr_for_ticket(ticket_id)
+        if pr_info and "url" in pr_info:
+            logger.info(f"Found PR URL for ticket {ticket_id}: {pr_info['url']}")
+            return pr_info["url"]
+            
+        logger.warning(f"No valid PR URL found for ticket {ticket_id}")
+        return None
+            
+    async def _post_github_comment(self, ticket_id: str, pr_url: str, comment: str) -> bool:
         """Post a comment on GitHub PR with retry logic"""
         retry_count = 0
+        
+        # First, ensure we have a valid PR URL
+        if not pr_url or not isinstance(pr_url, str):
+            # Try to find the PR URL based on ticket ID
+            pr_url = await self._get_valid_pr_url(ticket_id)
+            if not pr_url:
+                logger.error(f"No valid PR URL found for ticket {ticket_id}")
+                return False
+        
         while retry_count < self.max_api_retries:
             try:
                 # Verify GitHub settings
                 github_ok, _ = verify_github_repo_settings()
                 if not github_ok:
                     logger.error("GitHub settings are not properly configured")
-                    return False
-                
-                if not pr_url or not isinstance(pr_url, str) or not pr_url.startswith("http"):
-                    logger.error(f"Invalid PR URL: {pr_url}")
                     return False
                 
                 # Extract PR number from URL
@@ -115,15 +151,24 @@ class CommunicatorAgent(Agent):
         logger.error(f"Failed to post GitHub comment to PR {pr_url} after {self.max_api_retries} attempts")
         return False
 
-    async def _apply_gpt_fixes_to_code(self, ticket_id: str, gpt_output: Dict[str, Any]) -> bool:
-        """Apply GPT-suggested fixes to code and commit to GitHub"""
+    async def _apply_gpt_fixes_to_code(self, ticket_id: str, gpt_output: Dict[str, Any]) -> Optional[str]:
+        """
+        Apply GPT-suggested fixes to code and commit to GitHub
+        
+        Args:
+            ticket_id: The JIRA ticket ID
+            gpt_output: Dictionary containing GPT output
+            
+        Returns:
+            Optional[str]: PR URL if created, None otherwise
+        """
         try:
             # Create a new branch for the fix
             branch_name = f"fix/{ticket_id}"
             branch_created = self.github_service.create_fix_branch(ticket_id)
-            if not branch_name:
+            if not branch_created:
                 logger.error(f"Failed to create branch for ticket {ticket_id}")
-                return False
+                return None
                 
             # Extract file paths and GPT response
             raw_gpt_response = gpt_output.get("raw_gpt_response", "")
@@ -152,6 +197,7 @@ class CommunicatorAgent(Agent):
                     success = success or file_success
                     
             # Create a pull request if changes were applied
+            pr_url = None
             if success:
                 pr_url = self.github_service.create_fix_pr(
                     branch_name, 
@@ -165,29 +211,30 @@ class CommunicatorAgent(Agent):
                     url_match = re.search(r'/pull/(\d+)', pr_url)
                     if not url_match:
                         logger.error(f"Created PR URL does not contain numeric PR number: {pr_url}")
-                        return False
+                        return None
                         
                     pr_number = url_match.group(1)
                     if not pr_number.isdigit():
                         logger.error(f"Non-numeric PR number detected: {pr_number}")
-                        return False
+                        return None
                         
                     # Add the GPT response as a comment on the PR
                     comment_success = await self._post_github_comment(
+                        ticket_id,
                         pr_url, 
                         f"# GPT-4 Analysis\n\n```\n{raw_gpt_response}\n```"
                     )
                     
                     if not comment_success:
                         logger.warning(f"Failed to add GPT analysis comment to PR {pr_url}")
-                        
-                    return True
                     
-            return success
+                    return pr_url
+                    
+            return None
             
         except Exception as e:
             logger.error(f"Error applying GPT fixes to code: {str(e)}")
-            return False
+            return None
 
     async def format_agent_comment(self, agent_type: str, message: str, attempt: int = None, max_attempts: int = None) -> str:
         """Format a structured comment for a specific agent type"""
@@ -230,9 +277,16 @@ class CommunicatorAgent(Agent):
         # Timestamp for updates
         timestamp = datetime.now().isoformat()
         
-        # Try to apply GPT fixes to code if available
-        if developer_result and not test_passed:
-            await self._apply_gpt_fixes_to_code(ticket_id, developer_result)
+        # Get or find a valid PR URL based on ticket ID
+        valid_pr_url = await self._get_valid_pr_url(ticket_id, github_pr_url)
+        
+        # If no PR URL is available but we have developer results, try to create one
+        if not valid_pr_url and developer_result and not test_passed:
+            self.log("No valid PR URL found, attempting to create one from developer results")
+            valid_pr_url = await self._apply_gpt_fixes_to_code(ticket_id, developer_result)
+        
+        # Use the validated PR URL for all operations
+        github_pr_url = valid_pr_url
         
         if early_escalation:
             # Handle early escalation (before max retries)
@@ -274,6 +328,7 @@ class CommunicatorAgent(Agent):
                     github_comment += f" (Confidence score: {confidence_score}%)"
                 
                 github_updates_success = await self._post_github_comment(
+                    ticket_id,
                     github_pr_url,
                     github_comment
                 )
@@ -320,6 +375,7 @@ class CommunicatorAgent(Agent):
                     
                 # Fixed the awaiting of the post_github_comment method
                 github_updates_success = await self._post_github_comment(
+                    ticket_id,
                     github_pr_url,
                     github_comment
                 )
@@ -371,6 +427,7 @@ class CommunicatorAgent(Agent):
                     github_comment += f"\n\nLast failure: {failure_details or failure_summary}"
                     
                 github_updates_success = await self._post_github_comment(
+                    ticket_id,
                     github_pr_url,
                     github_comment
                 )
@@ -464,6 +521,7 @@ class CommunicatorAgent(Agent):
             "test_passed": test_passed,
             "jira_updated": jira_updates_success,
             "github_updated": github_updates_success if github_pr_url else None,
+            "github_pr_url": github_pr_url, # Add the validated PR URL to the result
             "escalated": escalated or early_escalation,
             "early_escalation": early_escalation,
             "retry_count": retry_count,

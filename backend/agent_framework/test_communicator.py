@@ -31,6 +31,10 @@ async def test_communicator_agent():
     agent.github_service.create_fix_branch = MagicMock(return_value="test-branch")
     agent.github_service.create_pull_request = MagicMock(return_value="https://github.com/org/repo/pull/123")
     agent.github_service.add_pr_comment = MagicMock(return_value=True)
+    agent.github_service.find_pr_for_branch = MagicMock(return_value={
+        "number": 123,
+        "url": "https://github.com/org/repo/pull/123"
+    })
     
     # Test successful case
     success_input = {
@@ -117,6 +121,31 @@ async def test_communicator_agent():
         
     except Exception as e:
         logger.error(f"Invalid PR URL test failed: {str(e)}")
+        raise
+        
+    # Test PR URL handling with ticket ID used as branch name
+    ticket_as_branch_input = {
+        "ticket_id": "TEST-127",
+        "test_passed": True,
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    # Mock to return a PR when searching by branch name
+    agent.github_service.find_pr_for_branch = MagicMock(return_value={
+        "number": 127,
+        "url": "https://github.com/org/repo/pull/127"
+    })
+    
+    try:
+        result = await agent.run(ticket_as_branch_input)
+        logger.info(f"Ticket as branch result: {result}")
+        
+        # Verify the agent looked up the PR by branch name
+        agent.github_service.find_pr_for_branch.assert_called_with(f"fix/TEST-127")
+        
+    except Exception as e:
+        logger.error(f"Ticket as branch test failed: {str(e)}")
         raise
 
 if __name__ == "__main__":

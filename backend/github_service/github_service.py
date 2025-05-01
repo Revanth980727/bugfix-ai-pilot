@@ -215,6 +215,7 @@ class GitHubService:
 - Automated PR created by BugFix AI
         """
         
+        # Create PR using the configured repository information
         return self.client.create_pull_request(
             title=pr_title,
             body=pr_body,
@@ -249,7 +250,17 @@ class GitHubService:
                 # Handle cases where ticket_id is passed as PR identifier erroneously
                 if not url_match and not str(pr_identifier).isdigit():
                     logger.warning(f"Invalid PR identifier: {pr_identifier}, appears to be a ticket ID not a PR number")
-                    return False
+                    
+                    # Try to find the PR by looking for a branch named fix/{pr_identifier}
+                    branch_name = f"fix/{pr_identifier}"
+                    existing_pr = self.check_for_existing_pr(branch_name)
+                    
+                    if existing_pr and "number" in existing_pr:
+                        logger.info(f"Found PR #{existing_pr['number']} for ticket {pr_identifier}")
+                        pr_number = existing_pr["number"]
+                    else:
+                        logger.error(f"Could not find PR for ticket {pr_identifier}")
+                        return False
             
             # Ensure pr_number is an integer
             try:
@@ -279,6 +290,45 @@ class GitHubService:
         except Exception as e:
             logger.error(f"Error adding comment to PR {pr_identifier}: {str(e)}")
             return False
+    
+    def find_pr_for_ticket(self, ticket_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a pull request associated with a ticket ID
+        
+        Args:
+            ticket_id: The ticket ID to search for
+            
+        Returns:
+            Optional[Dict[str, Any]]: PR information if found, None otherwise
+        """
+        if not self.client:
+            logger.error("GitHub client not initialized")
+            return None
+            
+        # First try looking for a branch with the ticket ID
+        branch_name = f"fix/{ticket_id}"
+        
+        try:
+            # Check if the branch exists
+            exists = self.client.check_branch_exists(branch_name)
+            if not exists:
+                logger.info(f"No branch found for ticket {ticket_id}")
+                return None
+                
+            # Look for PRs from this branch
+            pr_data = self.client.find_pr_for_branch(branch_name)
+            if pr_data:
+                logger.info(f"Found PR #{pr_data['number']} for ticket {ticket_id}")
+                return pr_data
+                
+            # Alternatively, search for PRs with the ticket ID in the title
+            # This is left as a future enhancement
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding PR for ticket {ticket_id}: {str(e)}")
+            return None
             
     def delete_branch(self, branch_name: str) -> bool:
         """
