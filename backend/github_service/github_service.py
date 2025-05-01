@@ -17,12 +17,16 @@ class GitHubService:
             self.token = self.client.token
             self.repo_owner = self.client.repo.owner.login if self.client.repo else None
             self.repo_name = self.client.repo.name if self.client.repo else None
+            self.repo_api_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}" if self.repo_owner and self.repo_name else None
+            self.headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"} if self.token else None
         except (ValueError, GithubException) as e:
             logger.error(f"Failed to initialize GitHub service: {str(e)}")
             self.client = None
             self.token = None
             self.repo_owner = None
             self.repo_name = None
+            self.repo_api_url = None
+            self.headers = None
     
     def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> Optional[str]:
         """Create a new branch for fixing a bug."""
@@ -149,16 +153,11 @@ class GitHubService:
         Returns:
             Optional[Dict[str, Any]]: PR information if found, None otherwise
         """
-        if not self.client:
-            logger.error("GitHub client not initialized")
+        if not self.client or not self.repo_owner or not self.repo_name or not self.token:
+            logger.error("GitHub client not properly initialized")
             return None
         
         try:
-            # Use GitHub API to check for open PRs for this branch
-            if not self.repo_owner or not self.repo_name:
-                logger.error("Repository owner or name not set")
-                return None
-            
             # Format the request for GitHub API
             url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/pulls"
             headers = {
@@ -234,8 +233,8 @@ class GitHubService:
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.client:
-            logger.error("GitHub client not initialized")
+        if not self.client or not self.repo_owner or not self.repo_name or not self.token:
+            logger.error("GitHub client not properly initialized")
             return False
         
         try:
@@ -248,14 +247,35 @@ class GitHubService:
                     pr_number = url_match.group(1)
                     
                 # Handle cases where ticket_id is passed as PR identifier erroneously
-                if pr_number and not pr_number.isdigit() and not url_match:
+                if not url_match and not str(pr_identifier).isdigit():
                     logger.warning(f"Invalid PR identifier: {pr_identifier}, appears to be a ticket ID not a PR number")
                     return False
             
-            # Use the client to add the comment
-            success = self.client.add_pr_comment(pr_number, comment)
-            return success
+            # Ensure pr_number is an integer
+            try:
+                pr_number = int(pr_number)
+            except (ValueError, TypeError):
+                logger.error(f"Could not convert PR identifier '{pr_number}' to integer")
+                return False
+                
+            # Use the GitHub API to add the comment
+            import requests
+            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/issues/{pr_number}/comments"
+            headers = {
+                "Authorization": f"token {self.token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            data = {"body": comment}
             
+            response = requests.post(url, headers=headers, json=data)
+            
+            if response.status_code in [201, 200]:
+                logger.info(f"Successfully added comment to PR #{pr_number}")
+                return True
+            else:
+                logger.error(f"Failed to add comment to PR #{pr_number}: {response.status_code}, {response.text}")
+                return False
+                
         except Exception as e:
             logger.error(f"Error adding comment to PR {pr_identifier}: {str(e)}")
             return False
@@ -270,8 +290,8 @@ class GitHubService:
         Returns:
             bool: True if successful, False otherwise
         """
-        if not self.client:
-            logger.error("GitHub client not initialized")
+        if not self.client or not self.repo_api_url or not self.headers:
+            logger.error("GitHub client not properly initialized")
             return False
             
         try:
@@ -281,9 +301,9 @@ class GitHubService:
                 return True
                 
             # Format the request for GitHub API
+            import requests
             url = f"{self.repo_api_url}/git/refs/heads/{branch_name}"
             
-            import requests
             response = requests.delete(url, headers=self.headers)
             
             if response.status_code in [204, 200]:
