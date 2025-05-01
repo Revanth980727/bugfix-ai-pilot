@@ -63,7 +63,7 @@ async def test_communicator_agent():
     failure_input = {
         "ticket_id": "TEST-124",
         "test_passed": False,
-        "github_pr_url": "https://github.com/org/repo/pull/124",  # Note: numeric PR number is used
+        "github_pr_url": "https://github.com/org/repo/pull/124",
         "retry_count": 2,
         "max_retries": 4
     }
@@ -147,6 +147,95 @@ async def test_communicator_agent():
     except Exception as e:
         logger.error(f"Ticket as branch test failed: {str(e)}")
         raise
+    
+    # Test patch validation - new test case for patch quality assessment
+    await test_patch_validation(agent)
+
+async def test_patch_validation(agent):
+    """Test validation of LLM-generated patches"""
+    logger.info("Testing patch validation logic...")
+    
+    # Mock patch validation functions
+    agent.validate_file_exists = MagicMock(return_value=True)
+    agent.validate_diff_syntax = MagicMock(return_value=True)
+    agent.check_for_placeholders = MagicMock(return_value=False)
+    
+    # Test case with valid patch
+    valid_patch_input = {
+        "ticket_id": "TEST-128",
+        "test_passed": True,
+        "patches": [
+            {
+                "file_path": "real_file.py",
+                "diff": "@@ -10,5 +10,7 @@\n import os\n+import logging\n+\n def main():\n-    print('Hello')\n+    logging.info('Hello')\n     return True"
+            }
+        ],
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    # Override GitHub service for this test
+    agent.github_service.validate_patch = MagicMock(return_value={
+        "valid": True,
+        "reasons": [],
+        "confidence_boost": 10
+    })
+    
+    result = await agent.run(valid_patch_input)
+    logger.info(f"Valid patch validation result: {result}")
+    assert result.get("patch_valid", False), "Valid patch should be marked as valid"
+    
+    # Test case with invalid patch (placeholder path)
+    invalid_patch_input = {
+        "ticket_id": "TEST-129",
+        "test_passed": False,
+        "patches": [
+            {
+                "file_path": "/path/to/some/file.py",  # Placeholder path
+                "diff": "@@ -5,3 +5,3 @@\n def func():\n-    return None\n+    return {}"
+            }
+        ],
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    # Override validation for this test
+    agent.github_service.validate_patch = MagicMock(return_value={
+        "valid": False,
+        "reasons": ["Placeholder path detected"],
+        "confidence_penalty": 30
+    })
+    
+    result = await agent.run(invalid_patch_input)
+    logger.info(f"Invalid patch validation result: {result}")
+    assert not result.get("patch_valid", True), "Invalid patch should be marked as invalid"
+    assert "rejection_reason" in result, "Rejection reason should be provided"
+    
+    # Test case with syntactically invalid diff
+    syntax_error_input = {
+        "ticket_id": "TEST-130",
+        "test_passed": False,
+        "patches": [
+            {
+                "file_path": "real_file.py",
+                "diff": "This is not a valid diff format"  # Not proper diff syntax
+            }
+        ],
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    # Override validation for this test
+    agent.github_service.validate_patch = MagicMock(return_value={
+        "valid": False,
+        "reasons": ["Invalid diff syntax"],
+        "confidence_penalty": 40
+    })
+    
+    result = await agent.run(syntax_error_input)
+    logger.info(f"Syntax error validation result: {result}")
+    assert not result.get("patch_valid", True), "Syntactically invalid patch should be rejected"
+    assert "syntax_error" in result.get("rejection_reason", ""), "Syntax error should be mentioned"
 
 if __name__ == "__main__":
     asyncio.run(test_communicator_agent())
