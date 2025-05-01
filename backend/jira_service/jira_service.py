@@ -1,9 +1,13 @@
+
 import asyncio
 import logging
 import signal
 import sys
 import traceback
-from typing import Dict, Set
+from typing import Dict, Set, Optional
+import os
+import json
+import time
 
 from . import config
 from .jira_client import JiraClient
@@ -52,11 +56,74 @@ class JiraService:
             # Flag to control the polling loop
             self.running = False
             
+            # Set up lock file directory
+            self.lock_dir = os.environ.get("TICKET_LOCK_DIR", "/tmp/bugfix_ai_locks")
+            os.makedirs(self.lock_dir, exist_ok=True)
+            
             logger.info(f"JIRA service initialized with poll interval of {self.poll_interval}s")
+            logger.info(f"Using lock directory: {self.lock_dir}")
             
         except (EnvironmentError, ValueError) as e:
             logger.critical(f"Failed to initialize JIRA service: {e}")
             sys.exit(1)
+    
+    def _acquire_lock(self, ticket_id: str) -> bool:
+        """
+        Acquire a lock on the ticket to prevent duplicate processing.
+        Returns True if the lock was acquired, False otherwise.
+        """
+        lock_file = os.path.join(self.lock_dir, f"{ticket_id}.lock")
+        
+        try:
+            # Check if lock exists and is recent
+            if os.path.exists(lock_file):
+                # Check if the lock is stale (older than 1 hour)
+                lock_time = os.path.getmtime(lock_file)
+                if time.time() - lock_time < 3600:  # 1 hour in seconds
+                    # Lock exists and is recent, read it to see who has it
+                    with open(lock_file, 'r') as f:
+                        try:
+                            lock_data = json.load(f)
+                            owner = lock_data.get('owner', 'unknown')
+                            pid = lock_data.get('pid', 0)
+                            timestamp = lock_data.get('timestamp', 0)
+                            logger.info(f"Ticket {ticket_id} is locked by {owner} (PID: {pid}) since {time.ctime(timestamp)}")
+                            return False
+                        except json.JSONDecodeError:
+                            # Invalid lock file, we'll overwrite it
+                            pass
+                else:
+                    logger.warning(f"Found stale lock for ticket {ticket_id}, will override it")
+            
+            # Create the lock file with our service info
+            with open(lock_file, 'w') as f:
+                lock_data = {
+                    'owner': 'jira_service',
+                    'pid': os.getpid(),
+                    'timestamp': time.time()
+                }
+                json.dump(lock_data, f)
+            
+            logger.info(f"Acquired lock for ticket {ticket_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error acquiring lock for ticket {ticket_id}: {str(e)}")
+            return False
+    
+    def _release_lock(self, ticket_id: str) -> bool:
+        """Release the lock on a ticket."""
+        lock_file = os.path.join(self.lock_dir, f"{ticket_id}.lock")
+        
+        try:
+            if os.path.exists(lock_file):
+                os.remove(lock_file)
+                logger.info(f"Released lock for ticket {ticket_id}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error releasing lock for ticket {ticket_id}: {str(e)}")
+            return False
     
     async def process_ticket(self, ticket):
         """Process a single ticket"""
@@ -71,40 +138,55 @@ class JiraService:
                 logger.error("Invalid ticket: missing ticket_id")
                 return
                 
+            # Try to acquire a lock on this ticket
+            if not self._acquire_lock(ticket_id):
+                logger.info(f"Ticket {ticket_id} is already being processed by another service. Skipping.")
+                return
+                
             current_status = ticket.get("status", "Unknown")
             logger.info(f"Processing ticket {ticket_id} with status '{current_status}'")
             
             # Check if we've already processed this ticket
             if ticket_id in self.processed_tickets:
                 logger.info(f"Ticket {ticket_id} has already been processed. Skipping.")
+                self._release_lock(ticket_id)  # Release lock before returning
                 return
             
             # Add to processed tickets to avoid duplicate processing
             self.processed_tickets.add(ticket_id)
             
-            # Mark ticket as in progress in JIRA
-            if ticket_id not in self.tickets_in_progress:
-                # This is a new ticket, set it to "In Progress" and add initial comment
-                comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
-                success = await self.jira_client.update_ticket(ticket_id, "In Progress", comment)
-                
-                if success:
-                    self.tickets_in_progress[ticket_id] = ticket
-                    logger.info(f"Ticket {ticket_id} marked as In Progress")
+            try:
+                # Mark ticket as in progress in JIRA
+                if ticket_id not in self.tickets_in_progress:
+                    # This is a new ticket, set it to "In Progress" and add initial comment
+                    comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
+                    success = await self.jira_client.update_ticket(ticket_id, "In Progress", comment)
                     
-                    # Create a new task so it runs independently
-                    # Important: We need to ensure this is actually called
-                    logger.info(f"Starting agent workflow for ticket {ticket_id}...")
-                    task = asyncio.create_task(self.run_agent_workflow(ticket))
-                    # Add a callback to handle errors
-                    task.add_done_callback(lambda t: self.handle_workflow_completion(t, ticket_id))
+                    if success:
+                        self.tickets_in_progress[ticket_id] = ticket
+                        logger.info(f"Ticket {ticket_id} marked as In Progress")
+                        
+                        # Create a new task so it runs independently
+                        # Important: We need to ensure this is actually called
+                        logger.info(f"Starting agent workflow for ticket {ticket_id}...")
+                        task = asyncio.create_task(self.run_agent_workflow(ticket))
+                        # Add a callback to handle errors
+                        task.add_done_callback(lambda t: self.handle_workflow_completion(t, ticket_id))
+                    else:
+                        logger.error(f"Failed to update ticket {ticket_id} status to In Progress")
+                        self._release_lock(ticket_id)  # Release lock on failure
                 else:
-                    logger.error(f"Failed to update ticket {ticket_id} status to In Progress")
-            else:
-                logger.info(f"Ticket {ticket_id} is already in progress")
+                    logger.info(f"Ticket {ticket_id} is already in progress")
+            except Exception as e:
+                logger.error(f"Error handling ticket {ticket_id}: {str(e)}")
+                self._release_lock(ticket_id)  # Release lock on exception
+                
         except Exception as e:
             logger.error(f"Error processing ticket {ticket.get('ticket_id', 'unknown')}: {e}")
             logger.error(traceback.format_exc())
+            # Try to release the lock if we have a ticket_id
+            if 'ticket_id' in ticket:
+                self._release_lock(ticket.get('ticket_id'))
     
     def handle_workflow_completion(self, task, ticket_id):
         """Handle completion of agent workflow task"""
@@ -117,6 +199,9 @@ class JiraService:
         except Exception as e:
             logger.error(f"Error handling workflow completion for {ticket_id}: {e}")
             logger.error(traceback.format_exc())
+        finally:
+            # Always release the lock when the task is done
+            self._release_lock(ticket_id)
     
     async def run_agent_workflow(self, ticket):
         """Run the complete agent workflow for a ticket"""
@@ -376,6 +461,21 @@ class JiraService:
         """Stop the polling loop"""
         logger.info("Stopping JIRA service")
         self.running = False
+        
+        # Clean up any locks we might have created
+        if os.path.exists(self.lock_dir):
+            # Only remove our locks
+            for lock_file in os.listdir(self.lock_dir):
+                if lock_file.endswith(".lock"):
+                    try:
+                        lock_path = os.path.join(self.lock_dir, lock_file)
+                        with open(lock_path, 'r') as f:
+                            lock_data = json.load(f)
+                            if lock_data.get('owner') == 'jira_service' and lock_data.get('pid') == os.getpid():
+                                os.remove(lock_path)
+                                logger.info(f"Removed lock file {lock_file}")
+                    except Exception as e:
+                        logger.error(f"Error removing lock file {lock_file}: {str(e)}")
 
 def handle_signals():
     """Set up signal handlers for graceful shutdown"""

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import json
+import time
 from datetime import datetime
 import traceback
 from typing import Dict, Any, List, Optional
@@ -60,7 +61,94 @@ class Orchestrator:
         # Track processed tickets to avoid duplicates with JIRA service
         self.processed_tickets = set()
         
+        # Set up lock directory
+        self.lock_dir = os.environ.get("TICKET_LOCK_DIR", "/tmp/bugfix_ai_locks")
+        os.makedirs(self.lock_dir, exist_ok=True)
+        
         logger.info("Orchestrator initialized")
+        logger.info(f"Using lock directory: {self.lock_dir}")
+    
+    def _check_ticket_locked(self, ticket_id: str) -> bool:
+        """Check if a ticket is locked by another service."""
+        lock_file = os.path.join(self.lock_dir, f"{ticket_id}.lock")
+        
+        if not os.path.exists(lock_file):
+            return False
+            
+        # Check if the lock is stale (older than 1 hour)
+        lock_time = os.path.getmtime(lock_file)
+        if time.time() - lock_time >= 3600:  # 1 hour in seconds
+            logger.info(f"Found stale lock for ticket {ticket_id}, considering it unlocked")
+            return False
+            
+        # Lock exists and is valid, check who owns it
+        try:
+            with open(lock_file, 'r') as f:
+                lock_data = json.load(f)
+                owner = lock_data.get('owner', 'unknown')
+                pid = lock_data.get('pid', 0)
+                timestamp = lock_data.get('timestamp', 0)
+                
+                # If we own the lock, it's not considered locked by another service
+                if owner == "orchestrator" and pid == os.getpid():
+                    return False
+                    
+                logger.info(f"Ticket {ticket_id} is locked by {owner} (PID: {pid}) since {time.ctime(timestamp)}")
+                return True
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Error reading lock file for ticket {ticket_id}: {str(e)}")
+            # If we can't read the lock file, assume it's locked to be safe
+            return True
+    
+    def _acquire_lock(self, ticket_id: str) -> bool:
+        """Try to acquire a lock on the ticket."""
+        lock_file = os.path.join(self.lock_dir, f"{ticket_id}.lock")
+        
+        try:
+            # Check if locked by another service first
+            if self._check_ticket_locked(ticket_id):
+                return False
+                
+            # Create the lock file with our service info
+            with open(lock_file, 'w') as f:
+                lock_data = {
+                    'owner': 'orchestrator',
+                    'pid': os.getpid(),
+                    'timestamp': time.time()
+                }
+                json.dump(lock_data, f)
+            
+            logger.info(f"Acquired lock for ticket {ticket_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error acquiring lock for ticket {ticket_id}: {str(e)}")
+            return False
+            
+    def _release_lock(self, ticket_id: str) -> bool:
+        """Release our lock on a ticket."""
+        lock_file = os.path.join(self.lock_dir, f"{ticket_id}.lock")
+        
+        try:
+            if os.path.exists(lock_file):
+                # Verify we own the lock before removing it
+                try:
+                    with open(lock_file, 'r') as f:
+                        lock_data = json.load(f)
+                        if lock_data.get('owner') == 'orchestrator' and lock_data.get('pid') == os.getpid():
+                            os.remove(lock_file)
+                            logger.info(f"Released lock for ticket {ticket_id}")
+                            return True
+                        else:
+                            logger.warning(f"Lock for ticket {ticket_id} is owned by another process, not releasing")
+                            return False
+                except (json.JSONDecodeError, IOError):
+                    # If we can't read the file, don't delete it
+                    logger.error(f"Couldn't read lock file for ticket {ticket_id}")
+                    return False
+            return True  # No lock file exists
+        except Exception as e:
+            logger.error(f"Error releasing lock for ticket {ticket_id}: {str(e)}")
+            return False
     
     async def fetch_eligible_tickets(self) -> List[Dict[str, Any]]:
         """Fetch eligible tickets from JIRA that need processing"""
@@ -71,7 +159,7 @@ class Orchestrator:
             if not tickets:
                 return []
                 
-            # Filter tickets to process - now include 'In Progress' tickets not already being processed
+            # Filter tickets to process - now check lock status
             eligible_tickets = []
             
             for ticket in tickets:
@@ -84,11 +172,21 @@ class Orchestrator:
                     
                 status = ticket.get("status", "Unknown")
                 
-                # Check if this is a ticket we should process
-                # Include "In Progress" tickets that we haven't processed yet
-                if (status == "To Do" or 
-                    (status == "In Progress" and ticket_id not in self.processed_tickets and 
-                     ticket_id not in self.active_tickets)):
+                # Skip tickets we're already processing
+                if ticket_id in self.active_tickets:
+                    continue
+                    
+                # Skip tickets we've already processed
+                if ticket_id in self.processed_tickets:
+                    continue
+                    
+                # Skip tickets locked by another service
+                if self._check_ticket_locked(ticket_id):
+                    logger.info(f"Ticket {ticket_id} is locked by another service, skipping")
+                    continue
+                    
+                # Only process tickets that are "To Do" - let jira_service handle "In Progress"
+                if status == "To Do":
                     eligible_tickets.append(ticket)
             
             return eligible_tickets
@@ -110,43 +208,50 @@ class Orchestrator:
             logger.error("Invalid ticket: missing ticket_id")
             return
             
-        # Check if already processed or active
-        if ticket_id in self.processed_tickets:
-            logger.info(f"Ticket {ticket_id} has already been processed. Skipping.")
+        # Try to acquire lock
+        if not self._acquire_lock(ticket_id):
+            logger.info(f"Could not acquire lock for ticket {ticket_id}, skipping")
             return
             
-        if ticket_id in self.active_tickets:
-            logger.info(f"Ticket {ticket_id} is already being processed. Skipping.")
-            return
-            
-        # Add to processed tickets set
-        self.processed_tickets.add(ticket_id)
-        
-        # Mark ticket as being processed
-        self.active_tickets[ticket_id] = {
-            "status": "processing",
-            "start_time": datetime.now().isoformat(),
-            "current_attempt": 0,
-            "escalated": False,
-            "retry_history": []  # Store retry history with QA errors
-        }
-        
-        logger.info(f"Starting processing for ticket {ticket_id}")
-        
-        # Create log directory for this ticket
-        log_dir = f"logs/{ticket_id}"
-        os.makedirs(log_dir, exist_ok=True)
-        
-        # Set ticket to In Progress if it's not already
-        current_status = ticket.get("status", "Unknown")
-        if current_status != "In Progress":
-            # Update JIRA ticket to In Progress
-            comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
-            success = await self.jira_client.update_ticket(ticket_id, "In Progress", comment)
-            if not success:
-                logger.error(f"Failed to update ticket {ticket_id} to In Progress. Continuing anyway.")
-        
         try:
+            # Check if already processed or active
+            if ticket_id in self.processed_tickets:
+                logger.info(f"Ticket {ticket_id} has already been processed. Skipping.")
+                self._release_lock(ticket_id)
+                return
+                
+            if ticket_id in self.active_tickets:
+                logger.info(f"Ticket {ticket_id} is already being processed. Skipping.")
+                self._release_lock(ticket_id)
+                return
+                
+            # Add to processed tickets set
+            self.processed_tickets.add(ticket_id)
+            
+            # Mark ticket as being processed
+            self.active_tickets[ticket_id] = {
+                "status": "processing",
+                "start_time": datetime.now().isoformat(),
+                "current_attempt": 0,
+                "escalated": False,
+                "retry_history": []  # Store retry history with QA errors
+            }
+            
+            logger.info(f"Starting processing for ticket {ticket_id}")
+            
+            # Create log directory for this ticket
+            log_dir = f"logs/{ticket_id}"
+            os.makedirs(log_dir, exist_ok=True)
+            
+            # Set ticket to In Progress if it's not already
+            current_status = ticket.get("status", "Unknown")
+            if current_status != "In Progress":
+                # Update JIRA ticket to In Progress
+                comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
+                success = await self.jira_client.update_ticket(ticket_id, "In Progress", comment)
+                if not success:
+                    logger.error(f"Failed to update ticket {ticket_id} to In Progress. Continuing anyway.")
+            
             # STEP 1: Run planner agent
             logger.info(f"Running PlannerAgent for ticket {ticket_id}")
             
@@ -199,6 +304,9 @@ class Orchestrator:
                 final_status="failed",
                 escalation_reason=f"Process error: {str(e)}"
             )
+        finally:
+            # Release the lock when we're done
+            self._release_lock(ticket_id)
     
     async def run_development_qa_loop(self, ticket_id: str, planner_result: Dict[str, Any]) -> None:
         """Run the developer-QA loop with retries"""

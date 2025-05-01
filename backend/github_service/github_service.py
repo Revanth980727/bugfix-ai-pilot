@@ -35,7 +35,9 @@ class GitHubService:
         # Check if branch already exists
         try:
             if self.client.check_branch_exists(branch_name):
-                logger.info(f"Branch {branch_name} already exists, skipping creation")
+                logger.info(f"Branch {branch_name} already exists, will reuse it")
+                # Instead of skipping, we'll reuse the existing branch
+                # Optionally, we could reset the branch to base_branch here if needed
                 return branch_name
         except Exception as e:
             logger.error(f"Error checking if branch {branch_name} exists: {str(e)}")
@@ -221,7 +223,7 @@ class GitHubService:
             base_branch=base_branch
         )
     
-    async def add_pr_comment(self, pr_identifier, comment: str) -> bool:
+    def add_pr_comment(self, pr_identifier, comment: str) -> bool:
         """
         Add a comment to a pull request
         
@@ -257,4 +259,39 @@ class GitHubService:
         except Exception as e:
             logger.error(f"Error adding comment to PR {pr_identifier}: {str(e)}")
             return False
-
+            
+    def delete_branch(self, branch_name: str) -> bool:
+        """
+        Delete a branch from the repository
+        
+        Args:
+            branch_name: The name of the branch to delete
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not self.client:
+            logger.error("GitHub client not initialized")
+            return False
+            
+        try:
+            # Check if branch exists first to avoid unnecessary API calls
+            if not self.client.check_branch_exists(branch_name):
+                logger.info(f"Branch {branch_name} does not exist, no need to delete")
+                return True
+                
+            # Format the request for GitHub API
+            url = f"{self.repo_api_url}/git/refs/heads/{branch_name}"
+            
+            import requests
+            response = requests.delete(url, headers=self.headers)
+            
+            if response.status_code in [204, 200]:
+                logger.info(f"Successfully deleted branch {branch_name}")
+                return True
+            else:
+                logger.error(f"Failed to delete branch {branch_name}: {response.status_code}, {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Error deleting branch {branch_name}: {str(e)}")
+            return False

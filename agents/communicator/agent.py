@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -124,6 +125,14 @@ async def deploy_fix(request: DeployRequest):
             if existing_pr:
                 logger.info(f"Found existing PR for branch {branch_name}: {existing_pr['url']}")
                 pr_url = existing_pr['url']
+                # Extract PR number from URL for comment
+                pr_number = None
+                if 'number' in existing_pr:
+                    pr_number = existing_pr['number']
+                else:
+                    pr_match = re.search(r'/pull/(\d+)', pr_url)
+                    if pr_match:
+                        pr_number = pr_match.group(1)
             else:
                 # Format the diffs for the commit
                 file_changes = []
@@ -157,6 +166,12 @@ async def deploy_fix(request: DeployRequest):
                     raise HTTPException(status_code=500, detail="Failed to create or find PR")
                 
                 logger.info(f"PR created or exists at: {pr_url}")
+                
+                # Extract PR number from URL for comment
+                pr_number = None
+                pr_match = re.search(r'/pull/(\d+)', pr_url)
+                if pr_match:
+                    pr_number = pr_match.group(1)
         else:
             # Fallback to github_utils
             branch_name = create_branch(
@@ -196,9 +211,12 @@ async def deploy_fix(request: DeployRequest):
                 f"Automated bug fix for {request.ticket_id}\n\nThis PR contains the following changes:\n" + 
                 "\n".join([f"- {diff.filename}: {diff.explanation or 'No explanation provided'}" for diff in request.diffs])
             )
+            
+            # No easy way to get PR number here
+            pr_number = None
         
         # Add a comment to the PR if it exists
-        if pr_url and 'github_service' in globals():
+        if pr_url and 'github_service' in globals() and pr_number:
             comment = f"This PR was created automatically by BugFix AI to fix issue {request.ticket_id}\n\n"
             comment += "Test results:\n"
             for test in request.test_results:
@@ -206,13 +224,11 @@ async def deploy_fix(request: DeployRequest):
                 comment += f"- {status_emoji} {test.name}: {test.status}\n"
             
             try:
-                # Extract PR number from URL
-                pr_match = re.search(r'/pull/(\d+)', pr_url)
-                if pr_match:
-                    pr_number = pr_match.group(1)
+                # Now use the extracted PR number
+                if pr_number:
                     comment_success = github_service.add_pr_comment(pr_number, comment)
                     if not comment_success:
-                        logger.warning(f"Failed to add comment to PR {pr_url}")
+                        logger.warning(f"Failed to add comment to PR #{pr_number}")
                 else:
                     logger.warning(f"Could not extract PR number from URL: {pr_url}")
             except Exception as e:
@@ -307,6 +323,49 @@ async def update_jira_ticket(ticket_id: str, pr_url: Optional[str] = None) -> bo
         logger.error(f"Error updating JIRA ticket {ticket_id}: {str(e)}")
         return False
 
+async def post_pr_comment(pr_url: str, comment: str) -> bool:
+    """Post a comment to a GitHub PR using retry logic"""
+    if not pr_url:
+        logger.warning("No PR URL provided for comment")
+        return False
+    
+    if 'github_service' not in globals():
+        logger.warning("GitHub service not available for PR comment")
+        return False
+    
+    # Extract PR number from URL
+    pr_match = re.search(r'/pull/(\d+)', pr_url)
+    if not pr_match:
+        logger.warning(f"Could not extract PR number from URL: {pr_url}")
+        return False
+    
+    pr_number = pr_match.group(1)
+    
+    # Try up to 3 times with a delay between attempts
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Use the GitHub service to post the comment
+            result = github_service.add_pr_comment(pr_number, comment)
+            if result:
+                logger.info(f"Successfully added comment to PR #{pr_number} on attempt {attempt}")
+                return True
+            else:
+                logger.warning(f"Failed to add comment to PR #{pr_number} on attempt {attempt}")
+                if attempt < max_retries:
+                    logger.info(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+        except Exception as e:
+            logger.error(f"Error posting comment to PR #{pr_number} on attempt {attempt}: {e}")
+            if attempt < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+    
+    logger.error(f"Max retries reached for GitHub comment on PR {pr_url}")
+    return False
+
 async def send_notifications(ticket_id: str, pr_url: str, repository: str) -> None:
     """Send notifications about the fix via email and/or Slack"""
     try:
@@ -329,6 +388,24 @@ async def send_notifications(ticket_id: str, pr_url: str, repository: str) -> No
             
     except Exception as e:
         logger.error(f"Error sending notifications for ticket {ticket_id}: {str(e)}")
+
+@app.post("/cleanup/branch/{branch_name}")
+async def cleanup_branch(branch_name: str):
+    """API endpoint to clean up a branch after PR is merged or closed"""
+    if 'github_service' not in globals():
+        raise HTTPException(status_code=500, detail="GitHub service not available")
+        
+    try:
+        logger.info(f"Cleaning up branch {branch_name}")
+        success = github_service.delete_branch(branch_name)
+        
+        if success:
+            return {"message": f"Successfully deleted branch {branch_name}"}
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to delete branch {branch_name}")
+    except Exception as e:
+        logger.error(f"Error cleaning up branch {branch_name}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error cleaning up branch: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
