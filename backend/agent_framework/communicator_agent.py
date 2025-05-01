@@ -85,9 +85,14 @@ class CommunicatorAgent(Agent):
                 else:
                     logger.error(f"Could not extract PR number from URL: {pr_url}")
                     return False
+                
+                # Validate that the PR number is numeric (not a ticket ID)
+                if not pr_number.isdigit():
+                    logger.error(f"Invalid PR number format from URL: {pr_url}, extracted: {pr_number}")
+                    return False
                     
-                # Post comment using GitHub service - notice we don't await here since the method isn't async
-                success = await self.github_service.add_pr_comment(pr_number, comment)
+                # Post comment using GitHub service
+                success = self.github_service.add_pr_comment(pr_number, comment)
                 if success:
                     logger.info(f"Successfully added comment to PR {pr_url}")
                     return True
@@ -114,7 +119,8 @@ class CommunicatorAgent(Agent):
         """Apply GPT-suggested fixes to code and commit to GitHub"""
         try:
             # Create a new branch for the fix
-            branch_name = self.github_service.create_fix_branch(ticket_id)
+            branch_name = f"fix/{ticket_id}"
+            branch_created = self.github_service.create_fix_branch(ticket_id)
             if not branch_name:
                 logger.error(f"Failed to create branch for ticket {ticket_id}")
                 return False
@@ -155,11 +161,26 @@ class CommunicatorAgent(Agent):
                 )
                 
                 if pr_url:
+                    # Verify PR URL contains a numeric PR number
+                    url_match = re.search(r'/pull/(\d+)', pr_url)
+                    if not url_match:
+                        logger.error(f"Created PR URL does not contain numeric PR number: {pr_url}")
+                        return False
+                        
+                    pr_number = url_match.group(1)
+                    if not pr_number.isdigit():
+                        logger.error(f"Non-numeric PR number detected: {pr_number}")
+                        return False
+                        
                     # Add the GPT response as a comment on the PR
-                    await self._post_github_comment(
+                    comment_success = await self._post_github_comment(
                         pr_url, 
                         f"# GPT-4 Analysis\n\n```\n{raw_gpt_response}\n```"
                     )
+                    
+                    if not comment_success:
+                        logger.warning(f"Failed to add GPT analysis comment to PR {pr_url}")
+                        
                     return True
                     
             return success

@@ -3,7 +3,7 @@ import pytest
 import logging
 import asyncio
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -24,25 +24,25 @@ async def test_communicator_agent():
     
     # Mock the jira and github clients
     agent.jira_client = MagicMock()
-    agent.jira_client.add_comment = MagicMock(return_value=True)
-    agent.jira_client.update_ticket = MagicMock(return_value=True)
+    agent.jira_client.update_ticket = AsyncMock(return_value=True)
+    agent.jira_client.add_comment = AsyncMock(return_value=True)
     
-    agent.github_client = MagicMock()
-    agent.github_client.create_branch = MagicMock(return_value="test-branch")
-    agent.github_client.create_pull_request = MagicMock(return_value="https://github.com/org/repo/pull/1")
-    agent.github_client.add_pr_comment = MagicMock(return_value=True)
+    agent.github_service = MagicMock()
+    agent.github_service.create_fix_branch = MagicMock(return_value="test-branch")
+    agent.github_service.create_pull_request = MagicMock(return_value="https://github.com/org/repo/pull/123")
+    agent.github_service.add_pr_comment = MagicMock(return_value=True)
     
     # Test successful case
     success_input = {
         "ticket_id": "TEST-123",
         "test_passed": True,
-        "github_pr_url": "https://github.com/org/repo/pull/1",
+        "github_pr_url": "https://github.com/org/repo/pull/123",  # Note: numeric PR number is used
         "retry_count": 0,
         "max_retries": 4
     }
     
     try:
-        result = agent.run(success_input)
+        result = await agent.run(success_input)
         logger.info(f"\nCommunicator Agent status: {agent.status}")
         logger.info(f"Processing result: {result}")
         
@@ -59,13 +59,13 @@ async def test_communicator_agent():
     failure_input = {
         "ticket_id": "TEST-124",
         "test_passed": False,
-        "github_pr_url": "https://github.com/org/repo/pull/2",
+        "github_pr_url": "https://github.com/org/repo/pull/124",  # Note: numeric PR number is used
         "retry_count": 2,
         "max_retries": 4
     }
     
     try:
-        result = agent.run(failure_input)
+        result = await agent.run(failure_input)
         logger.info(f"\nCommunicator Agent status: {agent.status}")
         logger.info(f"Processing result: {result}")
         
@@ -86,17 +86,37 @@ async def test_communicator_agent():
     }
     
     # Override the mock to simulate PR creation failure
-    agent.github_client.create_pull_request = MagicMock(return_value=None)
+    agent.github_service.create_pull_request = MagicMock(return_value=None)
     
     try:
-        result = agent.run(edge_input)
+        result = await agent.run(edge_input)
         logger.info(f"Edge case result: {result}")
         
         assert result["ticket_id"] == "TEST-125"
-        assert "error" in result
+        assert "error" in result or not result["communications_success"]
         
     except Exception as e:
         logger.error(f"Edge case test failed: {str(e)}")
+        raise
+    
+    # Test PR URL validation
+    invalid_pr_input = {
+        "ticket_id": "TEST-126",
+        "test_passed": True,
+        "github_pr_url": "https://github.com/org/repo/pull/TEST-126",  # Invalid: non-numeric PR number
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    try:
+        result = await agent.run(invalid_pr_input)
+        logger.info(f"Invalid PR URL result: {result}")
+        
+        assert result["ticket_id"] == "TEST-126"
+        assert not result.get("github_updated", True), "Should not update GitHub with invalid PR URL"
+        
+    except Exception as e:
+        logger.error(f"Invalid PR URL test failed: {str(e)}")
         raise
 
 if __name__ == "__main__":

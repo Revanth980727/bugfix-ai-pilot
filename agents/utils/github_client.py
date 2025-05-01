@@ -35,18 +35,7 @@ class GitHubClient:
         self.base_url = "https://api.github.com"
         self.repo_api_url = f"{self.base_url}/repos/{self.repo_owner}/{self.repo_name}"
         
-    def get_file_contents(self, file_path: str, branch: str = None) -> Tuple[str, str]:
-        """
-        Get file contents and sha from GitHub
-        
-        Args:
-            file_path: Path to the file in the repository
-            branch: Branch name (defaults to default_branch if not specified)
-            
-        Returns:
-            Tuple containing (content, sha)
-        """
-        # ... keep existing code (file content retrieval logic)
+    # ... keep existing code (file content retrieval logic)
         
     def check_branch_exists(self, branch_name: str) -> bool:
         """
@@ -74,21 +63,7 @@ class GitHubClient:
             # Assume it doesn't exist to be safe
             return False
         
-    def update_file(self, file_path: str, content: str, commit_message: str, branch: str = None, sha: str = None) -> bool:
-        """
-        Update a file in GitHub repository
-        
-        Args:
-            file_path: Path to the file in the repository
-            content: New content for the file
-            commit_message: Commit message
-            branch: Branch name (defaults to default_branch if not specified)
-            sha: SHA of the file (if not provided, will be fetched)
-            
-        Returns:
-            Success status (True/False)
-        """
-        # ... keep existing code (file update logic)
+    # ... keep existing code (file update logic)
         
     def create_branch(self, branch_name: str, from_branch: str = None) -> bool:
         """
@@ -229,9 +204,9 @@ class GitHubClient:
                     self.logger.error(f"Could not extract PR number from URL: {pr_number_str}")
                     return False
             
-            # Ensure it's a numeric value
+            # Ensure it's a numeric value - reject ticket IDs misused as PR numbers 
             if not pr_number_str.isdigit():
-                self.logger.error(f"Invalid PR number format: {pr_number_str}")
+                self.logger.error(f"Invalid PR number format (must be numeric): {pr_number_str}")
                 return False
                 
             url = f"{self.repo_api_url}/issues/{pr_number_str}/comments"
@@ -252,19 +227,4 @@ class GitHubClient:
             self.logger.error(f"Unexpected error adding comment to PR #{pr_number}: {str(e)}")
             return False
         
-    def commit_patch(self, branch_name: str, patch_content: str, commit_message: str, 
-                    patch_file_paths: List[str]) -> bool:
-        """
-        Apply a patch to specified files and commit changes
-        
-        Args:
-            branch_name: Branch to commit to
-            patch_content: Unified diff/patch content
-            commit_message: Commit message
-            patch_file_paths: List of files that are modified in the patch
-            
-        Returns:
-            Success status (True/False)
-        """
-        # ... keep existing code (patch application logic)
-
+    # ... keep existing code (patch application logic)
