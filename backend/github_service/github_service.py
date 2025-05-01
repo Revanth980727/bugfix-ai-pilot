@@ -1,335 +1,557 @@
-
-import logging
-from typing import Dict, Any, Optional, List, Tuple
+import os
 import re
-from github import GithubException
-from .github_client import GitHubClient
-from .config import verify_config
+import logging
+import subprocess
+import tempfile
+import requests
+from typing import Dict, Any, List, Optional, Union
+from github import Github, GithubException
+from .config import GITHUB_TOKEN, GITHUB_API_URL, DEFAULT_REPO, DEFAULT_BRANCH
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("github-service")
 
 class GitHubService:
-    def __init__(self):
-        try:
-            verify_config()
-            self.client = GitHubClient()
-            self.token = self.client.token
-            self.repo_owner = self.client.repo.owner.login if self.client.repo else None
-            self.repo_name = self.client.repo.name if self.client.repo else None
-            self.repo_api_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}" if self.repo_owner and self.repo_name else None
-            self.headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"} if self.token else None
-        except (ValueError, GithubException) as e:
-            logger.error(f"Failed to initialize GitHub service: {str(e)}")
+    def __init__(self, github_token=None, api_url=None, default_repo=None, default_branch=None):
+        """Initialize GitHub service with API token and configuration"""
+        self.github_token = github_token or GITHUB_TOKEN
+        self.api_url = api_url or GITHUB_API_URL
+        self.default_repo = default_repo or DEFAULT_REPO
+        self.default_branch = default_branch or DEFAULT_BRANCH
+        
+        if not self.github_token:
+            logger.warning("GitHub token not provided. Some functionality will be limited.")
             self.client = None
-            self.token = None
-            self.repo_owner = None
-            self.repo_name = None
-            self.repo_api_url = None
-            self.headers = None
+        else:
+            self.client = Github(self.github_token, base_url=self.api_url)
     
-    def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> Optional[str]:
-        """Create a new branch for fixing a bug."""
-        if not self.client:
-            logger.error("GitHub client not initialized")
-            return None
-            
-        branch_name = f"fix/{ticket_id}"
-        
-        # Check if branch already exists
-        try:
-            if self.client.check_branch_exists(branch_name):
-                logger.info(f"Branch {branch_name} already exists, will reuse it")
-                # Instead of skipping, we'll reuse the existing branch
-                # Optionally, we could reset the branch to base_branch here if needed
-                return branch_name
-        except Exception as e:
-            logger.error(f"Error checking if branch {branch_name} exists: {str(e)}")
-        
-        return self.client.create_branch(branch_name, base_branch)
-    
-    def commit_bug_fix(self, branch_name: str, file_changes: List[Dict[str, Any]], 
-                      ticket_id: str, description: str) -> bool:
-        """Commit bug fix changes to a branch."""
-        if not self.client:
-            logger.error("GitHub client not initialized")
-            return False
-            
-        commit_message = f"Fix {ticket_id}: {description}"
-        return self.client.commit_changes(branch_name, file_changes, commit_message)
-    
-    def apply_file_changes_from_gpt(self, branch_name: str, file_path: str, gpt_output: str, 
-                                   ticket_id: str) -> bool:
+    def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> bool:
         """
-        Apply changes suggested by GPT-4 to a file and commit them
+        Create a new branch for a bug fix
         
         Args:
-            branch_name: Branch to commit changes to
-            file_path: Path of file to update
-            gpt_output: The output from GPT with suggested changes
             ticket_id: The JIRA ticket ID
+            base_branch: The branch to base the new branch on (defaults to default_branch)
             
         Returns:
-            bool: True if successful, False otherwise
+            bool: True if branch creation was successful, False otherwise
         """
         if not self.client:
-            logger.error("GitHub client not initialized")
+            logger.warning("GitHub client not initialized, cannot create branch")
             return False
             
+        base_branch = base_branch or self.default_branch
+        new_branch_name = f"fix/{ticket_id}"
+        
         try:
-            # Extract diff content from GPT output using regex
-            diff_pattern = r'```diff\s+([\s\S]+?)\s+```'
-            diff_match = re.search(diff_pattern, gpt_output)
+            repo = self.client.get_repo(self.default_repo)
             
-            if not diff_match:
-                logger.warning(f"No diff found in GPT output for ticket {ticket_id}")
-                
-                # Try alternative pattern for code blocks
-                code_pattern = r'```(?:python|javascript|typescript)?\s+([\s\S]+?)\s+```'
-                code_match = re.search(code_pattern, gpt_output)
-                
-                if not code_match:
-                    logger.error("No code block found in GPT output")
+            # Check if the branch already exists
+            try:
+                ref = repo.get_git_ref(f"refs/heads/{new_branch_name}")
+                logger.info(f"Branch {new_branch_name} already exists")
+                return True
+            except GithubException as e:
+                if e.status != 404:
+                    logger.error(f"Error checking if branch exists: {str(e)}")
                     return False
-                    
-                # Use the entire code block as replacement
-                new_content = code_match.group(1).strip()
-                logger.info(f"Using entire code block as replacement for {file_path}")
-                
-                file_changes = [{
-                    'filename': file_path,
-                    'content': new_content
-                }]
-                
-                commit_message = f"Fix {ticket_id}: Replace {file_path} with GPT suggestion"
-                return self.commit_bug_fix(branch_name, file_changes, ticket_id, commit_message)
             
-            # If we have a diff, apply it properly
-            diff_content = diff_match.group(1)
+            # Get the commit of the base branch
+            base_branch_object = repo.get_branch(base_branch)
+            base_commit_sha = base_branch_object.commit.sha
             
-            # Get current file content
-            current_content = self.client.get_file_content(file_path, branch_name)
-            if not current_content:
-                logger.error(f"Failed to get current content for {file_path}")
-                return False
-                
-            # Apply the diff to the current content (improved implementation)
-            new_content = self._apply_diff(current_content, diff_content)
-            
-            # Commit the changes
-            file_changes = [{
-                'filename': file_path,
-                'content': new_content
-            }]
-            
-            commit_message = f"Fix {ticket_id}: Apply GPT suggestions to {file_path}"
-            return self.commit_bug_fix(branch_name, file_changes, ticket_id, commit_message)
-                
+            # Create the new branch
+            repo.create_git_ref(ref=f"refs/heads/{new_branch_name}", sha=base_commit_sha)
+            logger.info(f"Branch {new_branch_name} created successfully")
+            return True
+        except GithubException as e:
+            logger.error(f"GitHub error creating branch: {str(e)}")
+            return False
         except Exception as e:
-            logger.error(f"Error applying GPT changes to {file_path}: {str(e)}")
+            logger.error(f"Error creating branch: {str(e)}")
+            return False
+    
+    def commit_bug_fix(self, branch_name: str, file_changes: List[Dict[str, str]], ticket_id: str, commit_message: str) -> bool:
+        """
+        Commit a bug fix to a branch
+        
+        Args:
+            branch_name: The name of the branch to commit to
+            file_changes: A list of dictionaries containing the filename and content of the changes
+            ticket_id: The JIRA ticket ID
+            commit_message: The commit message
+            
+        Returns:
+            bool: True if commit was successful, False otherwise
+        """
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot commit changes")
             return False
             
-    def _apply_diff(self, original_content: str, diff_content: str) -> str:
-        """
-        Apply a diff to original content
-        
-        Args:
-            original_content: Original file content
-            diff_content: Diff content in unified diff format
-            
-        Returns:
-            str: New content with diff applied
-        """
-        # ... keep existing code (diff application logic)
-    
-    def check_for_existing_pr(self, branch_name: str, base_branch: str = None) -> Optional[Dict[str, Any]]:
-        """
-        Check if a PR already exists for the specified branch.
-        
-        Args:
-            branch_name: The name of the branch to check
-            base_branch: The base branch for the PR
-            
-        Returns:
-            Optional[Dict[str, Any]]: PR information if found, None otherwise
-        """
-        if not self.client or not self.repo_owner or not self.repo_name or not self.token:
-            logger.error("GitHub client not properly initialized")
-            return None
-        
         try:
-            # Format the request for GitHub API
-            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/pulls"
-            headers = {
-                "Authorization": f"token {self.token}",
-                "Accept": "application/vnd.github.v3+json"
-            }
-            params = {"state": "open", "head": f"{self.repo_owner}:{branch_name}"}
+            repo = self.client.get_repo(self.default_repo)
             
-            import requests
-            response = requests.get(url, headers=headers, params=params)
+            # Get the branch
+            branch = repo.get_branch(branch_name)
+            base_tree = branch.commit.commit.tree
             
-            if response.status_code == 200:
-                prs = response.json()
-                if prs and len(prs) > 0:
-                    # Return information about the existing PR
-                    pr = prs[0]  # Take the first matching PR
-                    logger.info(f"Found existing PR #{pr['number']} for branch {branch_name}")
-                    return {
-                        "number": pr["number"],
-                        "url": pr["html_url"],
-                        "state": pr["state"],
-                        "title": pr["title"],
-                        "created_at": pr["created_at"]
-                    }
-            else:
-                logger.error(f"Failed to check for existing PR: {response.status_code}, {response.text}")
+            # Create a new tree
+            element_list = []
+            for file_change in file_changes:
+                filename = file_change["filename"]
+                content = file_change["content"]
+                
+                element = {
+                    "path": filename,
+                    "mode": "100644",
+                    "type": "blob",
+                    "content": content
+                }
+                element_list.append(element)
             
+            tree = repo.create_git_tree(element_list, base_tree=base_tree)
+            
+            # Create the commit
+            if not commit_message.startswith(f"Fix {ticket_id}"):
+                commit_message = f"Fix {ticket_id}: {commit_message}"
+            
+            parent_commit = repo.get_commit(sha=branch.commit.sha)
+            commit = repo.create_git_commit(
+                message=commit_message,
+                tree=tree,
+                parents=[parent_commit]
+            )
+            
+            # Update the reference
+            ref = repo.get_git_ref(f"refs/heads/{branch_name}")
+            ref.edit(sha=commit.sha)
+            
+            logger.info(f"Changes committed to branch {branch_name} successfully")
+            return True
+        except GithubException as e:
+            logger.error(f"GitHub error committing changes: {str(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"Error committing changes: {str(e)}")
+            return False
+    
+    def create_fix_pr(self, branch_name: str, ticket_id: str, title: str, body: str) -> Optional[str]:
+        """
+        Create a pull request for a bug fix
+        
+        Args:
+            branch_name: The name of the branch to create the PR from
+            ticket_id: The JIRA ticket ID
+            title: The title of the pull request
+            body: The body of the pull request
+            
+        Returns:
+            str: The URL of the pull request if successful, None otherwise
+        """
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot create pull request")
+            return None
+            
+        try:
+            repo = self.client.get_repo(self.default_repo)
+            
+            # Check if a PR already exists for this branch
+            pulls = repo.get_pulls(state='open', head=branch_name)
+            if pulls.totalCount > 0:
+                pr = pulls[0]
+                logger.info(f"PR already exists for branch {branch_name}: {pr.html_url}")
+                return pr.html_url
+            
+            # Create the pull request
+            pr = repo.create_pull(
+                title=title,
+                body=body,
+                head=branch_name,
+                base=self.default_branch
+            )
+            
+            logger.info(f"Pull request created successfully: {pr.html_url}")
+            return pr.html_url
+        except GithubException as e:
+            logger.error(f"GitHub error creating pull request: {str(e)}")
             return None
         except Exception as e:
-            logger.error(f"Error checking for existing PR: {str(e)}")
+            logger.error(f"Error creating pull request: {str(e)}")
             return None
     
-    def create_fix_pr(self, branch_name: str, ticket_id: str, title: str,
-                     description: str, base_branch: str = None) -> Optional[str]:
-        """Create a pull request for the bug fix."""
-        if not self.client:
-            logger.error("GitHub client not initialized")
-            return None
-        
-        # First check if a PR already exists
-        existing_pr = self.check_for_existing_pr(branch_name, base_branch)
-        if existing_pr:
-            logger.info(f"PR already exists for branch {branch_name}: {existing_pr['url']}")
-            return existing_pr['url']
-            
-        pr_title = f"Fix {ticket_id}: {title}"
-        pr_body = f"""
-## Bug Fix: {ticket_id}
-
-### Description
-{description}
-
-### Changes Made
-- Bug fix implementation
-- Automated PR created by BugFix AI
-        """
-        
-        # Create PR using the configured repository information
-        return self.client.create_pull_request(
-            title=pr_title,
-            body=pr_body,
-            head_branch=branch_name,
-            base_branch=base_branch
-        )
-    
-    def add_pr_comment(self, pr_identifier, comment: str) -> bool:
+    def add_pr_comment(self, pr_number: Union[int, str], comment: str) -> bool:
         """
         Add a comment to a pull request
         
         Args:
-            pr_identifier: PR number or URL 
-            comment: The comment text
+            pr_number: The number of the pull request
+            comment: The comment to add
             
         Returns:
-            bool: True if successful, False otherwise
-        """
-        if not self.client or not self.repo_owner or not self.repo_name or not self.token:
-            logger.error("GitHub client not properly initialized")
-            return False
-        
-        try:
-            # Extract PR number from URL if needed
-            pr_number = pr_identifier
-            if isinstance(pr_identifier, str):
-                # If it's a URL, extract the number
-                url_match = re.search(r'/pull/(\d+)', pr_identifier)
-                if url_match:
-                    pr_number = url_match.group(1)
-                    
-                # Handle cases where ticket_id is passed as PR identifier erroneously
-                if not url_match and not str(pr_identifier).isdigit():
-                    logger.warning(f"Invalid PR identifier: {pr_identifier}, appears to be a ticket ID not a PR number")
-                    
-                    # Try to find the PR by looking for a branch named fix/{pr_identifier}
-                    branch_name = f"fix/{pr_identifier}"
-                    existing_pr = self.check_for_existing_pr(branch_name)
-                    
-                    if existing_pr and "number" in existing_pr:
-                        logger.info(f"Found PR #{existing_pr['number']} for ticket {pr_identifier}")
-                        pr_number = existing_pr["number"]
-                    else:
-                        logger.error(f"Could not find PR for ticket {pr_identifier}")
-                        return False
-            
-            # Ensure pr_number is an integer
-            try:
-                pr_number = int(pr_number)
-            except (ValueError, TypeError):
-                logger.error(f"Could not convert PR identifier '{pr_number}' to integer")
-                return False
-                
-            # Use the GitHub API to add the comment
-            import requests
-            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/issues/{pr_number}/comments"
-            headers = {
-                "Authorization": f"token {self.token}",
-                "Accept": "application/vnd.github.v3+json"
-            }
-            data = {"body": comment}
-            
-            response = requests.post(url, headers=headers, json=data)
-            
-            if response.status_code in [201, 200]:
-                logger.info(f"Successfully added comment to PR #{pr_number}")
-                return True
-            else:
-                logger.error(f"Failed to add comment to PR #{pr_number}: {response.status_code}, {response.text}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error adding comment to PR {pr_identifier}: {str(e)}")
-            return False
-    
-    def find_pr_for_ticket(self, ticket_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Find a pull request associated with a ticket ID
-        
-        Args:
-            ticket_id: The ticket ID to search for
-            
-        Returns:
-            Optional[Dict[str, Any]]: PR information if found, None otherwise
+            bool: True if comment was added successfully, False otherwise
         """
         if not self.client:
-            logger.error("GitHub client not initialized")
-            return None
+            logger.warning("GitHub client not initialized, cannot add comment")
+            return False
             
-        # First try looking for a branch with the ticket ID
-        branch_name = f"fix/{ticket_id}"
+        try:
+            repo = self.client.get_repo(self.default_repo)
+            pull = repo.get_pull(int(pr_number))  # pr_number must be an integer
+            pull.create_issue_comment(comment)
+            logger.info(f"Comment added to pull request #{pr_number} successfully")
+            return True
+        except GithubException as e:
+            logger.error(f"GitHub error adding comment: {str(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"Error adding comment: {str(e)}")
+            return False
+
+    def check_for_existing_pr(self, branch_name: str, base_branch: str) -> Optional[Dict[str, Any]]:
+        """
+        Check if a pull request already exists for a branch
+        
+        Args:
+            branch_name: The name of the branch to check
+            base_branch: The base branch of the pull request
+            
+        Returns:
+            A dictionary containing the PR number and URL if a PR exists, None otherwise
+        """
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot check for existing PR")
+            return None
         
         try:
-            # Check if the branch exists
-            exists = self.client.check_branch_exists(branch_name)
-            if not exists:
-                logger.info(f"No branch found for ticket {ticket_id}")
-                return None
-                
-            # Look for PRs from this branch
-            pr_data = self.client.find_pr_for_branch(branch_name)
-            if pr_data:
-                logger.info(f"Found PR #{pr_data['number']} for ticket {ticket_id}")
-                return pr_data
-                
-            # Alternatively, search for PRs with the ticket ID in the title
-            # This is left as a future enhancement
+            repo = self.client.get_repo(self.default_repo)
+            pulls = repo.get_pulls(state='open', head=f"{repo.owner.login}:{branch_name}", base=base_branch)
+            
+            for pull in pulls:
+                logger.info(f"Found existing PR for branch {branch_name}: {pull.html_url}")
+                return {
+                    "number": pull.number,
+                    "url": pull.html_url,
+                    "title": pull.title,
+                    "state": pull.state
+                }
             
             return None
+        except GithubException as e:
+            logger.error(f"GitHub error checking for existing PR: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"Error checking for existing PR: {str(e)}")
+            return None
+
+    def apply_file_changes_from_gpt(self, branch_name: str, file_path: str, gpt_response: str, ticket_id: str) -> bool:
+        """
+        Apply file changes from GPT response
+        
+        Args:
+            branch_name: The name of the branch to commit to
+            file_path: The path to the file to change
+            gpt_response: The GPT response containing the changes
+            ticket_id: The JIRA ticket ID
             
+        Returns:
+            bool: True if commit was successful, False otherwise
+        """
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot apply file changes")
+            return False
+            
+        try:
+            repo = self.client.get_repo(self.default_repo)
+            
+            # Extract the code block for the file from the GPT response
+            file_pattern = re.compile(rf'---FILE: {re.escape(file_path)}---(.*?)---END FILE---', re.DOTALL)
+            match = file_pattern.search(gpt_response)
+            
+            if not match:
+                logger.warning(f"No code block found for file {file_path} in GPT response")
+                return False
+            
+            code_block = match.group(1).strip()
+            
+            # Get the file content
+            contents = repo.get_contents(file_path, ref=branch_name)
+            original_content = contents.decoded_content.decode('utf-8')
+            
+            # Replace the file content with the code block
+            updated_content = code_block
+            
+            # Commit the changes
+            commit_message = f"Fix {ticket_id}: Apply GPT-suggested changes to {file_path}"
+            commit = repo.update_file(
+                path=file_path,
+                message=commit_message,
+                content=updated_content,
+                sha=contents.sha,
+                branch=branch_name
+            )
+            
+            logger.info(f"Changes committed to file {file_path} in branch {branch_name} successfully")
+            return True
+        except GithubException as e:
+            logger.error(f"GitHub error applying file changes: {str(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"Error applying file changes: {str(e)}")
+            return False
+
+    def check_file_exists(self, file_path: str, branch: str = None) -> bool:
+        """
+        Check if a file exists in the repository
+        
+        Args:
+            file_path: Path to the file
+            branch: Branch to check (defaults to default_branch)
+            
+        Returns:
+            bool: True if file exists, False otherwise
+        """
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot check if file exists")
+            return False
+            
+        branch = branch or self.default_branch
+        
+        try:
+            repo = self.client.get_repo(self.default_repo)
+            contents = repo.get_contents(file_path, ref=branch)
+            return True
+        except GithubException as e:
+            if e.status == 404:
+                return False
+            logger.error(f"GitHub error checking file existence: {str(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"Error checking if file exists: {str(e)}")
+            return False
+
+    def validate_patch(self, file_path: str, diff_content: str) -> Dict[str, Any]:
+        """
+        Validate if a patch can be applied to a file
+        
+        Args:
+            file_path: Path to the file to patch
+            diff_content: Diff content to apply
+            
+        Returns:
+            Dict with validation results:
+                valid: Boolean indicating if patch is valid
+                reasons: List of rejection reasons if invalid
+                confidence_boost: Optional confidence boost if valid
+                confidence_penalty: Optional confidence penalty if invalid
+        """
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot validate patch")
+            return {"valid": False, "reasons": ["GitHub client not initialized"], "confidence_penalty": 20}
+        
+        # Check if file exists
+        file_exists = self.check_file_exists(file_path)
+        if not file_exists:
+            return {
+                "valid": False, 
+                "reasons": [f"File {file_path} does not exist in repository"], 
+                "confidence_penalty": 25
+            }
+        
+        # Check for placeholders in file path or diff
+        placeholder_patterns = [
+            r'/path/to/',
+            r'example\.com',
+            r'YOUR_',
+            r'<placeholder>',
+            r'path/to/',
+            r'some/file',
+            r'my_file\.py',
+            r'your_',
+            r'TODO:',
+            r'FIXME:'
+        ]
+        
+        for pattern in placeholder_patterns:
+            if re.search(pattern, file_path, re.IGNORECASE):
+                return {
+                    "valid": False, 
+                    "reasons": ["Placeholder detected in file path"], 
+                    "confidence_penalty": 30
+                }
+            if re.search(pattern, diff_content, re.IGNORECASE):
+                return {
+                    "valid": False, 
+                    "reasons": ["Placeholder detected in diff content"], 
+                    "confidence_penalty": 25
+                }
+        
+        # Basic diff syntax validation
+        if not re.search(r'@@\s+\-\d+,\d+\s+\+\d+,\d+\s+@@', diff_content) and not ('+' in diff_content or '-' in diff_content):
+            return {
+                "valid": False, 
+                "reasons": ["Invalid diff syntax"], 
+                "confidence_penalty": 20
+            }
+        
+        # For a more thorough validation, we could try to apply the patch to a temp file
+        try:
+            # Get the current file content
+            repo = self.client.get_repo(self.default_repo)
+            file_content = repo.get_contents(file_path, ref=self.default_branch).decoded_content.decode('utf-8')
+            
+            # Create a temporary file with the content
+            with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
+                temp_file_path = temp_file.name
+                temp_file.write(file_content)
+            
+            # Create a temporary patch file
+            with tempfile.NamedTemporaryFile(mode='w+', delete=False) as patch_file:
+                patch_file_path = patch_file.name
+                patch_file.write(diff_content)
+            
+            # Try to apply the patch
+            try:
+                result = subprocess.run(
+                    ['patch', '--dry-run', '-f', '-s', temp_file_path, patch_file_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=5  # Timeout after 5 seconds
+                )
+                
+                # Clean up temporary files
+                os.unlink(temp_file_path)
+                os.unlink(patch_file_path)
+                
+                if result.returncode != 0:
+                    return {
+                        "valid": False,
+                        "reasons": ["Patch does not apply cleanly", result.stderr.strip()],
+                        "confidence_penalty": 15
+                    }
+                
+                return {
+                    "valid": True,
+                    "reasons": [],
+                    "confidence_boost": 10
+                }
+            except subprocess.TimeoutExpired:
+                # Clean up temporary files
+                os.unlink(temp_file_path)
+                os.unlink(patch_file_path)
+                
+                return {
+                    "valid": False,
+                    "reasons": ["Patch validation timed out"],
+                    "confidence_penalty": 10
+                }
+        except Exception as e:
+            logger.error(f"Error validating patch: {str(e)}")
+            
+            # Default to passing validation if we can't do a thorough check
+            # but with a small confidence boost
+            return {
+                "valid": True,
+                "reasons": ["Basic validation passed, but detailed validation failed"],
+                "confidence_boost": 5
+            }
+
+    def find_pr_for_ticket(self, ticket_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Find pull requests related to a ticket ID
+        
+        Args:
+            ticket_id: The JIRA ticket ID
+            
+        Returns:
+            Optional dict with PR info if found, None otherwise
+        """
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot find PR")
+            return None
+            
+        try:
+            repo = self.client.get_repo(self.default_repo)
+            
+            # Try different branch name patterns
+            branch_names = [
+                f"fix/{ticket_id}", 
+                f"fix/{ticket_id.lower()}", 
+                f"bugfix/{ticket_id}",
+                f"bugfix/{ticket_id.lower()}"
+            ]
+            
+            for branch_name in branch_names:
+                try:
+                    # Try to find a PR for this branch
+                    pulls = repo.get_pulls(state='open', head=f"{repo.owner.login}:{branch_name}")
+                    pull_list = list(pulls)
+                    
+                    if pull_list:
+                        pr = pull_list[0]  # Get the first matching PR
+                        return {
+                            "number": pr.number,
+                            "url": pr.html_url,
+                            "title": pr.title,
+                            "state": pr.state,
+                            "branch": branch_name
+                        }
+                except GithubException:
+                    continue
+                    
+            # Also search by PR title/body containing ticket ID
+            open_pulls = repo.get_pulls(state='open')
+            for pr in open_pulls:
+                if ticket_id in pr.title or ticket_id in pr.body:
+                    return {
+                        "number": pr.number,
+                        "url": pr.html_url,
+                        "title": pr.title,
+                        "state": pr.state,
+                        "branch": pr.head.ref
+                    }
+                    
+            return None
         except Exception as e:
             logger.error(f"Error finding PR for ticket {ticket_id}: {str(e)}")
             return None
+
+    def find_pr_for_branch(self, branch_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a pull request for a specific branch name
+        
+        Args:
+            branch_name: The name of the branch
             
+        Returns:
+            Optional dict with PR info if found, None otherwise
+        """
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot find PR")
+            return None
+            
+        try:
+            repo = self.client.get_repo(self.default_repo)
+            
+            # Try to find a PR for this branch
+            pulls = repo.get_pulls(state='open', head=f"{repo.owner.login}:{branch_name}")
+            pull_list = list(pulls)
+            
+            if pull_list:
+                pr = pull_list[0]  # Get the first matching PR
+                return {
+                    "number": pr.number,
+                    "url": pr.html_url,
+                    "title": pr.title,
+                    "state": pr.state,
+                    "branch": branch_name
+                }
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error finding PR for branch {branch_name}: {str(e)}")
+            return None
+
     def delete_branch(self, branch_name: str) -> bool:
         """
         Delete a branch from the repository
@@ -338,30 +560,21 @@ class GitHubService:
             branch_name: The name of the branch to delete
             
         Returns:
-            bool: True if successful, False otherwise
+            bool: True if the branch was successfully deleted, False otherwise
         """
-        if not self.client or not self.repo_api_url or not self.headers:
-            logger.error("GitHub client not properly initialized")
+        if not self.client:
+            logger.warning("GitHub client not initialized, cannot delete branch")
             return False
-            
+        
         try:
-            # Check if branch exists first to avoid unnecessary API calls
-            if not self.client.check_branch_exists(branch_name):
-                logger.info(f"Branch {branch_name} does not exist, no need to delete")
-                return True
-                
-            # Format the request for GitHub API
-            import requests
-            url = f"{self.repo_api_url}/git/refs/heads/{branch_name}"
-            
-            response = requests.delete(url, headers=self.headers)
-            
-            if response.status_code in [204, 200]:
-                logger.info(f"Successfully deleted branch {branch_name}")
-                return True
-            else:
-                logger.error(f"Failed to delete branch {branch_name}: {response.status_code}, {response.text}")
-                return False
+            repo = self.client.get_repo(self.default_repo)
+            ref = repo.get_git_ref(f"refs/heads/{branch_name}")
+            ref.delete()
+            logger.info(f"Successfully deleted branch {branch_name}")
+            return True
+        except GithubException as e:
+            logger.error(f"GitHub error deleting branch {branch_name}: {str(e)}")
+            return False
         except Exception as e:
             logger.error(f"Error deleting branch {branch_name}: {str(e)}")
             return False

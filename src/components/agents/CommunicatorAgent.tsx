@@ -3,7 +3,7 @@ import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
-import { GitPullRequest, MessageSquare, Github, AlertTriangle, Info, RefreshCcw } from 'lucide-react';
+import { GitPullRequest, MessageSquare, Github, AlertTriangle, Info, RefreshCcw, CheckCircle, XCircle } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
 import { AgentStatus } from '@/hooks/useDashboardState';
@@ -11,6 +11,13 @@ import { Update } from '@/types/ticket';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+
+interface ValidationMetrics {
+  totalPatches?: number;
+  validPatches?: number;
+  rejectedPatches?: number;
+  rejectionReasons?: Record<string, number>;
+}
 
 interface CommunicatorAgentProps {
   status: AgentStatus;
@@ -23,6 +30,11 @@ interface CommunicatorAgentProps {
   confidenceScore?: number;
   retryCount?: number;
   maxRetries?: number;
+  patchValidationResults?: {
+    isValid: boolean;
+    rejectionReason?: string;
+    validationMetrics?: ValidationMetrics;
+  };
 }
 
 export function CommunicatorAgent({ 
@@ -35,7 +47,8 @@ export function CommunicatorAgent({
   escalationReason,
   confidenceScore,
   retryCount = 0,
-  maxRetries = 4
+  maxRetries = 4,
+  patchValidationResults
 }: CommunicatorAgentProps) {
   const { toast } = useToast();
   
@@ -99,6 +112,31 @@ export function CommunicatorAgent({
           <Badge variant={getConfidenceBadgeVariant(confidenceScore)}>
             {getConfidenceLabel(confidenceScore)} ({confidenceScore}%)
           </Badge>
+        </div>
+      )}
+      
+      {patchValidationResults && (
+        <div className={`mb-3 p-2 border ${patchValidationResults.isValid ? 'border-green-200 bg-green-50 dark:bg-green-950/30 dark:border-green-900' : 'border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-900'} rounded-md flex items-start gap-2`}>
+          {patchValidationResults.isValid ? (
+            <CheckCircle className="h-5 w-5 text-green-500 mt-0.5" />
+          ) : (
+            <XCircle className="h-5 w-5 text-red-500 mt-0.5" />
+          )}
+          <div className="text-sm">
+            <p className={`font-medium ${patchValidationResults.isValid ? 'text-green-800 dark:text-green-300' : 'text-red-800 dark:text-red-300'}`}>
+              {patchValidationResults.isValid ? 'Patch Validation Passed' : 'Patch Validation Failed'}
+            </p>
+            {!patchValidationResults.isValid && patchValidationResults.rejectionReason && (
+              <p className="text-red-700 dark:text-red-400">
+                {patchValidationResults.rejectionReason}
+              </p>
+            )}
+            {patchValidationResults.validationMetrics && (
+              <p className="text-xs mt-1">
+                {patchValidationResults.validationMetrics.validPatches || 0}/{patchValidationResults.validationMetrics.totalPatches || 0} patches valid
+              </p>
+            )}
+          </div>
         </div>
       )}
       
@@ -184,9 +222,21 @@ export function CommunicatorAgent({
                 update.type === 'system' ? <Info className="h-4 w-4" /> :
                 '💬';
               
-              // Check if message contains early escalation keywords
+              // Check if message contains certain keywords
               const isEscalationMessage = update.message.includes('escalat') || 
                                          update.message.includes('human review');
+                                         
+              const isValidationMessage = update.message.includes('Patch validation');
+              
+              // Determine message style
+              let textStyle = "";
+              if (isEscalationMessage) {
+                textStyle = "text-amber-600 dark:text-amber-400";
+              } else if (isValidationMessage && update.message.includes('failed')) {
+                textStyle = "text-red-600 dark:text-red-400";
+              } else if (isValidationMessage && update.message.includes('passed')) {
+                textStyle = "text-green-600 dark:text-green-400";
+              }
                                          
               return (
                 <div key={index} className="flex gap-2 mb-2 text-sm">
@@ -197,7 +247,7 @@ export function CommunicatorAgent({
                     {icon}
                   </div>
                   <div className="flex-1">
-                    <div className={isEscalationMessage ? "text-amber-600 dark:text-amber-400" : ""}>
+                    <div className={textStyle}>
                       {update.message}
                       
                       {update.confidenceScore !== undefined && (

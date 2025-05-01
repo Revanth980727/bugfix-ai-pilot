@@ -35,12 +35,18 @@ async def test_communicator_agent():
         "number": 123,
         "url": "https://github.com/org/repo/pull/123"
     })
+    agent.github_service.check_file_exists = MagicMock(return_value=True)
+    agent.github_service.validate_patch = MagicMock(return_value={
+        "valid": True,
+        "reasons": [],
+        "confidence_boost": 10
+    })
     
     # Test successful case
     success_input = {
         "ticket_id": "TEST-123",
         "test_passed": True,
-        "github_pr_url": "https://github.com/org/repo/pull/123",  # Note: numeric PR number is used
+        "github_pr_url": "https://github.com/org/repo/pull/123",
         "retry_count": 0,
         "max_retries": 4
     }

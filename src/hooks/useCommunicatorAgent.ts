@@ -8,6 +8,13 @@ interface CommunicatorResult {
   jiraUrl?: string;
 }
 
+interface ValidationMetrics {
+  totalPatches: number;
+  validPatches: number;
+  rejectedPatches: number;
+  rejectionReasons: Record<string, number>;
+}
+
 export function useCommunicatorAgent() {
   const [status, setStatus] = useState<AgentStatus>('idle');
   const [progress, setProgress] = useState(0);
@@ -19,6 +26,11 @@ export function useCommunicatorAgent() {
   const [retryCount, setRetryCount] = useState(0);
   const [maxRetries, setMaxRetries] = useState(4);
   const [analyticsData, setAnalyticsData] = useState<any>(null);
+  const [patchValidationResults, setPatchValidationResults] = useState<{
+    isValid: boolean;
+    rejectionReason?: string;
+    validationMetrics?: ValidationMetrics;
+  } | undefined>(undefined);
 
   const simulateWork = (
     onComplete: () => void, 
@@ -31,6 +43,11 @@ export function useCommunicatorAgent() {
       retryCount?: number;
       maxRetries?: number;
       analytics?: any;
+      patchValidation?: {
+        isValid: boolean;
+        rejectionReason?: string;
+        validationMetrics?: ValidationMetrics;
+      };
     }
   ) => {
     setStatus('working');
@@ -41,7 +58,8 @@ export function useCommunicatorAgent() {
       confidence,
       retryCount: attemptCount,
       maxRetries: maxAttempts,
-      analytics
+      analytics,
+      patchValidation
     } = options || {};
     
     if (isEarlyEscalation) {
@@ -65,6 +83,10 @@ export function useCommunicatorAgent() {
       setAnalyticsData(analytics);
     }
     
+    if (patchValidation) {
+      setPatchValidationResults(patchValidation);
+    }
+    
     // Add communication updates for retry attempts
     if (attemptCount && attemptCount > 0) {
       const retryUpdate: Update = {
@@ -75,6 +97,20 @@ export function useCommunicatorAgent() {
       };
       
       mockUpdates = [retryUpdate, ...mockUpdates];
+    }
+    
+    // Add patch validation update if applicable
+    if (patchValidation) {
+      const validationUpdate: Update = {
+        timestamp: new Date().toISOString(),
+        message: patchValidation.isValid 
+          ? "✅ Patch validation passed - All file paths and diffs are valid"
+          : `❌ Patch validation failed: ${patchValidation.rejectionReason}`,
+        type: 'system',
+        confidenceScore: confidence
+      };
+      
+      mockUpdates = [validationUpdate, ...mockUpdates];
     }
     
     // Add escalation update if applicable
@@ -133,6 +169,7 @@ export function useCommunicatorAgent() {
     setRetryCount(0);
     setMaxRetries(4);
     setAnalyticsData(null);
+    setPatchValidationResults(undefined);
   };
 
   return {
@@ -147,6 +184,7 @@ export function useCommunicatorAgent() {
     retryCount,
     maxRetries,
     analyticsData,
+    patchValidationResults,
     simulateWork,
     reset
   };
