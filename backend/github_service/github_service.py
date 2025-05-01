@@ -31,6 +31,15 @@ class GitHubService:
             return None
             
         branch_name = f"fix/{ticket_id}"
+        
+        # Check if branch already exists
+        try:
+            if self.client.check_branch_exists(branch_name):
+                logger.info(f"Branch {branch_name} already exists, skipping creation")
+                return branch_name
+        except Exception as e:
+            logger.error(f"Error checking if branch {branch_name} exists: {str(e)}")
+        
         return self.client.create_branch(branch_name, base_branch)
     
     def commit_bug_fix(self, branch_name: str, file_changes: List[Dict[str, Any]], 
@@ -125,63 +134,60 @@ class GitHubService:
         Returns:
             str: New content with diff applied
         """
-        # Split content into lines
-        original_lines = original_content.splitlines()
-        result_lines = original_lines.copy()
-        
-        # Track line offsets as we add/remove lines
-        line_offset = 0
-        
-        # Parse diff lines
-        current_line = 0
-        lines_to_remove = []
-        lines_to_add = []
-        
-        for line in diff_content.splitlines():
-            # Skip diff header lines
-            if line.startswith('+++') or line.startswith('---') or line.startswith('@@'):
-                continue
-                
-            # Handle removed lines
-            if line.startswith('-'):
-                content = line[1:].strip()
-                # Find this line in the original content
-                found = False
-                for i, orig_line in enumerate(original_lines):
-                    if orig_line.strip() == content:
-                        lines_to_remove.append(i)
-                        found = True
-                        break
-                if not found:
-                    logger.warning(f"Could not find line to remove: {content}")
-                    
-            # Handle added lines
-            elif line.startswith('+'):
-                content = line[1:]
-                lines_to_add.append((current_line, content))
-                current_line += 1
-            else:
-                current_line += 1
-        
-        # Apply removals (from highest line number to lowest to maintain indices)
-        for line_num in sorted(lines_to_remove, reverse=True):
-            if 0 <= line_num < len(result_lines):
-                result_lines.pop(line_num)
-        
-        # Apply additions (from lowest line number to highest)
-        for line_num, content in sorted(lines_to_add):
-            if 0 <= line_num <= len(result_lines):
-                result_lines.insert(line_num, content)
-        
-        return '\n'.join(result_lines)
+        # ... keep existing code (diff application logic)
     
     def check_for_existing_pr(self, branch_name: str, base_branch: str = None) -> Optional[Dict[str, Any]]:
-        """Check if a PR already exists for the specified branch."""
+        """
+        Check if a PR already exists for the specified branch.
+        
+        Args:
+            branch_name: The name of the branch to check
+            base_branch: The base branch for the PR
+            
+        Returns:
+            Optional[Dict[str, Any]]: PR information if found, None otherwise
+        """
         if not self.client:
             logger.error("GitHub client not initialized")
             return None
+        
+        try:
+            # Use GitHub API to check for open PRs for this branch
+            if not self.repo_owner or not self.repo_name:
+                logger.error("Repository owner or name not set")
+                return None
             
-        return self.client.check_for_existing_pr(branch_name, base_branch)
+            # Format the request for GitHub API
+            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/pulls"
+            headers = {
+                "Authorization": f"token {self.token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            params = {"state": "open", "head": f"{self.repo_owner}:{branch_name}"}
+            
+            import requests
+            response = requests.get(url, headers=headers, params=params)
+            
+            if response.status_code == 200:
+                prs = response.json()
+                if prs and len(prs) > 0:
+                    # Return information about the existing PR
+                    pr = prs[0]  # Take the first matching PR
+                    logger.info(f"Found existing PR #{pr['number']} for branch {branch_name}")
+                    return {
+                        "number": pr["number"],
+                        "url": pr["html_url"],
+                        "state": pr["state"],
+                        "title": pr["title"],
+                        "created_at": pr["created_at"]
+                    }
+            else:
+                logger.error(f"Failed to check for existing PR: {response.status_code}, {response.text}")
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error checking for existing PR: {str(e)}")
+            return None
     
     def create_fix_pr(self, branch_name: str, ticket_id: str, title: str,
                      description: str, base_branch: str = None) -> Optional[str]:
@@ -189,6 +195,12 @@ class GitHubService:
         if not self.client:
             logger.error("GitHub client not initialized")
             return None
+        
+        # First check if a PR already exists
+        existing_pr = self.check_for_existing_pr(branch_name, base_branch)
+        if existing_pr:
+            logger.info(f"PR already exists for branch {branch_name}: {existing_pr['url']}")
+            return existing_pr['url']
             
         pr_title = f"Fix {ticket_id}: {title}"
         pr_body = f"""
@@ -209,7 +221,7 @@ class GitHubService:
             base_branch=base_branch
         )
     
-    def add_pr_comment(self, pr_identifier, comment: str) -> bool:
+    async def add_pr_comment(self, pr_identifier, comment: str) -> bool:
         """
         Add a comment to a pull request
         
@@ -232,10 +244,17 @@ class GitHubService:
                 url_match = re.search(r'/pull/(\d+)', pr_identifier)
                 if url_match:
                     pr_number = url_match.group(1)
+                    
+                # Handle cases where ticket_id is passed as PR identifier erroneously
+                if pr_number and not pr_number.isdigit() and not url_match:
+                    logger.warning(f"Invalid PR identifier: {pr_identifier}, appears to be a ticket ID not a PR number")
+                    return False
             
             # Use the client to add the comment
-            return self.client.add_pr_comment(pr_number, comment)
+            success = self.client.add_pr_comment(pr_number, comment)
+            return success
             
         except Exception as e:
             logger.error(f"Error adding comment to PR {pr_identifier}: {str(e)}")
             return False
+

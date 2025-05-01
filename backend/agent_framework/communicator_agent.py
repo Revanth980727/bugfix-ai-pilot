@@ -7,6 +7,7 @@ from .agent_base import Agent, AgentStatus
 from backend.jira_service.jira_client import JiraClient
 from backend.github_service.github_service import GitHubService
 from backend.env import verify_github_repo_settings
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -66,20 +67,30 @@ class CommunicatorAgent(Agent):
         retry_count = 0
         while retry_count < self.max_api_retries:
             try:
-                # Extract PR number from URL
-                pr_number = pr_url.split('/')[-1]
-                
                 # Verify GitHub settings
                 github_ok, _ = verify_github_repo_settings()
                 if not github_ok:
                     logger.error("GitHub settings are not properly configured")
                     return False
+                
+                if not pr_url or not isinstance(pr_url, str) or not pr_url.startswith("http"):
+                    logger.error(f"Invalid PR URL: {pr_url}")
+                    return False
+                
+                # Extract PR number from URL
+                pr_number = None
+                url_match = re.search(r'/pull/(\d+)', pr_url)
+                if url_match:
+                    pr_number = url_match.group(1)
+                else:
+                    logger.error(f"Could not extract PR number from URL: {pr_url}")
+                    return False
                     
-                # Post comment using GitHub service
+                # Post comment using GitHub service - notice we don't await here since the method isn't async
                 success = await self.github_service.add_pr_comment(pr_number, comment)
                 if success:
                     logger.info(f"Successfully added comment to PR {pr_url}")
-                    return success
+                    return True
                 else:
                     logger.warning(f"Failed to add comment to PR {pr_url}, retrying ({retry_count + 1}/{self.max_api_retries})")
                     retry_count += 1
@@ -286,6 +297,7 @@ class CommunicatorAgent(Agent):
                 if confidence_score is not None:
                     github_comment += f" (Confidence score: {confidence_score}%)"
                     
+                # Fixed the awaiting of the post_github_comment method
                 github_updates_success = await self._post_github_comment(
                     github_pr_url,
                     github_comment

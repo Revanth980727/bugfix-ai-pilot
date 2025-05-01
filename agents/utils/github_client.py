@@ -46,22 +46,33 @@ class GitHubClient:
         Returns:
             Tuple containing (content, sha)
         """
-        if not branch:
-            branch = self.default_branch
-            
-        url = f"{self.repo_api_url}/contents/{file_path}?ref={branch}"
+        # ... keep existing code (file content retrieval logic)
         
-        self.logger.info(f"Fetching content of {file_path} from {branch}")
+    def check_branch_exists(self, branch_name: str) -> bool:
+        """
+        Check if a branch exists in the repository
+        
+        Args:
+            branch_name: Name of the branch to check
+            
+        Returns:
+            bool: True if the branch exists, False otherwise
+        """
+        url = f"{self.repo_api_url}/git/refs/heads/{branch_name}"
+        
+        self.logger.info(f"Checking if branch {branch_name} exists")
         response = requests.get(url, headers=self.headers)
         
-        if response.status_code != 200:
-            self.logger.error(f"Failed to get {file_path}: {response.status_code}, {response.text}")
-            response.raise_for_status()
-            
-        data = response.json()
-        content = base64.b64decode(data["content"]).decode("utf-8")
-        
-        return content, data["sha"]
+        if response.status_code == 200:
+            self.logger.info(f"Branch {branch_name} exists")
+            return True
+        elif response.status_code == 404:
+            self.logger.info(f"Branch {branch_name} does not exist")
+            return False
+        else:
+            self.logger.error(f"Failed to check if branch {branch_name} exists: {response.status_code}, {response.text}")
+            # Assume it doesn't exist to be safe
+            return False
         
     def update_file(self, file_path: str, content: str, commit_message: str, branch: str = None, sha: str = None) -> bool:
         """
@@ -77,35 +88,7 @@ class GitHubClient:
         Returns:
             Success status (True/False)
         """
-        if not branch:
-            branch = self.default_branch
-            
-        # Get SHA if not provided
-        if not sha:
-            try:
-                _, sha = self.get_file_contents(file_path, branch)
-            except Exception as e:
-                self.logger.error(f"Failed to get SHA for {file_path}: {str(e)}")
-                return False
-        
-        url = f"{self.repo_api_url}/contents/{file_path}"
-        
-        payload = {
-            "message": commit_message,
-            "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
-            "sha": sha,
-            "branch": branch
-        }
-        
-        self.logger.info(f"Updating {file_path} on branch {branch}")
-        response = requests.put(url, headers=self.headers, json=payload)
-        
-        if response.status_code not in (200, 201):
-            self.logger.error(f"Failed to update {file_path}: {response.status_code}, {response.text}")
-            return False
-            
-        self.logger.info(f"Successfully updated {file_path} on branch {branch}")
-        return True
+        # ... keep existing code (file update logic)
         
     def create_branch(self, branch_name: str, from_branch: str = None) -> bool:
         """
@@ -120,6 +103,11 @@ class GitHubClient:
         """
         if not from_branch:
             from_branch = self.default_branch
+            
+        # Check if the branch already exists first
+        if self.check_branch_exists(branch_name):
+            self.logger.warning(f"Branch {branch_name} already exists")
+            return True
             
         # Get the latest commit SHA from the base branch
         url = f"{self.repo_api_url}/git/refs/heads/{from_branch}"
@@ -185,12 +173,84 @@ class GitHubClient:
         response = requests.post(url, headers=self.headers, json=payload)
         
         if response.status_code != 201:
+            # Check if it's because the PR already exists
+            if response.status_code == 422 and "A pull request already exists" in response.text:
+                self.logger.info(f"PR from {head_branch} to {base_branch} already exists")
+                
+                # Try to get the URL of the existing PR
+                existing_prs = requests.get(
+                    f"{self.repo_api_url}/pulls?head={self.repo_owner}:{head_branch}&base={base_branch}&state=open",
+                    headers=self.headers
+                )
+                
+                if existing_prs.status_code == 200 and existing_prs.json():
+                    pr_url = existing_prs.json()[0]["html_url"]
+                    self.logger.info(f"Found existing PR: {pr_url}")
+                    return pr_url
+                    
+                return None
+            
             self.logger.error(f"Failed to create PR: {response.status_code}, {response.text}")
             return None
             
         pr_url = response.json()["html_url"]
-        self.logger.info(f"Successfully created PR: {pr_url}")
+        pr_number = response.json()["number"]
+        self.logger.info(f"Successfully created PR #{pr_number}: {pr_url}")
         return pr_url
+       
+    def add_pr_comment(self, pr_number: str, comment: str) -> bool:
+        """
+        Add a comment to a pull request
+        
+        Args:
+            pr_number: Pull request number (or PR object)
+            comment: Comment text
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        # Validate PR number
+        if not pr_number:
+            self.logger.error("Invalid PR number: None")
+            return False
+        
+        # Handle different PR number formats
+        try:
+            # Convert to string if it's not already
+            pr_number_str = str(pr_number)
+            
+            # Try to handle PR URLs
+            if pr_number_str.startswith('http'):
+                import re
+                pr_match = re.search(r'/pull/(\d+)', pr_number_str)
+                if pr_match:
+                    pr_number_str = pr_match.group(1)
+                else:
+                    self.logger.error(f"Could not extract PR number from URL: {pr_number_str}")
+                    return False
+            
+            # Ensure it's a numeric value
+            if not pr_number_str.isdigit():
+                self.logger.error(f"Invalid PR number format: {pr_number_str}")
+                return False
+                
+            url = f"{self.repo_api_url}/issues/{pr_number_str}/comments"
+            
+            payload = {"body": comment}
+            
+            self.logger.info(f"Adding comment to PR #{pr_number_str}")
+            response = requests.post(url, headers=self.headers, json=payload)
+            
+            if response.status_code != 201:
+                self.logger.error(f"Failed to add comment to PR #{pr_number_str}: {response.status_code}, {response.text}")
+                return False
+                
+            self.logger.info(f"Successfully added comment to PR #{pr_number_str}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Unexpected error adding comment to PR #{pr_number}: {str(e)}")
+            return False
         
     def commit_patch(self, branch_name: str, patch_content: str, commit_message: str, 
                     patch_file_paths: List[str]) -> bool:
@@ -206,33 +266,5 @@ class GitHubClient:
         Returns:
             Success status (True/False)
         """
-        # This is a simplified implementation - in a real scenario
-        # you'd need to parse the patch and apply it correctly to each file
-        
-        for file_path in patch_file_paths:
-            try:
-                # Get current content
-                current_content, sha = self.get_file_contents(file_path, branch_name)
-                
-                # Apply patch (simplified - this would need proper diff application)
-                # In a real implementation, use a proper patch library
-                new_content = current_content  # This should be patched content
-                
-                # Update file
-                success = self.update_file(
-                    file_path=file_path,
-                    content=new_content,
-                    commit_message=commit_message,
-                    branch=branch_name,
-                    sha=sha
-                )
-                
-                if not success:
-                    self.logger.error(f"Failed to update {file_path}")
-                    return False
-                    
-            except Exception as e:
-                self.logger.error(f"Error applying patch to {file_path}: {str(e)}")
-                return False
-                
-        return True
+        # ... keep existing code (patch application logic)
+

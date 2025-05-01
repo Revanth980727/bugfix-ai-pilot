@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 import httpx
 import asyncio
+import re
 
 # Add the project root to the Python path
 sys.path.append('/app')
@@ -107,13 +108,16 @@ async def deploy_fix(request: DeployRequest):
         # Check if we're using the GitHub service or github_utils
         if 'github_service' in globals():
             # Create a branch for the fix
-            branch_name = github_service.create_fix_branch(
+            branch_name = f"fix/{request.ticket_id}"
+            branch_created = github_service.create_fix_branch(
                 request.ticket_id,
                 "main"  # Use main branch as base
             )
             
-            if not branch_name:
+            if not branch_created:
                 raise HTTPException(status_code=500, detail="Failed to create branch")
+            
+            logger.info(f"Branch created or already exists: {branch_name}")
             
             # Check if PR already exists
             existing_pr = github_service.check_for_existing_pr(branch_name, "main")
@@ -146,8 +150,13 @@ async def deploy_fix(request: DeployRequest):
                     request.ticket_id,
                     f"Fix for {request.ticket_id}",
                     f"Automated bug fix for {request.ticket_id}\n\nThis PR contains the following changes:\n" + 
-                    "\n".join([f"- {diff.filename}: {diff.explanation}" for diff in request.diffs])
+                    "\n".join([f"- {diff.filename}: {diff.explanation or 'No explanation provided'}" for diff in request.diffs])
                 )
+                
+                if not pr_url:
+                    raise HTTPException(status_code=500, detail="Failed to create or find PR")
+                
+                logger.info(f"PR created or exists at: {pr_url}")
         else:
             # Fallback to github_utils
             branch_name = create_branch(
@@ -185,16 +194,10 @@ async def deploy_fix(request: DeployRequest):
                 request.ticket_id,
                 f"Fix for {request.ticket_id}",
                 f"Automated bug fix for {request.ticket_id}\n\nThis PR contains the following changes:\n" + 
-                "\n".join([f"- {diff.filename}: {diff.explanation}" for diff in request.diffs])
+                "\n".join([f"- {diff.filename}: {diff.explanation or 'No explanation provided'}" for diff in request.diffs])
             )
         
-        # Update JIRA ticket status
-        jira_success = await update_jira_ticket(request.ticket_id, pr_url)
-        
-        # Send notifications
-        await send_notifications(request.ticket_id, pr_url, request.repository)
-        
-        # Add a comment to the PR
+        # Add a comment to the PR if it exists
         if pr_url and 'github_service' in globals():
             comment = f"This PR was created automatically by BugFix AI to fix issue {request.ticket_id}\n\n"
             comment += "Test results:\n"
@@ -203,11 +206,23 @@ async def deploy_fix(request: DeployRequest):
                 comment += f"- {status_emoji} {test.name}: {test.status}\n"
             
             try:
-                comment_success = github_service.add_pr_comment(pr_url, comment)
-                if not comment_success:
-                    logger.warning(f"Failed to add comment to PR {pr_url}")
+                # Extract PR number from URL
+                pr_match = re.search(r'/pull/(\d+)', pr_url)
+                if pr_match:
+                    pr_number = pr_match.group(1)
+                    comment_success = github_service.add_pr_comment(pr_number, comment)
+                    if not comment_success:
+                        logger.warning(f"Failed to add comment to PR {pr_url}")
+                else:
+                    logger.warning(f"Could not extract PR number from URL: {pr_url}")
             except Exception as e:
                 logger.error(f"Error adding comment to PR {pr_url}: {str(e)}")
+        
+        # Update JIRA ticket status
+        jira_success = await update_jira_ticket(request.ticket_id, pr_url)
+        
+        # Send notifications
+        await send_notifications(request.ticket_id, pr_url, request.repository)
         
         logger.info(f"Deployment successful for ticket {request.ticket_id}, PR created at {pr_url}")
         
