@@ -1,4 +1,3 @@
-
 export interface Ticket {
   id: string;
   title: string;
@@ -19,12 +18,14 @@ export interface Ticket {
     qa_message?: string;
   }>;
   early_escalation?: boolean;
+  code_context?: { [filePath: string]: string }; // Added code_context property
 }
 
 export interface AffectedFile {
   file: string;
   valid: boolean;
   reason?: string;
+  content?: string;  // Added content property
 }
 
 export interface PlannerAnalysis {
@@ -36,6 +37,7 @@ export interface PlannerAnalysis {
   affectedFiles?: string[];  // For backward compatibility
   rootCause?: string;        // For backward compatibility
   suggestedApproach?: string; // For backward compatibility
+  code_context?: { [filePath: string]: string }; // Added code_context property
 }
 
 export interface CodeDiff {
