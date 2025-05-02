@@ -4,7 +4,7 @@ import logging
 import subprocess
 import tempfile
 import requests
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, Tuple
 from github import Github, GithubException
 from .config import GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME, GITHUB_DEFAULT_BRANCH
 
@@ -27,20 +27,20 @@ class GitHubService:
         else:
             self.client = Github(self.github_token)
     
-    def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> bool:
+    def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> Tuple[bool, str]:
         """
-        Create a new branch for a bug fix
+        Create a new branch for a bug fix or return the existing branch
         
         Args:
             ticket_id: The JIRA ticket ID
             base_branch: The branch to base the new branch on (defaults to default_branch)
             
         Returns:
-            bool: True if branch creation was successful, False otherwise
+            Tuple[bool, str]: (Success status, branch name)
         """
         if not self.client:
             logger.warning("GitHub client not initialized, cannot create branch")
-            return False
+            return False, ""
             
         base_branch = base_branch or self.default_branch
         new_branch_name = f"fix/{ticket_id}"
@@ -52,26 +52,35 @@ class GitHubService:
             try:
                 ref = repo.get_git_ref(f"refs/heads/{new_branch_name}")
                 logger.info(f"Branch {new_branch_name} already exists")
-                return True
+                return True, new_branch_name
             except GithubException as e:
                 if e.status != 404:
                     logger.error(f"Error checking if branch exists: {str(e)}")
-                    return False
+                    return False, ""
             
             # Get the commit of the base branch
-            base_branch_object = repo.get_branch(base_branch)
-            base_commit_sha = base_branch_object.commit.sha
+            try:
+                base_branch_object = repo.get_branch(base_branch)
+                base_commit_sha = base_branch_object.commit.sha
+            except GithubException as e:
+                logger.error(f"Error getting base branch {base_branch}: {str(e)}")
+                logger.info(f"Trying with default branch {self.default_branch}")
+                base_branch_object = repo.get_branch(self.default_branch)
+                base_commit_sha = base_branch_object.commit.sha
             
             # Create the new branch
             repo.create_git_ref(ref=f"refs/heads/{new_branch_name}", sha=base_commit_sha)
             logger.info(f"Branch {new_branch_name} created successfully")
-            return True
+            return True, new_branch_name
         except GithubException as e:
+            if "Reference already exists" in str(e):
+                logger.info(f"Branch {new_branch_name} already exists")
+                return True, new_branch_name
             logger.error(f"GitHub error creating branch: {str(e)}")
-            return False
+            return False, ""
         except Exception as e:
             logger.error(f"Error creating branch: {str(e)}")
-            return False
+            return False, ""
     
     def commit_bug_fix(self, branch_name: str, file_changes: List[Dict[str, str]], ticket_id: str, commit_message: str) -> bool:
         """
@@ -139,7 +148,7 @@ class GitHubService:
     
     def create_fix_pr(self, branch_name: str, ticket_id: str, title: str, body: str) -> Optional[str]:
         """
-        Create a pull request for a bug fix
+        Create a pull request for a bug fix or return existing PR URL
         
         Args:
             branch_name: The name of the branch to create the PR from
@@ -157,13 +166,12 @@ class GitHubService:
         try:
             repo = self.client.get_repo(self.default_repo)
             
-            # Check if a PR already exists for this branch
-            pulls = repo.get_pulls(state='open', head=branch_name)
-            if pulls.totalCount > 0:
-                pr = pulls[0]
-                logger.info(f"PR already exists for branch {branch_name}: {pr.html_url}")
-                return pr.html_url
-            
+            # First check if a PR already exists for this branch or ticket ID
+            existing_pr = self.check_for_existing_pr(branch_name, self.default_branch) or self.find_pr_for_ticket(ticket_id)
+            if existing_pr:
+                logger.info(f"PR already exists for branch {branch_name} or ticket {ticket_id}: {existing_pr['url']}")
+                return existing_pr['url']
+                
             # Create the pull request
             pr = repo.create_pull(
                 title=title,
@@ -176,6 +184,14 @@ class GitHubService:
             return pr.html_url
         except GithubException as e:
             logger.error(f"GitHub error creating pull request: {str(e)}")
+            
+            # Check if the error is due to PR already existing
+            if "A pull request already exists" in str(e):
+                # Try to find the existing PR
+                existing_pr = self.find_pr_for_ticket(ticket_id) or self.check_for_existing_pr(branch_name, self.default_branch)
+                if existing_pr:
+                    logger.info(f"Found existing PR: {existing_pr['url']}")
+                    return existing_pr['url']
             return None
         except Exception as e:
             logger.error(f"Error creating pull request: {str(e)}")
