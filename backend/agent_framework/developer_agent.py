@@ -27,14 +27,7 @@ class DeveloperAgent(Agent):
         # Initialize OpenAI client
         self.client = openai.OpenAI(api_key=self.api_key)
 
-    def _build_prompt(self, ticket_id: str, summary: str, likely_files: List[str], 
-                     likely_modules: List[str], likely_functions: List[str], 
-                     errors: Optional[List[str]] = None,
-                     code_context: Optional[Dict[str, str]] = None) -> str:
-        # ... keep existing code
-        
-    def _send_gpt4_request(self, prompt: str, max_retries: int = 3) -> Optional[str]:
-        # ... keep existing code
+    # ... keep existing code (_build_prompt and _send_gpt4_request methods)
         
     def _parse_gpt_response(self, response: str) -> List[Dict[str, Any]]:
         """Parse GPT-4 response into structured file changes with improved path handling"""
@@ -99,7 +92,7 @@ class DeveloperAgent(Agent):
         return file_changes
 
     def _apply_patch(self, file_changes: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Apply patches to the repository files with improved line-by-line application"""
+        """Apply patches to the repository files with precise line-by-line changes"""
         results = {
             "files_modified": [],
             "files_failed": [],
@@ -126,52 +119,49 @@ class DeveloperAgent(Agent):
             try:
                 # Check if file exists
                 if not os.path.exists(full_path):
+                    # If it's a new file
                     dir_path = os.path.dirname(full_path)
                     if not os.path.exists(dir_path):
                         os.makedirs(dir_path)
+                        
+                    self.log(f"Creating new file: {file_path}")
                     with open(full_path, 'w') as f:
-                        f.write(diff)  # Create new file with content
+                        # For new files, use the entire diff content
+                        f.write(diff)
                     
-                    # Store the patched code
-                    results["patched_code"][file_path] = diff
-                    
-                    self.log(f"Created new file: {file_path}")
                     results["files_modified"].append(file_path)
                     results["patches_applied"] += 1
+                    results["patched_code"][file_path] = diff
                     continue
                 
-                # Read existing file content
+                # For existing files, read the content
                 with open(full_path, 'r') as f:
                     original_content = f.read()
                 
-                # Apply changes based on diff pattern
-                modified_content = self._apply_line_changes(original_content, diff)
+                # Parse the diff to identify changed lines
+                modified_content = self._apply_line_by_line_changes(original_content, diff)
                 
-                # If no changes were made, check if it's a complete file replacement
+                # If no changes were applied through diff format, check if it's a direct content replacement
                 if modified_content == original_content:
-                    # Try applying explicit diff
-                    explicit_diff_content = self._apply_explicit_diff(original_content, diff)
-                    
-                    # If still no changes, consider it might be a complete replacement
-                    if explicit_diff_content == original_content:
-                        # Check if the diff looks like a complete file (no +/- markers)
-                        if not any(line.startswith('-') or line.startswith('+') for line in diff.splitlines()):
-                            self.log(f"Replacing entire file content for {file_path}")
-                            modified_content = diff
+                    # Try to detect if entire file was meant to be replaced
+                    if not any(line.startswith('+') or line.startswith('-') for line in diff.splitlines()):
+                        self.log(f"Replacing entire file content for {file_path}")
+                        modified_content = diff
                 
-                # Write updated content back to file
+                # Write the modified content back
                 with open(full_path, 'w') as f:
                     f.write(modified_content)
                 
-                # Store the patched code - but only store the actual changes
+                # Store original and patched code
                 results["patched_code"][file_path] = modified_content
                 
-                self.log(f"Successfully updated file: {file_path}")
+                # Log success
+                self.log(f"Successfully patched file: {file_path}")
                 results["files_modified"].append(file_path)
                 results["patches_applied"] += 1
                 
             except Exception as e:
-                error_msg = f"Failed to apply changes to {file_path}: {str(e)}"
+                error_msg = f"Failed to patch {file_path}: {str(e)}"
                 self.log(error_msg)
                 results["files_failed"].append({
                     "file": file_path,
@@ -180,105 +170,103 @@ class DeveloperAgent(Agent):
         
         return results
 
-    def _apply_line_changes(self, original_content: str, diff: str) -> str:
-        """Apply changes line by line based on diff markers"""
-        # If there are no diff markers, return original
-        if not any(line.strip().startswith(('-', '+')) for line in diff.splitlines()):
+    def _apply_line_by_line_changes(self, original_content: str, diff: str) -> str:
+        """
+        Apply diff changes line by line to preserve most of the original file
+        
+        Args:
+            original_content: The original file content
+            diff: The diff content with - and + prefixes for line changes
+            
+        Returns:
+            Modified content with changes applied
+        """
+        # Check if this is a proper diff format with +/- markers
+        has_diff_markers = any(line.startswith('+') or line.startswith('-') 
+                              for line in diff.splitlines())
+        
+        if not has_diff_markers:
+            # Not a diff format, return original content
             return original_content
             
-        result_lines = []
+        # Parse the diff to identify line changes
+        original_lines = original_lines = original_content.splitlines()
+        modified_lines = original_lines.copy()
+        
+        # Group lines into chunks for better processing
+        chunks = []
+        current_chunk = {"removed": [], "added": [], "context": []}
+        context_lines = []
+        
+        # Process diff lines to extract changes
         diff_lines = diff.splitlines()
-        
-        # Process the diff lines to identify changes
-        removal_chunks = []
-        addition_chunks = []
-        current_removal = []
-        current_addition = []
-        
-        # First, parse the diff into removal and addition chunks
         for line in diff_lines:
-            stripped = line.strip()
-            if stripped.startswith('-'):
-                current_removal.append(stripped[1:].strip())
-            elif stripped.startswith('+'):
-                current_addition.append(stripped[1:].strip())
+            if line.startswith('+'):
+                # Added line
+                current_chunk["added"].append(line[1:])
+            elif line.startswith('-'):
+                # Removed line
+                current_chunk["removed"].append(line[1:])
             else:
-                # End of a chunk
-                if current_removal or current_addition:
-                    removal_chunks.append(current_removal[:])
-                    addition_chunks.append(current_addition[:])
-                    current_removal = []
-                    current_addition = []
+                # Context line - could be used for matching
+                if current_chunk["removed"] or current_chunk["added"]:
+                    # If we had changes in this chunk, store context and create a new chunk
+                    current_chunk["context"] = context_lines
+                    chunks.append(current_chunk)
+                    current_chunk = {"removed": [], "added": [], "context": []}
+                    context_lines = [line]
+                else:
+                    context_lines.append(line)
         
-        # Add the last chunk if exists
-        if current_removal or current_addition:
-            removal_chunks.append(current_removal)
-            addition_chunks.append(current_addition)
+        # Add the last chunk if it has changes
+        if current_chunk["removed"] or current_chunk["added"]:
+            current_chunk["context"] = context_lines
+            chunks.append(current_chunk)
         
-        # Apply the changes to the original content
-        original_lines = original_content.splitlines()
-        new_content = []
-        
-        # If no valid chunks found, return original
-        if not removal_chunks:
-            return original_content
-            
-        i = 0
-        while i < len(original_lines):
-            # Try to match a removal chunk
-            matched = False
-            for chunk_idx, removal_chunk in enumerate(removal_chunks):
-                if removal_chunk and i + len(removal_chunk) <= len(original_lines):
-                    # Check if this chunk matches at current position
-                    matches = all(
-                        original_lines[i+j].strip() == removal[0:len(original_lines[i+j].strip())]
-                        for j, removal in enumerate(removal_chunk)
-                        if j < len(removal_chunk)
-                    )
-                    
-                    if matches:
-                        # Replace with additions
-                        for add_line in addition_chunks[chunk_idx]:
-                            new_content.append(add_line)
-                        
-                        # Skip the removed lines
-                        i += len(removal_chunk)
-                        matched = True
-                        break
-            
-            if not matched:
-                # No match found, keep original line
-                new_content.append(original_lines[i])
-                i += 1
-        
-        return '\n'.join(new_content)
-
-    def _apply_explicit_diff(self, original_content: str, diff: str) -> str:
-        """Apply explicit diff changes to the original content"""
-        # Split content into lines for easier manipulation
-        original_lines = original_content.splitlines()
-        result_lines = original_lines.copy()
-        
-        # Extract diff chunks (sections that start with - and + lines)
-        chunk_pattern = r'(?:^|\n)((?:[-+][^\n]*\n)+)'
-        chunks = re.findall(chunk_pattern, diff, re.MULTILINE)
+        # Apply chunks of changes to the file
+        offset = 0  # Track line offset as we add/remove lines
         
         for chunk in chunks:
-            # Extract lines to remove and add
-            remove_lines = [line[1:] for line in chunk.splitlines() if line.startswith('-')]
-            add_lines = [line[1:] for line in chunk.splitlines() if line.startswith('+')]
+            # Find the position to apply changes
+            start_pos = -1
             
-            # Find where to apply the changes
-            if remove_lines:
-                # Try to find a sequence match in the original content
-                for i in range(len(result_lines) - len(remove_lines) + 1):
-                    if all(result_lines[i+j].strip() == remove_line.strip() 
-                           for j, remove_line in enumerate(remove_lines)):
-                        # Found a match, replace these lines
-                        result_lines[i:i+len(remove_lines)] = add_lines
+            # Try to find the position based on removed lines
+            if chunk["removed"]:
+                for i in range(len(modified_lines) - len(chunk["removed"]) + 1):
+                    if i + offset >= len(modified_lines):
                         break
+                    
+                    # Check if this position matches the removed lines
+                    matches = True
+                    for j, removed_line in enumerate(chunk["removed"]):
+                        if i + j + offset >= len(modified_lines):
+                            matches = False
+                            break
+                        
+                        # Strip whitespace for comparison
+                        if modified_lines[i + j + offset].strip() != removed_line.strip():
+                            matches = False
+                            break
+                    
+                    if matches:
+                        start_pos = i + offset
+                        break
+            
+            # If position found, apply changes
+            if start_pos != -1:
+                # Remove old lines
+                for _ in range(len(chunk["removed"])):
+                    if start_pos < len(modified_lines):
+                        modified_lines.pop(start_pos)
+                
+                # Add new lines at the same position
+                for j, added_line in enumerate(chunk["added"]):
+                    modified_lines.insert(start_pos + j, added_line)
+                
+                # Update offset
+                offset += len(chunk["added"]) - len(chunk["removed"])
         
-        return '\n'.join(result_lines)
+        return '\n'.join(modified_lines)
 
     def _save_output(self, ticket_id: str, output_data: Dict[str, Any]) -> None:
         """Save the agent's output to a JSON file"""
@@ -335,3 +323,4 @@ class DeveloperAgent(Agent):
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run the developer agent to generate and apply code fixes"""
         # ... keep existing code
+
