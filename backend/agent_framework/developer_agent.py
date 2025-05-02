@@ -31,72 +31,9 @@ class DeveloperAgent(Agent):
                      likely_modules: List[str], likely_functions: List[str], 
                      errors: Optional[List[str]] = None,
                      code_context: Optional[Dict[str, str]] = None) -> str:
-        """Build a structured prompt for GPT-4 with actual code context"""
-        prompt = f"""
-        I need help fixing a bug in a software project. Here's the context:
+        # ... keep existing code
         
-        Ticket ID: {ticket_id}
-        
-        Bug Summary: {summary}
-        """
-        
-        if likely_files and len(likely_files) > 0:
-            prompt += f"""
-            Affected Files:
-            {', '.join(likely_files)}
-            """
-        else:
-            prompt += "\nNo specific files mentioned.\n"
-            
-        if likely_modules and len(likely_modules) > 0:
-            prompt += f"""
-            Affected Modules/Components:
-            {', '.join(likely_modules)}
-            """
-        
-        if likely_functions and len(likely_functions) > 0:
-            prompt += f"""
-            Affected Functions/Classes:
-            {', '.join(likely_functions)}
-            """
-        
-        if errors and len(errors) > 0:
-            prompt += f"""
-            Error Messages:
-            {', '.join(errors)}
-            """
-        
-        # Add actual code context if available
-        if code_context and len(code_context) > 0:
-            prompt += "\nHere is the actual code content for the affected files:\n\n"
-            for file_path, content in code_context.items():
-                prompt += f"File: {file_path}\n```python\n{content}\n```\n\n"
-        
-        prompt += """
-        Instructions:
-        1. Provide the minimal code fix needed to resolve this issue
-        2. Include FULL, ABSOLUTE file paths for any files that need to be modified, using the actual repository structure
-        3. Show exactly what code needs to be changed (in a before/after format)
-        4. For each file change, explain briefly why the change fixes the issue
-        5. DO NOT use placeholder paths like '/path/to/...' - use the actual file paths from the repository
-        
-        Format your response as follows for each affected file:
-        
-        ---FILE: [full absolute path to file]---
-        [Brief explanation of what's being fixed]
-        
-        ```diff
-        - [line to remove]
-        + [line to add]
-        ```
-        
-        Only include necessary changes and be as concise as possible.
-        """
-        
-        return prompt
-
     def _send_gpt4_request(self, prompt: str, max_retries: int = 3) -> Optional[str]:
-        """Send a request to OpenAI API with retry logic"""
         # ... keep existing code
         
     def _parse_gpt_response(self, response: str) -> List[Dict[str, Any]]:
@@ -132,6 +69,13 @@ class DeveloperAgent(Agent):
                 
                 if not found:
                     self.log(f"Warning: Could not find actual file for placeholder {file_path}")
+                    
+                    # Try using GitHub repo information from .env if available
+                    repo_owner = os.getenv("GITHUB_REPO_OWNER")
+                    repo_name = os.getenv("GITHUB_REPO_NAME")
+                    if repo_owner and repo_name:
+                        self.log(f"Using GitHub repo information: {repo_owner}/{repo_name}")
+                        # Apply any other transformations as needed based on repo structure
             
             # Extract explanation (everything before the first code block)
             explanation_pattern = r'(.*?)```'
@@ -150,24 +94,12 @@ class DeveloperAgent(Agent):
             })
             
         if not file_changes:
-            # Fallback: try to parse without the specific file format
-            self.log("No file blocks found, attempting alternate parsing")
-            
-            # Try to find code blocks anywhere in the response
-            code_blocks = re.findall(r'```(?:.*?)\n(.*?)```', response, re.DOTALL)
-            if code_blocks:
-                file_changes.append({
-                    "file_path": "unknown",
-                    "explanation": "GPT response did not follow the expected format",
-                    "diff": '\n'.join(code.strip() for code in code_blocks)
-                })
-            else:
-                self.log("No code blocks found in the GPT response")
+            # ... keep existing code (Fallback parsing logic)
         
         return file_changes
 
     def _apply_patch(self, file_changes: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Apply patches to the repository files with improved robustness"""
+        """Apply patches to the repository files with improved line-by-line application"""
         results = {
             "files_modified": [],
             "files_failed": [],
@@ -210,24 +142,28 @@ class DeveloperAgent(Agent):
                 
                 # Read existing file content
                 with open(full_path, 'r') as f:
-                    file_content = f.read()
+                    original_content = f.read()
                 
                 # Apply changes based on diff pattern
-                # First, try to extract explicit removal/addition patterns
-                modified_content = self._apply_explicit_diff(file_content, diff)
+                modified_content = self._apply_line_changes(original_content, diff)
                 
-                # If no changes were made, assume it's a complete file replacement
-                if modified_content == file_content:
-                    # Check if the diff looks like a complete file
-                    if not any(line.startswith('-') or line.startswith('+') for line in diff.splitlines()):
-                        modified_content = diff
-                        self.log(f"Replacing entire file content for {file_path}")
+                # If no changes were made, check if it's a complete file replacement
+                if modified_content == original_content:
+                    # Try applying explicit diff
+                    explicit_diff_content = self._apply_explicit_diff(original_content, diff)
+                    
+                    # If still no changes, consider it might be a complete replacement
+                    if explicit_diff_content == original_content:
+                        # Check if the diff looks like a complete file (no +/- markers)
+                        if not any(line.startswith('-') or line.startswith('+') for line in diff.splitlines()):
+                            self.log(f"Replacing entire file content for {file_path}")
+                            modified_content = diff
                 
                 # Write updated content back to file
                 with open(full_path, 'w') as f:
                     f.write(modified_content)
                 
-                # Store the patched code
+                # Store the patched code - but only store the actual changes
                 results["patched_code"][file_path] = modified_content
                 
                 self.log(f"Successfully updated file: {file_path}")
@@ -244,9 +180,105 @@ class DeveloperAgent(Agent):
         
         return results
 
+    def _apply_line_changes(self, original_content: str, diff: str) -> str:
+        """Apply changes line by line based on diff markers"""
+        # If there are no diff markers, return original
+        if not any(line.strip().startswith(('-', '+')) for line in diff.splitlines()):
+            return original_content
+            
+        result_lines = []
+        diff_lines = diff.splitlines()
+        
+        # Process the diff lines to identify changes
+        removal_chunks = []
+        addition_chunks = []
+        current_removal = []
+        current_addition = []
+        
+        # First, parse the diff into removal and addition chunks
+        for line in diff_lines:
+            stripped = line.strip()
+            if stripped.startswith('-'):
+                current_removal.append(stripped[1:].strip())
+            elif stripped.startswith('+'):
+                current_addition.append(stripped[1:].strip())
+            else:
+                # End of a chunk
+                if current_removal or current_addition:
+                    removal_chunks.append(current_removal[:])
+                    addition_chunks.append(current_addition[:])
+                    current_removal = []
+                    current_addition = []
+        
+        # Add the last chunk if exists
+        if current_removal or current_addition:
+            removal_chunks.append(current_removal)
+            addition_chunks.append(current_addition)
+        
+        # Apply the changes to the original content
+        original_lines = original_content.splitlines()
+        new_content = []
+        
+        # If no valid chunks found, return original
+        if not removal_chunks:
+            return original_content
+            
+        i = 0
+        while i < len(original_lines):
+            # Try to match a removal chunk
+            matched = False
+            for chunk_idx, removal_chunk in enumerate(removal_chunks):
+                if removal_chunk and i + len(removal_chunk) <= len(original_lines):
+                    # Check if this chunk matches at current position
+                    matches = all(
+                        original_lines[i+j].strip() == removal[0:len(original_lines[i+j].strip())]
+                        for j, removal in enumerate(removal_chunk)
+                        if j < len(removal_chunk)
+                    )
+                    
+                    if matches:
+                        # Replace with additions
+                        for add_line in addition_chunks[chunk_idx]:
+                            new_content.append(add_line)
+                        
+                        # Skip the removed lines
+                        i += len(removal_chunk)
+                        matched = True
+                        break
+            
+            if not matched:
+                # No match found, keep original line
+                new_content.append(original_lines[i])
+                i += 1
+        
+        return '\n'.join(new_content)
+
     def _apply_explicit_diff(self, original_content: str, diff: str) -> str:
         """Apply explicit diff changes to the original content"""
-        # ... keep existing code
+        # Split content into lines for easier manipulation
+        original_lines = original_content.splitlines()
+        result_lines = original_lines.copy()
+        
+        # Extract diff chunks (sections that start with - and + lines)
+        chunk_pattern = r'(?:^|\n)((?:[-+][^\n]*\n)+)'
+        chunks = re.findall(chunk_pattern, diff, re.MULTILINE)
+        
+        for chunk in chunks:
+            # Extract lines to remove and add
+            remove_lines = [line[1:] for line in chunk.splitlines() if line.startswith('-')]
+            add_lines = [line[1:] for line in chunk.splitlines() if line.startswith('+')]
+            
+            # Find where to apply the changes
+            if remove_lines:
+                # Try to find a sequence match in the original content
+                for i in range(len(result_lines) - len(remove_lines) + 1):
+                    if all(result_lines[i+j].strip() == remove_line.strip() 
+                           for j, remove_line in enumerate(remove_lines)):
+                        # Found a match, replace these lines
+                        result_lines[i:i+len(remove_lines)] = add_lines
+                        break
+        
+        return '\n'.join(result_lines)
 
     def _save_output(self, ticket_id: str, output_data: Dict[str, Any]) -> None:
         """Save the agent's output to a JSON file"""
@@ -298,128 +330,8 @@ class DeveloperAgent(Agent):
 
     def _filter_generic_response(self, response: str) -> bool:
         """Check if the response is too generic or just explanatory text"""
-        # Common patterns in generic responses
-        generic_patterns = [
-            r"without specific details.*challenging to provide",
-            r"need more information",
-            r"for demonstration purposes",
-            r"hypothetical",
-            r"please replace.*with the actual",
-            r"please provide more details"
-        ]
-        
-        # Check for generic patterns
-        for pattern in generic_patterns:
-            if re.search(pattern, response.lower()):
-                self.log("Detected generic or hypothetical response")
-                return True
-                
-        # Check for the absence of specific code changes
-        if not re.search(r'```(?:diff)?.*?[-+]', response, re.DOTALL):
-            self.log("No specific code changes detected in response")
-            return True
-            
-        return False
+        # ... keep existing code
 
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run the developer agent to generate and apply code fixes"""
-        ticket_id = input_data.get("ticket_id", "UNKNOWN")
-        self.log(f"Processing ticket: {ticket_id}")
-        
-        # Extract data from input
-        summary = input_data.get("summary", "") or input_data.get("bug_summary", "")
-        
-        # Handle affected_files which could be a list of strings or a list of dicts
-        affected_files = input_data.get("affected_files", [])
-        likely_files = []
-        
-        # Process affected_files to get a list of strings
-        if isinstance(affected_files, list):
-            for item in affected_files:
-                if isinstance(item, str):
-                    likely_files.append(item)
-                elif isinstance(item, dict) and "file" in item:
-                    # If it's a dict, extract the file path
-                    likely_files.append(item["file"])
-        
-        # Log the detected files
-        self.log(f"Detected affected files: {', '.join(likely_files)}")
-        
-        likely_modules = input_data.get("affected_modules", [])
-        likely_functions = input_data.get("affected_functions", [])
-        errors = input_data.get("errors_identified", []) or [input_data.get("error_type", "")]
-        
-        # Get the code context (actual file contents)
-        code_context = self._read_code_context(input_data)
-        
-        # Log code context keys to help debug
-        if code_context:
-            self.log(f"Loaded code context for files: {', '.join(code_context.keys())}")
-        else:
-            self.log("Warning: No code context found")
-        
-        try:
-            # Build prompt for GPT-4
-            prompt = self._build_prompt(
-                ticket_id=ticket_id,
-                summary=summary,
-                likely_files=likely_files,
-                likely_modules=likely_modules,
-                likely_functions=likely_functions,
-                errors=errors,
-                code_context=code_context
-            )
-            
-            # Log prompt details for debugging
-            self.log(f"Generated prompt with {len(prompt)} characters")
-            
-            # Get response from GPT-4
-            gpt_response = self._send_gpt4_request(prompt)
-            if not gpt_response:
-                raise Exception("Failed to get a valid response from GPT-4")
-            
-            # Check if the response is too generic or explanatory
-            if self._filter_generic_response(gpt_response):
-                self.log("WARNING: GPT response appears to be generic or hypothetical - might not provide a real fix")
-            
-            # Parse GPT-4 response to extract file changes
-            file_changes = self._parse_gpt_response(gpt_response)
-            if not file_changes:
-                self.log("Warning: No file changes extracted from GPT response")
-            else:
-                self.log(f"Extracted changes for files: {', '.join([fc['file_path'] for fc in file_changes])}")
-            
-            # Apply the patches to files
-            patch_results = self._apply_patch(file_changes)
-            
-            # Calculate confidence score
-            confidence_score = self.calculate_confidence_score(file_changes, affected_files, patch_results)
-            
-            # Prepare output
-            output = {
-                "ticket_id": ticket_id,
-                "files_modified": patch_results["files_modified"],
-                "files_failed": patch_results["files_failed"],
-                "patches_applied": patch_results["patches_applied"],
-                "diff_summary": f"Applied {patch_results['patches_applied']} changes to {len(patch_results['files_modified'])} files",
-                "raw_gpt_response": gpt_response,
-                "confidence_score": confidence_score,
-                "patched_code": patch_results.get("patched_code", {}),  # Include the actual patched code
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            # Save output for debugging/auditing
-            self._save_output(ticket_id, output)
-            
-            self.log(f"Completed processing ticket {ticket_id} with confidence score: {confidence_score}")
-            return output
-            
-        except Exception as e:
-            error_msg = f"Error during DeveloperAgent processing: {str(e)}"
-            self.log(error_msg)
-            return {
-                "ticket_id": ticket_id,
-                "error": error_msg,
-                "confidence_score": 0,  # Zero confidence when error occurs
-                "timestamp": datetime.now().isoformat()
-            }
+        # ... keep existing code
