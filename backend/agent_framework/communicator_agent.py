@@ -1,15 +1,15 @@
-
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import logging
 import asyncio
 from datetime import datetime
 import time
 import os
 import re
+from unittest.mock import MagicMock
 from .agent_base import Agent, AgentStatus
 from backend.jira_service.jira_client import JiraClient
 from backend.github_service.github_service import GitHubService
-from backend.env import verify_github_repo_settings
+from backend.config.env_loader import get_config, get_env
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,7 +35,30 @@ class CommunicatorAgent(Agent):
         
     async def _update_jira_ticket(self, ticket_id: str, status: str, comment: str) -> bool:
         """Update JIRA ticket with status and comment with retry logic"""
-        # ... keep existing code (_update_jira_ticket method)
+        for attempt in range(self.max_api_retries):
+            try:
+                success = self.jira_client.update_ticket_status(ticket_id, status)
+                if not success:
+                    self.log(f"Attempt {attempt + 1} failed to update JIRA status for {ticket_id} to {status}", level=logging.WARNING)
+                    await asyncio.sleep(5)  # Wait before retrying
+                    continue
+                
+                success = self.jira_client.add_comment_to_ticket(ticket_id, comment)
+                if not success:
+                    self.log(f"Attempt {attempt + 1} failed to add comment to JIRA ticket {ticket_id}", level=logging.WARNING)
+                    await asyncio.sleep(5)  # Wait before retrying
+                    continue
+                
+                self.log(f"JIRA ticket {ticket_id} updated successfully (attempt {attempt + 1})")
+                return True
+            except Exception as e:
+                self.log(f"Exception during JIRA update (attempt {attempt + 1}): {str(e)}", level=logging.ERROR)
+                if attempt < self.max_api_retries - 1:
+                    await asyncio.sleep(5)  # Wait before retrying
+                else:
+                    self.log(f"Max retries reached for JIRA update", level=logging.ERROR)
+                    return False
+        return False
         
     async def _get_valid_pr_url(self, ticket_id: str, github_pr_url: str = None) -> Optional[str]:
         """
@@ -48,11 +71,43 @@ class CommunicatorAgent(Agent):
         Returns:
             Optional[str]: Valid PR URL if found, None otherwise
         """
-        # ... keep existing code (_get_valid_pr_url method)
+        if github_pr_url:
+            # Check if the provided URL is valid
+            if "github.com" in github_pr_url:
+                return github_pr_url
+            else:
+                self.log(f"Invalid PR URL provided: {github_pr_url}", level=logging.WARNING)
+        
+        # If no URL provided, try to find it using the ticket ID
+        pr_info = self.github_service.find_pr_for_ticket(ticket_id)
+        if pr_info:
+            self.log(f"Found PR URL for ticket {ticket_id}: {pr_info['url']}")
+            return pr_info["url"]
+        else:
+            self.log(f"No PR URL found for ticket {ticket_id}", level=logging.WARNING)
+            return None
             
     async def _post_github_comment(self, ticket_id: str, pr_url: str, comment: str) -> bool:
         """Post a comment on GitHub PR with retry logic"""
-        # ... keep existing code (_post_github_comment method)
+        pr_number = pr_url.split("/")[-1]
+        
+        for attempt in range(self.max_api_retries):
+            try:
+                success = self.github_service.add_pr_comment(pr_number, comment)
+                if success:
+                    self.log(f"Comment added to GitHub PR {pr_number} successfully (attempt {attempt + 1})")
+                    return True
+                else:
+                    self.log(f"Attempt {attempt + 1} failed to add comment to GitHub PR {pr_number}", level=logging.WARNING)
+                    await asyncio.sleep(5)  # Wait before retrying
+            except Exception as e:
+                self.log(f"Exception during GitHub comment (attempt {attempt + 1}): {str(e)}", level=logging.ERROR)
+                if attempt < self.max_api_retries - 1:
+                    await asyncio.sleep(5)  # Wait before retrying
+                else:
+                    self.log(f"Max retries reached for GitHub comment", level=logging.ERROR)
+                    return False
+        return False
 
     async def _apply_gpt_fixes_to_code(self, ticket_id: str, gpt_output: Dict[str, Any]) -> Optional[str]:
         """
@@ -65,11 +120,77 @@ class CommunicatorAgent(Agent):
         Returns:
             Optional[str]: PR URL if created, None otherwise
         """
-        # ... keep existing code (_apply_gpt_fixes_to_code method)
+        try:
+            bug_summary = gpt_output.get("bug_summary", "Automated fix")
+            affected_files = gpt_output.get("affected_files", [])
+            
+            if not affected_files:
+                self.log("No affected files found in GPT output", level=logging.WARNING)
+                return None
+            
+            # Create a branch for the fix
+            success, branch_name = self.github_service.create_fix_branch(ticket_id)
+            if not success:
+                self.log(f"Failed to create fix branch for {ticket_id}", level=logging.ERROR)
+                return None
+            
+            # Apply the changes to the files
+            file_changes = []
+            for file_info in affected_files:
+                file_path = file_info.get("file")
+                diff = file_info.get("diff")
+                
+                if not file_path or not diff:
+                    self.log(f"Missing file path or diff for {file_info}", level=logging.WARNING)
+                    continue
+                
+                # Apply the diff to the file
+                success = self.github_service.apply_diff_to_file(branch_name, file_path, diff)
+                if not success:
+                    self.log(f"Failed to apply diff to {file_path}", level=logging.ERROR)
+                    return None
+                
+                file_changes.append({"filename": file_path, "content": diff})
+            
+            # Commit the changes
+            commit_message = f"Fix {ticket_id}: {bug_summary}"
+            success = self.github_service.commit_bug_fix(branch_name, file_changes, ticket_id, commit_message)
+            if not success:
+                self.log(f"Failed to commit changes to {branch_name}", level=logging.ERROR)
+                return None
+            
+            # Create a pull request
+            pr_title = f"Fix {ticket_id}: {bug_summary}"
+            pr_body = f"This PR fixes {ticket_id} by applying the changes suggested by GPT."
+            pr_url = self.github_service.create_fix_pr(branch_name, ticket_id, pr_title, pr_body)
+            
+            if not pr_url:
+                self.log(f"Failed to create pull request for {branch_name}", level=logging.ERROR)
+                return None
+            
+            self.log(f"Successfully created pull request {pr_url} for {ticket_id}")
+            return pr_url
+        except Exception as e:
+            self.log(f"Exception applying GPT fixes: {str(e)}", level=logging.ERROR)
+            return None
 
     async def format_agent_comment(self, agent_type: str, message: str, attempt: int = None, max_attempts: int = None) -> str:
         """Format a structured comment for a specific agent type"""
-        # ... keep existing code (format_agent_comment method)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        if attempt is not None and max_attempts is not None:
+            progress = f" (Attempt {attempt}/{max_attempts})"
+        else:
+            progress = ""
+        
+        formatted_comment = (
+            f"🤖 **{agent_type.capitalize()} Agent Update** {progress} 🤖\n"
+            f"Timestamp: {timestamp}\n"
+            f"---\n"
+            f"{message}\n"
+            f"---\n"
+        )
+        return formatted_comment
 
     # NEW METHODS FOR PATCH VALIDATION
 
@@ -417,17 +538,175 @@ class CommunicatorAgent(Agent):
                     })
         elif test_passed:
             # Handle successful test case
-            # ... keep existing code (test_passed section)
+            jira_comment = await self.format_agent_comment(
+                "Communicator",
+                f"✅ Tests passed after {retry_count} attempt(s)!\n"
+                f"Moving ticket to 'Resolved'.\n"
+                f"Confidence Score: {confidence_score}%",
+                retry_count,
+                max_retries
+            )
+            
+            updates.append({
+                "timestamp": timestamp,
+                "message": f"✅ Tests passed! (Confidence score: {confidence_score}%)",
+                "type": "jira",
+                "confidenceScore": confidence_score
+            })
+            
+            # Add system message for frontend
+            updates.append({
+                "timestamp": timestamp,
+                "message": "Tests passed, ticket resolved",
+                "type": "system"
+            })
+            
+            # Attempt to transition to "Resolved" or a suitable fallback status
+            target_status = "Resolved"
+            jira_updates_success = await self._update_jira_ticket(
+                ticket_id,
+                target_status,
+                jira_comment
+            )
+            
+            # If the initial transition fails, try fallback statuses
+            if not jira_updates_success and target_status in self.status_fallbacks:
+                for fallback_status in self.status_fallbacks[target_status]:
+                    jira_updates_success = await self._update_jira_ticket(
+                        ticket_id,
+                        fallback_status,
+                        jira_comment
+                    )
+                    if jira_updates_success:
+                        self.log(f"Successfully transitioned to fallback status: {fallback_status}")
+                        break  # Stop on the first successful transition
+            
+            if github_pr_url:
+                github_comment = f"✅ Tests passed! (Confidence score: {confidence_score}%)"
+                github_updates_success = await self._post_github_comment(
+                    ticket_id,
+                    github_pr_url,
+                    github_comment
+                )
+                
+                if github_updates_success:
+                    updates.append({
+                        "timestamp": timestamp,
+                        "message": github_comment,
+                        "type": "github",
+                        "confidenceScore": confidence_score
+                    })
         elif escalated:
             # Handle escalation case after max retries
-            # ... keep existing code (escalated section)
+            jira_comment = await self.format_agent_comment(
+                "Communicator",
+                f"❌ Tests failed after {max_retries} attempts.\n"
+                f"Escalating to 'Needs Review'.\n"
+                f"Failure Summary: {failure_summary}\n"
+                f"Failure Details: {failure_details}",
+                retry_count,
+                max_retries
+            )
+            
+            updates.append({
+                "timestamp": timestamp,
+                "message": f"❌ Tests failed after {max_retries} attempts. Escalating to 'Needs Review'.",
+                "type": "jira"
+            })
+            
+            # Add system message for frontend
+            updates.append({
+                "timestamp": timestamp,
+                "message": "Tests failed, ticket escalated",
+                "type": "system"
+            })
+            
+            jira_updates_success = await self._update_jira_ticket(
+                ticket_id,
+                "Needs Review",
+                jira_comment
+            )
+            
+            if github_pr_url:
+                github_comment = f"❌ Tests failed after {max_retries} attempts. Escalating to 'Needs Review'.\n" \
+                                 f"Failure Summary: {failure_summary}"
+                github_updates_success = await self._post_github_comment(
+                    ticket_id,
+                    github_pr_url,
+                    github_comment
+                )
+                
+                if github_updates_success:
+                    updates.append({
+                        "timestamp": timestamp,
+                        "message": github_comment,
+                        "type": "github"
+                    })
         else:
             # Handle test failure case with more retries left
-            # ... keep existing code (test failure case section)
+            new_retry_count = retry_count + 1
+            
+            jira_comment = await self.format_agent_comment(
+                "Communicator",
+                f"❌ Tests failed on attempt {new_retry_count}/{max_retries}.\n"
+                f"Retrying... (Confidence score: {confidence_score}%)\n"
+                f"Failure Summary: {failure_summary}",
+                new_retry_count,
+                max_retries
+            )
+            
+            updates.append({
+                "timestamp": timestamp,
+                "message": f"❌ Tests failed, retrying (attempt {new_retry_count}/{max_retries}). (Confidence score: {confidence_score}%)",
+                "type": "jira",
+                "confidenceScore": confidence_score
+            })
+            
+            jira_updates_success = await self._update_jira_ticket(
+                ticket_id,
+                "In Progress",
+                jira_comment
+            )
+            
+            if github_pr_url:
+                github_comment = f"❌ Tests failed, retrying (attempt {new_retry_count}/{max_retries}). (Confidence score: {confidence_score}%)"
+                github_updates_success = await self._post_github_comment(
+                    ticket_id,
+                    github_pr_url,
+                    github_comment
+                )
+                
+                if github_updates_success:
+                    updates.append({
+                        "timestamp": timestamp,
+                        "message": github_comment,
+                        "type": "github",
+                        "confidenceScore": confidence_score
+                    })
         
         # Post specific agent comments if agent_type is provided
         if agent_type in ["planner", "developer"] and not test_passed and not early_escalation and not escalated:
-            # ... keep existing code (agent_type section)
+            agent_message = input_data.get("agent_message", "No specific message provided.")
+            agent_comment = await self.format_agent_comment(
+                agent_type.capitalize(),
+                agent_message,
+                retry_count,
+                max_retries
+            )
+            
+            if github_pr_url:
+                github_updates_success = await self._post_github_comment(
+                    ticket_id,
+                    github_pr_url,
+                    agent_comment
+                )
+                
+                if github_updates_success:
+                    updates.append({
+                        "timestamp": timestamp,
+                        "message": agent_comment,
+                        "type": "github"
+                    })
         
         # Set agent status based on operation success
         self.status = (

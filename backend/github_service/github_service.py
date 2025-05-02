@@ -6,25 +6,26 @@ import tempfile
 import requests
 from typing import Dict, Any, List, Optional, Union
 from github import Github, GithubException
-from .config import GITHUB_TOKEN, GITHUB_API_URL, DEFAULT_REPO, DEFAULT_BRANCH
+from .config import GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME, GITHUB_DEFAULT_BRANCH
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("github-service")
 
 class GitHubService:
-    def __init__(self, github_token=None, api_url=None, default_repo=None, default_branch=None):
+    def __init__(self, github_token=None, repo_owner=None, repo_name=None, default_branch=None):
         """Initialize GitHub service with API token and configuration"""
         self.github_token = github_token or GITHUB_TOKEN
-        self.api_url = api_url or GITHUB_API_URL
-        self.default_repo = default_repo or DEFAULT_REPO
-        self.default_branch = default_branch or DEFAULT_BRANCH
+        self.repo_owner = repo_owner or GITHUB_REPO_OWNER
+        self.repo_name = repo_name or GITHUB_REPO_NAME
+        self.default_branch = default_branch or GITHUB_DEFAULT_BRANCH
+        self.default_repo = f"{self.repo_owner}/{self.repo_name}" if self.repo_owner and self.repo_name else None
         
         if not self.github_token:
             logger.warning("GitHub token not provided. Some functionality will be limited.")
             self.client = None
         else:
-            self.client = Github(self.github_token, base_url=self.api_url)
+            self.client = Github(self.github_token)
     
     def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> bool:
         """
