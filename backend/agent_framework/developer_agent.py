@@ -38,16 +38,27 @@ class DeveloperAgent(Agent):
         Ticket ID: {ticket_id}
         
         Bug Summary: {summary}
-        
-        Affected Files:
-        {', '.join(likely_files) if likely_files else 'No specific files mentioned'}
-        
-        Affected Modules/Components:
-        {', '.join(likely_modules) if likely_modules else 'No specific modules mentioned'}
-        
-        Affected Functions/Classes:
-        {', '.join(likely_functions) if likely_functions else 'No specific functions mentioned'}
         """
+        
+        if likely_files and len(likely_files) > 0:
+            prompt += f"""
+            Affected Files:
+            {', '.join(likely_files)}
+            """
+        else:
+            prompt += "\nNo specific files mentioned.\n"
+            
+        if likely_modules and len(likely_modules) > 0:
+            prompt += f"""
+            Affected Modules/Components:
+            {', '.join(likely_modules)}
+            """
+        
+        if likely_functions and len(likely_functions) > 0:
+            prompt += f"""
+            Affected Functions/Classes:
+            {', '.join(likely_functions)}
+            """
         
         if errors and len(errors) > 0:
             prompt += f"""
@@ -64,13 +75,14 @@ class DeveloperAgent(Agent):
         prompt += """
         Instructions:
         1. Provide the minimal code fix needed to resolve this issue
-        2. Include full file paths for any files that need to be modified
+        2. Include FULL, ABSOLUTE file paths for any files that need to be modified, using the actual repository structure
         3. Show exactly what code needs to be changed (in a before/after format)
         4. For each file change, explain briefly why the change fixes the issue
+        5. DO NOT use placeholder paths like '/path/to/...' - use the actual file paths from the repository
         
         Format your response as follows for each affected file:
         
-        ---FILE: [full path to file]---
+        ---FILE: [full absolute path to file]---
         [Brief explanation of what's being fixed]
         
         ```diff
@@ -102,16 +114,24 @@ class DeveloperAgent(Agent):
             file_path = file_path.strip()
             
             # Replace placeholder paths with actual project paths
-            if '/path/to/' in file_path or '[full path to' in file_path:
+            if '/path/to/' in file_path or '[full path to' in file_path or '/app/' in file_path:
                 # Extract filename
                 filename = Path(file_path).name
+                self.log(f"Detected placeholder path: {file_path}, looking for actual file with name: {filename}")
+                
                 # Try to find the actual file in the repo
+                found = False
                 for root, _, files in os.walk(self.repo_path):
                     if filename in files:
-                        rel_path = os.path.relpath(os.path.join(root, filename), self.repo_path)
+                        abs_path = os.path.join(root, filename)
+                        rel_path = os.path.relpath(abs_path, self.repo_path)
                         self.log(f"Replaced placeholder path {file_path} with {rel_path}")
                         file_path = rel_path
+                        found = True
                         break
+                
+                if not found:
+                    self.log(f"Warning: Could not find actual file for placeholder {file_path}")
             
             # Extract explanation (everything before the first code block)
             explanation_pattern = r'(.*?)```'
@@ -141,6 +161,8 @@ class DeveloperAgent(Agent):
                     "explanation": "GPT response did not follow the expected format",
                     "diff": '\n'.join(code.strip() for code in code_blocks)
                 })
+            else:
+                self.log("No code blocks found in the GPT response")
         
         return file_changes
 
@@ -199,6 +221,7 @@ class DeveloperAgent(Agent):
                     # Check if the diff looks like a complete file
                     if not any(line.startswith('-') or line.startswith('+') for line in diff.splitlines()):
                         modified_content = diff
+                        self.log(f"Replacing entire file content for {file_path}")
                 
                 # Write updated content back to file
                 with open(full_path, 'w') as f:
@@ -264,10 +287,12 @@ class DeveloperAgent(Agent):
                 full_path = os.path.join(self.repo_path, file_path)
                 try:
                     with open(full_path, 'r') as f:
-                        code_context[file_path] = f.read()
+                        content = f.read()
+                        code_context[file_path] = content
                         self.log(f"Read code context for {file_path}")
                 except Exception as e:
                     self.log(f"Could not read file {file_path}: {str(e)}")
+                    code_context[file_path] = f"ERROR: Could not read file ({str(e)})"
         
         return code_context
 
@@ -317,12 +342,21 @@ class DeveloperAgent(Agent):
                     # If it's a dict, extract the file path
                     likely_files.append(item["file"])
         
+        # Log the detected files
+        self.log(f"Detected affected files: {', '.join(likely_files)}")
+        
         likely_modules = input_data.get("affected_modules", [])
         likely_functions = input_data.get("affected_functions", [])
         errors = input_data.get("errors_identified", []) or [input_data.get("error_type", "")]
         
         # Get the code context (actual file contents)
         code_context = self._read_code_context(input_data)
+        
+        # Log code context keys to help debug
+        if code_context:
+            self.log(f"Loaded code context for files: {', '.join(code_context.keys())}")
+        else:
+            self.log("Warning: No code context found")
         
         try:
             # Build prompt for GPT-4
@@ -335,6 +369,9 @@ class DeveloperAgent(Agent):
                 errors=errors,
                 code_context=code_context
             )
+            
+            # Log prompt details for debugging
+            self.log(f"Generated prompt with {len(prompt)} characters")
             
             # Get response from GPT-4
             gpt_response = self._send_gpt4_request(prompt)
@@ -349,6 +386,8 @@ class DeveloperAgent(Agent):
             file_changes = self._parse_gpt_response(gpt_response)
             if not file_changes:
                 self.log("Warning: No file changes extracted from GPT response")
+            else:
+                self.log(f"Extracted changes for files: {', '.join([fc['file_path'] for fc in file_changes])}")
             
             # Apply the patches to files
             patch_results = self._apply_patch(file_changes)
