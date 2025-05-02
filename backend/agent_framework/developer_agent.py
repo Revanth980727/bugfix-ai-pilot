@@ -240,7 +240,7 @@ class DeveloperAgent(Agent):
         code_context = {}
         
         # First check if code_context is directly provided in the input
-        if "code_context" in input_data:
+        if "code_context" in input_data and isinstance(input_data["code_context"], dict):
             return input_data["code_context"]
         
         # Otherwise, try to read affected files directly
