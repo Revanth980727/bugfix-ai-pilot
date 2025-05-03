@@ -122,15 +122,23 @@ class DeveloperAgent(Agent):
         }
         
         for change in file_changes:
-            file_path = change["file_path"]
-            diff = change["diff"]
+            file_path = change.get("file_path", "unknown")
+            diff = change.get("diff", "")
             
-            # Skip if the file path is unknown
+            # Skip if the file path is unknown or diff is empty
             if file_path == "unknown":
                 self.log(f"Skipping unknown file path")
                 results["files_failed"].append({
                     "file": "unknown",
                     "reason": "File path could not be determined"
+                })
+                continue
+                
+            if not diff:
+                self.log(f"Skipping empty diff for file {file_path}")
+                results["files_failed"].append({
+                    "file": file_path,
+                    "reason": "Empty diff content"
                 })
                 continue
             
@@ -424,19 +432,30 @@ class DeveloperAgent(Agent):
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run the developer agent to generate and apply code fixes"""
         try:
-            ticket_id = input_data.get("ticket_id", "unknown")
+            # Initialize with safe defaults
+            ticket_id = input_data.get("ticket_id", "unknown") if input_data else "unknown"
             self.log(f"Starting developer agent for ticket {ticket_id}")
             
-            # Read code context
+            # Handle None input_data
+            if input_data is None:
+                self.log("Error: input_data is None")
+                return {
+                    "ticket_id": ticket_id,
+                    "error": "No input data provided",
+                    "confidence_score": 0,
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+            # Read code context with null safety
             code_context = self._read_code_context(input_data)
             
-            # Extract bug details from input data
+            # Extract bug details from input data with safe defaults
             bug_title = input_data.get("title", "Unknown bug")
             bug_description = input_data.get("description", "No description provided")
             root_cause = input_data.get("root_cause", "Unknown")
             expected_files = []
             
-            # Try to extract affected files from multiple possible formats
+            # Try to extract affected files from multiple possible formats with null safety
             if "affected_files" in input_data:
                 affected_files = input_data["affected_files"]
                 if isinstance(affected_files, list):
@@ -461,16 +480,24 @@ class DeveloperAgent(Agent):
                 f.write(prompt)
             self.log(f"Saved prompt to {prompt_file}")
             
-            # Send prompt to GPT-4
+            # Send prompt to GPT-4 with null safety
             self.log(f"Sending prompt to GPT-4 for ticket {ticket_id}")
             response = self._send_gpt4_request(prompt)
             
-            # Save raw response for debugging
-            raw_response_file = os.path.join(self.output_dir, f"developer_raw_response_{ticket_id}.txt")
+            # Save raw response for debugging if not None
             if response:
+                raw_response_file = os.path.join(self.output_dir, f"developer_raw_response_{ticket_id}.txt")
                 with open(raw_response_file, 'w') as f:
                     f.write(response)
                 self.log(f"Saved raw response to {raw_response_file}")
+            else:
+                self.log("Warning: Empty response received from GPT-4")
+                return {
+                    "ticket_id": ticket_id,
+                    "error": "Empty response received from GPT-4",
+                    "confidence_score": 0,
+                    "timestamp": datetime.now().isoformat()
+                }
             
             # Check if response is too generic
             if self._filter_generic_response(response):
@@ -482,46 +509,46 @@ class DeveloperAgent(Agent):
                     "timestamp": datetime.now().isoformat()
                 }
             
-            # Parse response into file changes
+            # Parse response into file changes with null safety
             file_changes = self._parse_gpt_response(response)
-            self.log(f"Extracted {len(file_changes)} file changes from GPT response")
-            
-            # Apply patches to files
-            if file_changes:
-                patch_results = self._apply_patch(file_changes)
-                files_modified = patch_results.get("files_modified", [])
-                patches_applied = patch_results.get("patches_applied", 0)
-                
-                self.log(f"Applied {patches_applied} changes to {len(files_modified)} files")
-                
-                # Calculate confidence score
-                confidence_score = self.calculate_confidence_score(
-                    file_changes, expected_files, patch_results)
-                
-                # Prepare result
-                result = {
-                    "ticket_id": ticket_id,
-                    "files_modified": files_modified,
-                    "files_failed": patch_results.get("files_failed", []),
-                    "patches_applied": patches_applied,
-                    "diff_summary": f"Applied {patches_applied} changes to {len(files_modified)} files",
-                    "raw_gpt_response": response,
-                    "confidence_score": confidence_score,
-                    "patched_code": patch_results.get("patched_code", {}),
-                    "timestamp": datetime.now().isoformat()
-                }
-                
-                # Save output data
-                self._save_output(ticket_id, result)
-                return result
-            else:
-                self.log("No file changes found in GPT response")
+            if not file_changes:
+                self.log("No file changes extracted from GPT response")
                 return {
                     "ticket_id": ticket_id,
                     "error": "No file changes could be extracted from LLM response",
                     "confidence_score": 0,
                     "timestamp": datetime.now().isoformat()
                 }
+                
+            self.log(f"Extracted {len(file_changes)} file changes from GPT response")
+            
+            # Apply patches to files with null safety
+            patch_results = self._apply_patch(file_changes)
+            files_modified = patch_results.get("files_modified", [])
+            patches_applied = patch_results.get("patches_applied", 0)
+            
+            self.log(f"Applied {patches_applied} changes to {len(files_modified)} files")
+            
+            # Calculate confidence score with null safety
+            confidence_score = self.calculate_confidence_score(
+                file_changes, expected_files, patch_results)
+            
+            # Prepare result
+            result = {
+                "ticket_id": ticket_id,
+                "files_modified": files_modified,
+                "files_failed": patch_results.get("files_failed", []),
+                "patches_applied": patches_applied,
+                "diff_summary": f"Applied {patches_applied} changes to {len(files_modified)} files",
+                "raw_gpt_response": response,
+                "confidence_score": confidence_score,
+                "patched_code": patch_results.get("patched_code", {}),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Save output data
+            self._save_output(ticket_id, result)
+            return result
                 
         except Exception as e:
             error_message = f"Error during DeveloperAgent processing: {str(e)}"
@@ -530,7 +557,7 @@ class DeveloperAgent(Agent):
             self.log(traceback.format_exc())
             
             return {
-                "ticket_id": input_data.get("ticket_id", "unknown"),
+                "ticket_id": input_data.get("ticket_id", "unknown") if input_data else "unknown",
                 "error": error_message,
                 "confidence_score": 0,
                 "timestamp": datetime.now().isoformat()
@@ -609,11 +636,17 @@ class DeveloperAgent(Agent):
                 self.log("Error: Invalid or empty response from OpenAI API")
                 return None
                 
-            # Extract completion text
-            completion = response.choices[0].message.content
-            self.log(f"Received {len(completion) if completion else 0} characters from OpenAI API")
+            # Extract completion text with null safety
+            completion = response.choices[0].message.content if response.choices else None
+            
+            if completion:
+                self.log(f"Received {len(completion)} characters from OpenAI API")
+            else:
+                self.log("Warning: Empty completion from OpenAI API")
+                
             return completion
             
         except Exception as e:
             self.log(f"Error calling OpenAI API: {str(e)}")
             return None
+
