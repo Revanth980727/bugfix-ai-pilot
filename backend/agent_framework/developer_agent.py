@@ -155,16 +155,17 @@ class DeveloperAgent(Agent):
                         
                     self.log(f"Creating new file: {file_path}")
                     with open(full_path, 'w') as f:
-                        # For new files, use the entire diff content
-                        f.write(diff)
+                        # Remove diff markers before writing to a new file
+                        clean_content = self._clean_diff_markers(diff)
+                        f.write(clean_content)
                     
                     results["files_modified"].append(file_path)
                     results["patches_applied"] += 1
-                    results["patched_code"][file_path] = diff
+                    results["patched_code"][file_path] = clean_content
                     continue
                 
                 # For existing files, read the content
-                with open(full_path, 'r') as f:
+                with open(full_path, 'r', encoding='utf-8') as f:
                     original_content = f.read()
                 
                 # Parse the diff to identify changed lines
@@ -174,11 +175,11 @@ class DeveloperAgent(Agent):
                 if modified_content == original_content:
                     # Try to detect if entire file was meant to be replaced
                     if not any(line.startswith('+') or line.startswith('-') for line in diff.splitlines()):
-                        self.log(f"Replacing entire file content for {file_path}")
-                        modified_content = diff
+                        self.log(f"No diff markers found, cleaning content for {file_path}")
+                        modified_content = self._clean_diff_markers(diff)
                 
                 # Write the modified content back
-                with open(full_path, 'w') as f:
+                with open(full_path, 'w', encoding='utf-8') as f:
                     f.write(modified_content)
                 
                 # Store original and patched code
@@ -199,6 +200,27 @@ class DeveloperAgent(Agent):
         
         return results
 
+    def _clean_diff_markers(self, content: str) -> str:
+        """Remove diff markers and metadata from content when it's a complete file"""
+        # If this doesn't look like a diff with markers, return as is
+        if not any(line.startswith(('+', '-', '@@ ')) for line in content.splitlines()):
+            return content
+        
+        # If it looks like a unified diff, extract only added lines (without the + marker)
+        clean_lines = []
+        for line in content.splitlines():
+            # Skip diff metadata lines and removal lines
+            if line.startswith('@@') or line.startswith('-'):
+                continue
+            # Include added lines (without the + marker)
+            elif line.startswith('+'):
+                clean_lines.append(line[1:])
+            # Include context lines (without markers)
+            elif not line.startswith(('-', '+')):
+                clean_lines.append(line)
+        
+        return '\n'.join(clean_lines)
+
     def _apply_line_by_line_changes(self, original_content: str, diff: str) -> str:
         """
         Apply diff changes line by line to preserve most of the original file
@@ -215,87 +237,90 @@ class DeveloperAgent(Agent):
                               for line in diff.splitlines())
         
         if not has_diff_markers:
-            # Not a diff format, return original content
+            self.log("No diff markers found, returning original content")
+            # If debug mode is enabled, log details
+            if os.getenv("DEBUG_MODE", "False").lower() == "true":
+                self.log(f"Diff content: {diff[:500]}...")  # Log part of the diff for debugging
+            
             return original_content
             
         # Parse the diff to identify line changes
         original_lines = original_content.splitlines()
-        modified_lines = original_lines.copy()
-        
-        # Group lines into chunks for better processing
-        chunks = []
-        current_chunk = {"removed": [], "added": [], "context": []}
-        context_lines = []
+        result_lines = original_lines.copy()
         
         # Process diff lines to extract changes
         diff_lines = diff.splitlines()
-        for line in diff_lines:
-            if line.startswith('+'):
-                # Added line
-                current_chunk["added"].append(line[1:])
-            elif line.startswith('-'):
-                # Removed line
-                current_chunk["removed"].append(line[1:])
-            else:
-                # Context line - could be used for matching
-                if current_chunk["removed"] or current_chunk["added"]:
-                    # If we had changes in this chunk, store context and create a new chunk
-                    current_chunk["context"] = context_lines
-                    chunks.append(current_chunk)
-                    current_chunk = {"removed": [], "added": [], "context": []}
-                    context_lines = [line]
+        line_idx = 0  # Pointer to the current line in original content
+        
+        # Find chunks with hunk headers
+        hunk_pattern = r'@@ -(\d+),(\d+) \+(\d+),(\d+) @@'
+        current_hunk = None
+        skip_lines = 0
+        tracking_changes = False
+        
+        for diff_line in diff_lines:
+            # Check for hunk header
+            hunk_match = re.match(hunk_pattern, diff_line)
+            if hunk_match:
+                # Start of a new hunk
+                old_start = int(hunk_match.group(1))
+                old_count = int(hunk_match.group(2))
+                new_start = int(hunk_match.group(3))
+                new_count = int(hunk_match.group(4))
+                
+                # Reset position to the start of this hunk
+                line_idx = old_start - 1  # Adjust for 0-indexing
+                tracking_changes = True
+                continue
+            
+            # Skip if we haven't found a hunk yet
+            if not tracking_changes:
+                continue
+                
+            # Process line changes
+            if diff_line.startswith('-'):
+                # Line to remove
+                if line_idx < len(result_lines) and diff_line[1:].strip() == result_lines[line_idx].strip():
+                    # Remove the line by setting to None (will filter later)
+                    result_lines[line_idx] = None
+                    line_idx += 1
                 else:
-                    context_lines.append(line)
-        
-        # Add the last chunk if it has changes
-        if current_chunk["removed"] or current_chunk["added"]:
-            current_chunk["context"] = context_lines
-            chunks.append(current_chunk)
-        
-        # Apply chunks of changes to the file
-        offset = 0  # Track line offset as we add/remove lines
-        
-        for chunk in chunks:
-            # Find the position to apply changes
-            start_pos = -1
-            
-            # Try to find the position based on removed lines
-            if chunk["removed"]:
-                for i in range(len(modified_lines) - len(chunk["removed"]) + 1):
-                    if i + offset >= len(modified_lines):
-                        break
-                    
-                    # Check if this position matches the removed lines
-                    matches = True
-                    for j, removed_line in enumerate(chunk["removed"]):
-                        if i + j + offset >= len(modified_lines):
-                            matches = False
+                    # Try to find the line to remove
+                    line_to_remove = diff_line[1:]
+                    for i in range(line_idx, min(line_idx + 10, len(result_lines))):
+                        if result_lines[i] is not None and line_to_remove.strip() == result_lines[i].strip():
+                            result_lines[i] = None
+                            line_idx = i + 1
                             break
-                        
-                        # Strip whitespace for comparison
-                        if modified_lines[i + j + offset].strip() != removed_line.strip():
-                            matches = False
-                            break
-                    
-                    if matches:
-                        start_pos = i + offset
-                        break
             
-            # If position found, apply changes
-            if start_pos != -1:
-                # Remove old lines
-                for _ in range(len(chunk["removed"])):
-                    if start_pos < len(modified_lines):
-                        modified_lines.pop(start_pos)
+            elif diff_line.startswith('+'):
+                # Line to add
+                added_line = diff_line[1:]
                 
-                # Add new lines at the same position
-                for j, added_line in enumerate(chunk["added"]):
-                    modified_lines.insert(start_pos + j, added_line)
+                # Insert the new line at current position
+                result_lines.insert(line_idx, added_line)
+                line_idx += 1
                 
-                # Update offset
-                offset += len(chunk["added"]) - len(chunk["removed"])
+            else:
+                # Context line, just advance
+                if line_idx < len(result_lines):
+                    line_idx += 1
         
-        return '\n'.join(modified_lines)
+        # Filter out None values (removed lines)
+        result_lines = [line for line in result_lines if line is not None]
+        
+        # If the diff didn't change anything, log a warning
+        if result_lines == original_lines:
+            self.log("Warning: Diff application did not change the file content")
+            
+            # Try alternate approach - directly extract added lines
+            if os.getenv("PATCH_MODE", "intelligent").lower() == "direct":
+                self.log("Using direct patch mode - extracting added lines only")
+                added_lines = [line[1:] for line in diff_lines if line.startswith('+')]
+                if added_lines:
+                    return '\n'.join(added_lines)
+        
+        return '\n'.join(result_lines)
 
     def _save_output(self, ticket_id: str, output_data: Dict[str, Any]) -> None:
         """Save the agent's output to a JSON file"""
@@ -649,4 +674,3 @@ class DeveloperAgent(Agent):
         except Exception as e:
             self.log(f"Error calling OpenAI API: {str(e)}")
             return None
-
