@@ -258,56 +258,111 @@ class DeveloperAgent(Agent):
         skip_lines = 0
         tracking_changes = False
         
-        for diff_line in diff_lines:
-            # Check for hunk header
-            hunk_match = re.match(hunk_pattern, diff_line)
-            if hunk_match:
-                # Start of a new hunk
-                old_start = int(hunk_match.group(1))
-                old_count = int(hunk_match.group(2))
-                new_start = int(hunk_match.group(3))
-                new_count = int(hunk_match.group(4))
-                
-                # Reset position to the start of this hunk
-                line_idx = old_start - 1  # Adjust for 0-indexing
-                tracking_changes = True
-                continue
-            
-            # Skip if we haven't found a hunk yet
-            if not tracking_changes:
-                continue
-                
-            # Process line changes
-            if diff_line.startswith('-'):
-                # Line to remove
-                if line_idx < len(result_lines) and diff_line[1:].strip() == result_lines[line_idx].strip():
-                    # Remove the line by setting to None (will filter later)
-                    result_lines[line_idx] = None
-                    line_idx += 1
-                else:
-                    # Try to find the line to remove
-                    line_to_remove = diff_line[1:]
-                    for i in range(line_idx, min(line_idx + 10, len(result_lines))):
-                        if result_lines[i] is not None and line_to_remove.strip() == result_lines[i].strip():
-                            result_lines[i] = None
-                            line_idx = i + 1
-                            break
-            
-            elif diff_line.startswith('+'):
-                # Line to add
-                added_line = diff_line[1:]
-                
-                # Insert the new line at current position
-                result_lines.insert(line_idx, added_line)
-                line_idx += 1
-                
-            else:
-                # Context line, just advance
-                if line_idx < len(result_lines):
-                    line_idx += 1
+        # Check if diff has hunk headers (standard diff format)
+        has_hunk_headers = any(re.match(hunk_pattern, line) for line in diff_lines)
         
-        # Filter out None values (removed lines)
-        result_lines = [line for line in result_lines if line is not None]
+        if has_hunk_headers:
+            # Process standard diff format with hunk headers
+            for diff_line in diff_lines:
+                # Check for hunk header
+                hunk_match = re.match(hunk_pattern, diff_line)
+                if hunk_match:
+                    # Start of a new hunk
+                    old_start = int(hunk_match.group(1))
+                    old_count = int(hunk_match.group(2))
+                    new_start = int(hunk_match.group(3))
+                    new_count = int(hunk_match.group(4))
+                    
+                    # Reset position to the start of this hunk
+                    line_idx = old_start - 1  # Adjust for 0-indexing
+                    tracking_changes = True
+                    continue
+                
+                # Skip if we haven't found a hunk yet
+                if not tracking_changes:
+                    continue
+                    
+                # Process line changes
+                if diff_line.startswith('-'):
+                    # Line to remove
+                    if line_idx < len(result_lines) and diff_line[1:].strip() == result_lines[line_idx].strip():
+                        # Remove the line by setting to None (will filter later)
+                        result_lines[line_idx] = None
+                        line_idx += 1
+                    else:
+                        # Try to find the line to remove
+                        line_to_remove = diff_line[1:]
+                        for i in range(line_idx, min(line_idx + 10, len(result_lines))):
+                            if result_lines[i] is not None and line_to_remove.strip() == result_lines[i].strip():
+                                result_lines[i] = None
+                                line_idx = i + 1
+                                break
+                
+                elif diff_line.startswith('+'):
+                    # Line to add
+                    added_line = diff_line[1:]
+                    
+                    # Insert the new line at current position
+                    result_lines.insert(line_idx, added_line)
+                    line_idx += 1
+                    
+                else:
+                    # Context line, just advance
+                    if line_idx < len(result_lines):
+                        line_idx += 1
+            
+            # Filter out None values (removed lines)
+            result_lines = [line for line in result_lines if line is not None]
+            
+        else:
+            # Handle simpler diff format (just +/- lines without hunk headers)
+            # This is often what we get from LLMs when they don't follow strict diff format
+            
+            # First, create a mapping of original lines for finding replacements
+            line_mapping = {line.strip(): idx for idx, line in enumerate(original_lines) if line.strip()}
+            
+            # Track lines to remove and add
+            lines_to_remove = []
+            lines_to_add = {}  # maps line number to new content
+            
+            # Find removal lines first
+            for diff_line in diff_lines:
+                if diff_line.startswith('-'):
+                    line_content = diff_line[1:].strip()
+                    if line_content in line_mapping:
+                        lines_to_remove.append(line_mapping[line_content])
+                        
+            # Find addition lines and pair them with removals when possible
+            paired_additions = set()
+            for i, diff_line in enumerate(diff_lines):
+                if diff_line.startswith('+'):
+                    line_content = diff_line[1:].strip()
+                    # Try to pair with a previous removal
+                    if i > 0 and diff_lines[i-1].startswith('-') and i-1 not in paired_additions:
+                        removal_line = diff_lines[i-1][1:].strip()
+                        if removal_line in line_mapping:
+                            lines_to_add[line_mapping[removal_line]] = diff_line[1:]
+                            paired_additions.add(i-1)
+                        else:
+                            # Add at the beginning if we can't find the removal
+                            lines_to_add[0] = diff_line[1:]
+                    else:
+                        # Add at the beginning if no pairing
+                        lines_to_add[0] = diff_line[1:]
+            
+            # Apply changes (work from end to beginning to avoid index shifts)
+            sorted_removals = sorted(lines_to_remove, reverse=True)
+            for idx in sorted_removals:
+                if 0 <= idx < len(result_lines):
+                    del result_lines[idx]
+                    
+            # Apply additions (work from beginning to end)
+            sorted_additions = sorted(lines_to_add.items())
+            offset = 0  # Track offset as we add lines
+            for idx, content in sorted_additions:
+                insert_pos = min(idx + offset, len(result_lines))
+                result_lines.insert(insert_pos, content)
+                offset += 1
         
         # If the diff didn't change anything, log a warning
         if result_lines == original_lines:
@@ -319,6 +374,27 @@ class DeveloperAgent(Agent):
                 added_lines = [line[1:] for line in diff_lines if line.startswith('+')]
                 if added_lines:
                     return '\n'.join(added_lines)
+                    
+            # Special handling for the case where patched_code contains diff markers directly
+            # This is often what we see in the output from developer agents
+            if '+' in diff and '-' in diff and '\n' in diff:
+                self.log("Detected direct diff markers in patched_code, applying simple replacement")
+                # Simple replacement strategy: remove lines starting with -, keep normal lines, add lines without + marker
+                new_lines = []
+                for line in diff.splitlines():
+                    if line.startswith('-'):
+                        # Find this line in the original content and remove it
+                        line_content = line[1:].strip()
+                        for i, orig_line in enumerate(original_lines):
+                            if line_content in orig_line:
+                                # Mark for removal by setting to None
+                                original_lines[i] = None
+                    elif line.startswith('+'):
+                        # Add this line (without the + marker)
+                        new_lines.append(line[1:])
+                
+                # Combine remaining original lines with new lines
+                result_lines = [line for line in original_lines if line is not None] + new_lines
         
         return '\n'.join(result_lines)
 
