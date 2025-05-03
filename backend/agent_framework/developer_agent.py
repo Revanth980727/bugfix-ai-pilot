@@ -32,6 +32,7 @@ class DeveloperAgent(Agent):
     def _parse_gpt_response(self, response: str) -> List[Dict[str, Any]]:
         """Parse GPT-4 response into structured file changes with improved path handling"""
         if not response:
+            self.log("Warning: Empty response received from GPT")
             return []
             
         # Pattern to extract file info blocks
@@ -87,7 +88,27 @@ class DeveloperAgent(Agent):
             })
             
         if not file_changes:
-            # ... keep existing code (Fallback parsing logic)
+            self.log("No file changes detected in GPT response, trying fallback parsing")
+            # Fallback parsing for simpler responses without proper formatting
+            
+            # Look for file paths and code blocks
+            file_path_pattern = r'(?:in|to|file:|path:)\s*[`"]?([\w\/\.-]+\.[\w]+)[`"]?'
+            code_block_pattern = r'```[\w]*\n(.*?)\n```'
+            
+            file_paths = re.findall(file_path_pattern, response, re.IGNORECASE)
+            code_blocks = re.findall(code_block_pattern, response, re.DOTALL)
+            
+            # If we found at least one file path and code block, try to match them
+            if file_paths and code_blocks:
+                # Use the first file path and code block as a fallback
+                file_changes.append({
+                    "file_path": file_paths[0],
+                    "explanation": "Extracted from unstructured response",
+                    "diff": code_blocks[0]
+                })
+                self.log(f"Fallback parsing found file: {file_paths[0]}")
+            else:
+                self.log("Fallback parsing also failed to find file changes")
         
         return file_changes
 
@@ -190,7 +211,7 @@ class DeveloperAgent(Agent):
             return original_content
             
         # Parse the diff to identify line changes
-        original_lines = original_lines = original_content.splitlines()
+        original_lines = original_content.splitlines()
         modified_lines = original_lines.copy()
         
         # Group lines into chunks for better processing
@@ -270,13 +291,73 @@ class DeveloperAgent(Agent):
 
     def _save_output(self, ticket_id: str, output_data: Dict[str, Any]) -> None:
         """Save the agent's output to a JSON file"""
-        # ... keep existing code
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = os.path.join(self.output_dir, f"developer_output_{ticket_id}_{timestamp}.json")
+        
+        try:
+            with open(output_file, 'w') as f:
+                json.dump(output_data, f, indent=2)
+                
+            self.log(f"Saved developer output to {output_file}")
+        except Exception as e:
+            self.log(f"Error saving output to file: {str(e)}")
 
     def calculate_confidence_score(self, file_changes: List[Dict[str, Any]], 
                                   expected_files: List[str], 
                                   patch_results: Dict[str, Any] = None) -> int:
         """Calculate a confidence score (0-100) for the generated patch"""
-        # ... keep existing code
+        # Base score
+        score = 50
+        
+        # No changes found
+        if not file_changes:
+            return 0
+            
+        # Check if any expected files were modified
+        if expected_files:
+            modified_files = patch_results.get("files_modified", []) if patch_results else []
+            expected_file_matches = sum(1 for file in modified_files if any(expected in file for expected in expected_files))
+            
+            if expected_file_matches > 0:
+                score += 15
+                self.log(f"Found {expected_file_matches} expected files in patch (+15)")
+            else:
+                score -= 10
+                self.log("No expected files were found in patch (-10)")
+        
+        # Check diff quality
+        for change in file_changes:
+            diff = change.get("diff", "")
+            
+            # Minimal or empty diffs
+            if not diff or len(diff.strip().split("\n")) < 2:
+                score -= 15
+                self.log(f"Minimal or empty diff for {change.get('file_path', 'unknown')} (-15)")
+                continue
+                
+            # Realistic diff with proper changes
+            if any(line.startswith('+') or line.startswith('-') for line in diff.splitlines()):
+                score += 10
+                self.log(f"Found proper code changes in diff for {change.get('file_path', 'unknown')} (+10)")
+        
+        # Check for patch application success
+        if patch_results:
+            patches_applied = patch_results.get("patches_applied", 0)
+            files_failed = len(patch_results.get("files_failed", []))
+            
+            if patches_applied > 0:
+                score += 15
+                self.log(f"{patches_applied} patches applied successfully (+15)")
+            
+            if files_failed > 0:
+                score -= 10 * files_failed
+                self.log(f"{files_failed} patches failed to apply (-{10 * files_failed})")
+        
+        # Constrain score to 0-100 range
+        score = max(0, min(100, score))
+        self.log(f"Final confidence score: {score}")
+        
+        return score
 
     def _read_code_context(self, input_data: Dict[str, Any]) -> Dict[str, str]:
         """Extract code context from input data or read from files"""
@@ -318,9 +399,221 @@ class DeveloperAgent(Agent):
 
     def _filter_generic_response(self, response: str) -> bool:
         """Check if the response is too generic or just explanatory text"""
-        # ... keep existing code
+        if not response:
+            return True
+            
+        # Check for indicators of generic response
+        generic_phrases = [
+            "need more context", 
+            "need more information",
+            "cannot provide a specific solution",
+            "without more details",
+            "please provide more"
+        ]
+        
+        # If any generic phrases are found and no code blocks
+        has_generic_phrase = any(phrase in response.lower() for phrase in generic_phrases)
+        has_code_block = "```" in response
+        
+        if has_generic_phrase and not has_code_block:
+            self.log("Response appears to be generic explanation without code")
+            return True
+            
+        return False
 
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run the developer agent to generate and apply code fixes"""
-        # ... keep existing code
+        try:
+            ticket_id = input_data.get("ticket_id", "unknown")
+            self.log(f"Starting developer agent for ticket {ticket_id}")
+            
+            # Read code context
+            code_context = self._read_code_context(input_data)
+            
+            # Extract bug details from input data
+            bug_title = input_data.get("title", "Unknown bug")
+            bug_description = input_data.get("description", "No description provided")
+            root_cause = input_data.get("root_cause", "Unknown")
+            expected_files = []
+            
+            # Try to extract affected files from multiple possible formats
+            if "affected_files" in input_data:
+                affected_files = input_data["affected_files"]
+                if isinstance(affected_files, list):
+                    for item in affected_files:
+                        if isinstance(item, str):
+                            expected_files.append(item)
+                        elif isinstance(item, dict) and "file" in item:
+                            expected_files.append(item["file"])
+            
+            # Build prompt for GPT
+            prompt = self._build_prompt(
+                bug_title=bug_title,
+                bug_description=bug_description,
+                root_cause=root_cause,
+                code_context=code_context,
+                ticket_id=ticket_id
+            )
+            
+            # Log the prompt for debugging
+            prompt_file = os.path.join(self.output_dir, f"developer_prompt_{ticket_id}.txt")
+            with open(prompt_file, 'w') as f:
+                f.write(prompt)
+            self.log(f"Saved prompt to {prompt_file}")
+            
+            # Send prompt to GPT-4
+            self.log(f"Sending prompt to GPT-4 for ticket {ticket_id}")
+            response = self._send_gpt4_request(prompt)
+            
+            # Save raw response for debugging
+            raw_response_file = os.path.join(self.output_dir, f"developer_raw_response_{ticket_id}.txt")
+            if response:
+                with open(raw_response_file, 'w') as f:
+                    f.write(response)
+                self.log(f"Saved raw response to {raw_response_file}")
+            
+            # Check if response is too generic
+            if self._filter_generic_response(response):
+                self.log("Response filtered as too generic")
+                return {
+                    "ticket_id": ticket_id,
+                    "error": "Developer agent returned a generic response",
+                    "confidence_score": 0,
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+            # Parse response into file changes
+            file_changes = self._parse_gpt_response(response)
+            self.log(f"Extracted {len(file_changes)} file changes from GPT response")
+            
+            # Apply patches to files
+            if file_changes:
+                patch_results = self._apply_patch(file_changes)
+                files_modified = patch_results.get("files_modified", [])
+                patches_applied = patch_results.get("patches_applied", 0)
+                
+                self.log(f"Applied {patches_applied} changes to {len(files_modified)} files")
+                
+                # Calculate confidence score
+                confidence_score = self.calculate_confidence_score(
+                    file_changes, expected_files, patch_results)
+                
+                # Prepare result
+                result = {
+                    "ticket_id": ticket_id,
+                    "files_modified": files_modified,
+                    "files_failed": patch_results.get("files_failed", []),
+                    "patches_applied": patches_applied,
+                    "diff_summary": f"Applied {patches_applied} changes to {len(files_modified)} files",
+                    "raw_gpt_response": response,
+                    "confidence_score": confidence_score,
+                    "patched_code": patch_results.get("patched_code", {}),
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                # Save output data
+                self._save_output(ticket_id, result)
+                return result
+            else:
+                self.log("No file changes found in GPT response")
+                return {
+                    "ticket_id": ticket_id,
+                    "error": "No file changes could be extracted from LLM response",
+                    "confidence_score": 0,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+        except Exception as e:
+            error_message = f"Error during DeveloperAgent processing: {str(e)}"
+            self.log(f"Error: {error_message}")
+            import traceback
+            self.log(traceback.format_exc())
+            
+            return {
+                "ticket_id": input_data.get("ticket_id", "unknown"),
+                "error": error_message,
+                "confidence_score": 0,
+                "timestamp": datetime.now().isoformat()
+            }
 
+    def _build_prompt(self, bug_title: str, bug_description: str, root_cause: str, 
+                     code_context: Dict[str, str], ticket_id: str) -> str:
+        """Build a prompt for GPT-4"""
+        prompt = f"""
+        You are a senior software developer tasked with fixing a bug. Please provide a patch for the bug described below:
+
+        Ticket ID: {ticket_id}
+        
+        Bug Title: {bug_title}
+
+        Bug Description:
+        {bug_description}
+
+        Root Cause Analysis:
+        {root_cause}
+
+        Your task is to generate code changes that will fix this bug. Please provide your solution in the form of a patch/diff format.
+        
+        Here are the contents of the affected files:
+
+        """
+
+        # Add code context
+        for file_path, content in code_context.items():
+            prompt += f"\n---FILE: {file_path}---\n"
+            prompt += f"{content}\n"
+
+        # Add instructions for response format
+        prompt += """
+        For each file that needs changes, format your response like:
+
+        ---FILE: path/to/file---
+        Brief explanation of the changes made.
+
+        ```diff
+        - line to remove
+        + line to add
+        ```
+
+        Make sure to:
+        1. Include proper diff markers (- for removed lines, + for added lines)
+        2. Provide concise but clear explanations of changes
+        3. Only include the lines that are changing plus a few lines of context
+        4. Make the smallest possible changes needed to fix the bug
+
+        If you need more context or information to properly fix the issue, please specify what additional information would help.
+        """
+
+        return prompt
+
+    def _send_gpt4_request(self, prompt: str) -> Optional[str]:
+        """Send a request to GPT-4 API and return the response"""
+        if not self.api_key:
+            self.log("Error: No OpenAI API key provided")
+            return None
+            
+        try:
+            self.log("Sending request to OpenAI API")
+            response = self.client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+                messages=[
+                    {"role": "system", "content": "You are a senior software developer fixing bugs."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                max_tokens=4000
+            )
+            
+            # Check if we got a valid response
+            if not response or not hasattr(response, 'choices') or not response.choices:
+                self.log("Error: Invalid or empty response from OpenAI API")
+                return None
+                
+            # Extract completion text
+            completion = response.choices[0].message.content
+            self.log(f"Received {len(completion) if completion else 0} characters from OpenAI API")
+            return completion
+            
+        except Exception as e:
+            self.log(f"Error calling OpenAI API: {str(e)}")
+            return None

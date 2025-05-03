@@ -47,13 +47,26 @@ class DeveloperAgent:
                 "success": true
             }
         """
+        # Ensure we have a valid task_plan
+        if not task_plan:
+            self.logger.error("Invalid task plan: None or empty")
+            return {
+                "error": "Invalid task plan provided",
+                "patch_content": "",
+                "patched_files": [],
+                "commit_message": "",
+                "attempt": 1,
+                "ticket_id": "unknown",
+                "success": False
+            }
+            
         ticket_id = task_plan.get("ticket_id", "unknown")
         self.logger.start_task(f"Generating code fix for ticket {ticket_id}")
         
         # Extract context if available
-        context = task_plan.get("context", {})
+        context = task_plan.get("context", {}) or {}  # Ensure context is a dict, not None
         attempt = context.get("attempt", 1)
-        previous_attempts = context.get("previousAttempts", [])
+        previous_attempts = context.get("previousAttempts", []) or []  # Ensure previous_attempts is a list, not None
             
         self.logger.info(f"Starting fix attempt {attempt}/{self.max_retries}")
         
@@ -69,7 +82,7 @@ class DeveloperAgent:
             patch_file_path = f"logs/patch_{ticket_id}_attempt_{attempt}.patch"
             os.makedirs("logs", exist_ok=True)
             with open(patch_file_path, "w") as f:
-                f.write(patch_data["patch_content"])
+                f.write(patch_data.get("patch_content", "") or "")  # Handle None case
                 
             self.logger.info(f"Patch saved to {patch_file_path}")
             
@@ -111,7 +124,8 @@ class DeveloperAgent:
             previous_attempts = []
             
         # Read file contents for the files identified in the task plan
-        file_contents = self._read_identified_files(task_plan.get("files", []))
+        files_list = task_plan.get("files", []) or []  # Ensure files is a list, not None
+        file_contents = self._read_identified_files(files_list)
         
         # Create prompt for GPT-4
         prompt = self._create_developer_prompt(task_plan, file_contents, previous_attempts)
@@ -139,6 +153,9 @@ class DeveloperAgent:
         file_contents = {}
         
         for file_info in files:
+            if not isinstance(file_info, dict):
+                continue
+                
             file_path = file_info.get("path", "")
             if not file_path:
                 continue
@@ -199,6 +216,9 @@ class DeveloperAgent:
             prompt += "\nPrevious fix attempts:\n\n"
             
             for i, attempt in enumerate(previous_attempts):
+                if not isinstance(attempt, dict):
+                    continue
+                    
                 prompt += f"Attempt {i+1}:\n"
                 
                 # Add patch content if available
@@ -206,28 +226,31 @@ class DeveloperAgent:
                     prompt += f"Patch:\n{attempt['patch_content']}\n"
                 
                 # Add QA results and failure summary
-                if "qa_results" in attempt:
-                    passed = attempt["qa_results"].get("passed", False)
+                qa_results = attempt.get("qa_results", {}) or {}  # Ensure qa_results is a dict, not None
+                if qa_results:
+                    passed = qa_results.get("passed", False)
                     prompt += f"Test Result: {'PASSED' if passed else 'FAILED'}\n"
                     
                     if not passed:
                         # Add more detailed QA failure information
-                        if "failure_summary" in attempt["qa_results"]:
-                            prompt += f"Test Failure Summary:\n{attempt['qa_results']['failure_summary']}\n"
-                        elif "error_message" in attempt["qa_results"]:
-                            prompt += f"Error: {attempt['qa_results']['error_message']}\n"
+                        if "failure_summary" in qa_results:
+                            prompt += f"Test Failure Summary:\n{qa_results['failure_summary']}\n"
+                        elif "error_message" in qa_results:
+                            prompt += f"Error: {qa_results['error_message']}\n"
                 
                 prompt += "\n"
                 
             # Add specific guidance for retry attempts
             if len(previous_attempts) > 0:
                 last_attempt = previous_attempts[-1]
-                if "qa_results" in last_attempt and not last_attempt["qa_results"].get("passed", False):
-                    prompt += """
-                    Note: The previous fix attempt failed. Please analyze the test failure information above
-                    and adjust your new patch to address these specific issues. Focus on fixing the exact
-                    problems indicated by the test failures.
-                    """
+                if isinstance(last_attempt, dict):
+                    qa_results = last_attempt.get("qa_results", {}) or {}  # Ensure qa_results is a dict, not None
+                    if qa_results and not qa_results.get("passed", False):
+                        prompt += """
+                        Note: The previous fix attempt failed. Please analyze the test failure information above
+                        and adjust your new patch to address these specific issues. Focus on fixing the exact
+                        problems indicated by the test failures.
+                        """
                 
         # Instructions for generating the fix
         prompt += """
@@ -270,9 +293,17 @@ class DeveloperAgent:
         Returns:
             Dictionary with patch_content, patched_files, and commit_message
         """
+        if not response:
+            self.logger.error("Empty response received from OpenAI")
+            return {
+                "patch_content": "",
+                "patched_files": [],
+                "commit_message": "No changes made"
+            }
+            
         # Extract commit message (first line or paragraph)
         lines = response.strip().split('\n')
-        commit_message = lines[0].strip()
+        commit_message = lines[0].strip() if lines else "Fix implemented"
         
         # Find the patch content
         patch_start = response.find("```patch")
@@ -312,10 +343,12 @@ class DeveloperAgent:
                 
         # If no patched files could be identified, try to get them from the task plan
         if not patched_files:
-            for file_info in task_plan.get("files", []):
-                file_path = file_info.get("path", "")
-                if file_path:
-                    patched_files.append(file_path)
+            files_list = task_plan.get("files", []) or []  # Ensure files is a list, not None
+            for file_info in files_list:
+                if isinstance(file_info, dict):
+                    file_path = file_info.get("path", "")
+                    if file_path:
+                        patched_files.append(file_path)
                     
         # Build the result
         return {
@@ -336,10 +369,16 @@ class DeveloperAgent:
         """
         self.logger.info("Applying patch to local repository")
         
+        # Get patch content safely, handle None case
+        patch_content = patch_data.get("patch_content", "")
+        if not patch_content:
+            self.logger.error("No patch content to apply")
+            return False
+            
         # Write patch to temp file
         patch_file = f"temp_patch_{patch_data.get('ticket_id', 'unknown')}.patch"
         with open(patch_file, "w") as f:
-            f.write(patch_data["patch_content"])
+            f.write(patch_content)
             
         # Apply patch using git
         try:
