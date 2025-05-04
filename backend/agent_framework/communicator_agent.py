@@ -45,24 +45,24 @@ class CommunicatorAgent(Agent):
             try:
                 success = self.jira_client.update_ticket_status(ticket_id, status)
                 if not success:
-                    self.log(f"Attempt {attempt + 1} failed to update JIRA status for {ticket_id} to {status}", level=logging.WARNING)
+                    self.log(f"Attempt {attempt + 1} failed to update JIRA status for {ticket_id} to {status}")
                     await asyncio.sleep(5)  # Wait before retrying
                     continue
                 
                 success = self.jira_client.add_comment_to_ticket(ticket_id, comment)
                 if not success:
-                    self.log(f"Attempt {attempt + 1} failed to add comment to JIRA ticket {ticket_id}", level=logging.WARNING)
+                    self.log(f"Attempt {attempt + 1} failed to add comment to JIRA ticket {ticket_id}")
                     await asyncio.sleep(5)  # Wait before retrying
                     continue
                 
                 self.log(f"JIRA ticket {ticket_id} updated successfully (attempt {attempt + 1})")
                 return True
             except Exception as e:
-                self.log(f"Exception during JIRA update (attempt {attempt + 1}): {str(e)}", level=logging.ERROR)
+                self.log(f"Exception during JIRA update (attempt {attempt + 1}): {str(e)}")
                 if attempt < self.max_api_retries - 1:
                     await asyncio.sleep(5)  # Wait before retrying
                 else:
-                    self.log(f"Max retries reached for JIRA update", level=logging.ERROR)
+                    self.log(f"Max retries reached for JIRA update")
                     return False
         return False
         
@@ -86,13 +86,13 @@ class CommunicatorAgent(Agent):
                 
             # If no PR exists but we have patch data, create one
             if not patch_data:
-                self.log(f"No patch data provided for ticket {ticket_id}", level=logging.WARNING)
+                self.log(f"No patch data provided for ticket {ticket_id}")
                 return None
                 
             # Create or get existing branch
             success, branch_name = self.github_service.create_fix_branch(ticket_id)
             if not success:
-                self.log(f"Failed to create branch for ticket {ticket_id}", level=logging.ERROR)
+                self.log(f"Failed to create branch for ticket {ticket_id}")
                 return None
                 
             # Prepare file changes
@@ -117,7 +117,7 @@ class CommunicatorAgent(Agent):
                 )
                 
                 if not commit_success:
-                    self.log(f"Failed to commit changes to branch {branch_name}", level=logging.ERROR)
+                    self.log(f"Failed to commit changes to branch {branch_name}")
                     return None
                     
             # Create PR
@@ -136,11 +136,11 @@ class CommunicatorAgent(Agent):
                 self.log(f"Successfully created PR for ticket {ticket_id}: {pr_url}")
                 return pr_url
             else:
-                self.log(f"Failed to create PR for ticket {ticket_id}", level=logging.ERROR)
+                self.log(f"Failed to create PR for ticket {ticket_id}")
                 return None
                 
         except Exception as e:
-            self.log(f"Exception creating/finding PR: {str(e)}", level=logging.ERROR)
+            self.log(f"Exception creating/finding PR: {str(e)}")
             return None
         
     async def _get_valid_pr_url(self, ticket_id: str, github_pr_url: str = None, patch_data: Dict[str, Any] = None) -> Optional[str]:
@@ -161,7 +161,7 @@ class CommunicatorAgent(Agent):
             return github_pr_url
         else:
             if github_pr_url:
-                self.log(f"Invalid PR URL provided: {github_pr_url}", level=logging.WARNING)
+                self.log(f"Invalid PR URL provided: {github_pr_url}")
         
         # Try to find an existing PR or create a new one
         return await self._create_or_find_pr(ticket_id, patch_data)
@@ -169,7 +169,7 @@ class CommunicatorAgent(Agent):
     async def _post_github_comment(self, ticket_id: str, pr_url: str, comment: str) -> bool:
         """Post a comment on GitHub PR with retry logic"""
         if not pr_url:
-            self.log(f"No PR URL provided for ticket {ticket_id}", level=logging.WARNING)
+            self.log(f"No PR URL provided for ticket {ticket_id}")
             return False
             
         # Extract PR number from URL
@@ -186,7 +186,7 @@ class CommunicatorAgent(Agent):
                 pass
                 
         if not pr_number:
-            self.log(f"Could not extract PR number from URL: {pr_url}", level=logging.WARNING)
+            self.log(f"Could not extract PR number from URL: {pr_url}")
             return False
         
         for attempt in range(self.max_api_retries):
@@ -196,14 +196,14 @@ class CommunicatorAgent(Agent):
                     self.log(f"Comment added to GitHub PR {pr_number} successfully (attempt {attempt + 1})")
                     return True
                 else:
-                    self.log(f"Attempt {attempt + 1} failed to add comment to GitHub PR {pr_number}", level=logging.WARNING)
+                    self.log(f"Attempt {attempt + 1} failed to add comment to GitHub PR {pr_number}")
                     await asyncio.sleep(5)  # Wait before retrying
             except Exception as e:
-                self.log(f"Exception during GitHub comment (attempt {attempt + 1}): {str(e)}", level=logging.ERROR)
+                self.log(f"Exception during GitHub comment (attempt {attempt + 1}): {str(e)}")
                 if attempt < self.max_api_retries - 1:
                     await asyncio.sleep(5)  # Wait before retrying
                 else:
-                    self.log(f"Max retries reached for GitHub comment", level=logging.ERROR)
+                    self.log(f"Max retries reached for GitHub comment")
                     return False
         return False
 
@@ -223,13 +223,13 @@ class CommunicatorAgent(Agent):
             affected_files = gpt_output.get("affected_files", [])
             
             if not affected_files:
-                self.log("No affected files found in GPT output", level=logging.WARNING)
+                self.log("No affected files found in GPT output")
                 return None
             
             # Create a branch for the fix
             success, branch_name = self.github_service.create_fix_branch(ticket_id)
             if not success:
-                self.log(f"Failed to create fix branch for {ticket_id}", level=logging.ERROR)
+                self.log(f"Failed to create fix branch for {ticket_id}")
                 return None
             
             # Apply the changes to the files
@@ -239,13 +239,13 @@ class CommunicatorAgent(Agent):
                 diff = file_info.get("diff")
                 
                 if not file_path or not diff:
-                    self.log(f"Missing file path or diff for {file_info}", level=logging.WARNING)
+                    self.log(f"Missing file path or diff for {file_info}")
                     continue
                 
                 # Apply the diff to the file
                 success = self.github_service.apply_diff_to_file(branch_name, file_path, diff)
                 if not success:
-                    self.log(f"Failed to apply diff to {file_path}", level=logging.ERROR)
+                    self.log(f"Failed to apply diff to {file_path}")
                     return None
                 
                 file_changes.append({"filename": file_path, "content": diff})
@@ -254,7 +254,7 @@ class CommunicatorAgent(Agent):
             commit_message = f"Fix {ticket_id}: {bug_summary}"
             success = self.github_service.commit_bug_fix(branch_name, file_changes, ticket_id, commit_message)
             if not success:
-                self.log(f"Failed to commit changes to {branch_name}", level=logging.ERROR)
+                self.log(f"Failed to commit changes to {branch_name}")
                 return None
             
             # Create a pull request
@@ -263,13 +263,13 @@ class CommunicatorAgent(Agent):
             pr_url = self.github_service.create_fix_pr(branch_name, ticket_id, pr_title, pr_body)
             
             if not pr_url:
-                self.log(f"Failed to create pull request for {branch_name}", level=logging.ERROR)
+                self.log(f"Failed to create pull request for {branch_name}")
                 return None
             
             self.log(f"Successfully created pull request {pr_url} for {ticket_id}")
             return pr_url
         except Exception as e:
-            self.log(f"Exception applying GPT fixes: {str(e)}", level=logging.ERROR)
+            self.log(f"Exception applying GPT fixes: {str(e)}")
             return None
 
     async def format_agent_comment(self, agent_type: str, message: str, attempt: int = None, max_attempts: int = None) -> str:
@@ -565,7 +565,7 @@ class CommunicatorAgent(Agent):
                 if len(rejection_reasons) > 3:
                     rejection_reason += f"; and {len(rejection_reasons) - 3} more issues"
                 
-                self.log(f"Patches rejected: {rejection_reason}", level=logging.WARNING)
+                self.log(f"Patches rejected: {rejection_reason}")
                 
                 # Check if this should trigger early escalation
                 if confidence_score < 40 or "placeholder_detected" in str(rejection_reasons):
