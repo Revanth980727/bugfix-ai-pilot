@@ -36,6 +36,11 @@ class GitHubClient:
         self.base_url = "https://api.github.com"
         self.repo_api_url = f"{self.base_url}/repos/{self.repo_owner}/{self.repo_name}"
         
+        # Log configuration
+        self.logger.info(f"GitHub client initialized with repo {self.repo_owner}/{self.repo_name}")
+        self.logger.info(f"Default branch: {self.default_branch}")
+        self.logger.info(f"Use default branch only: {self.use_default_branch_only}")
+        
     # ... keep existing code (file content retrieval logic)
         
     def check_branch_exists(self, branch_name: str) -> bool:
@@ -145,6 +150,10 @@ class GitHubClient:
             self.logger.info(f"Using default branch {self.default_branch} as head branch instead of {head_branch}")
             head_branch = self.default_branch
             
+            # Skip PR creation when we're only using the default branch
+            self.logger.info("Skipping PR creation since we're only using the default branch")
+            return f"https://github.com/{self.repo_owner}/{self.repo_name}/tree/{self.default_branch}"
+            
         url = f"{self.repo_api_url}/pulls"
         
         payload = {
@@ -204,8 +213,10 @@ class GitHubClient:
             self.logger.info(f"Using default branch {self.default_branch} instead of {branch_name}")
             branch_name = self.default_branch
             
-        # Rest of commit logic...
+        # Log that we're committing to the branch
         self.logger.info(f"Committing patch to branch {branch_name}")
+        self.logger.info(f"Patch affects {len(patch_file_paths) if patch_file_paths else 0} files")
+        self.logger.info(f"Commit message: {commit_message}")
         
         # If no specific implementation, just log and return True for now
         self.logger.info(f"Applied patch to {len(patch_file_paths) if patch_file_paths else 0} files in branch {branch_name}")

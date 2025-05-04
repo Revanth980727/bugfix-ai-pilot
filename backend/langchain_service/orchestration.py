@@ -78,6 +78,10 @@ class LangChainOrchestrator:
         4. Only move to the next workflow step when the current one is complete
         5. When the full workflow is complete, provide a "Final Answer:" with a summary
         
+        IMPORTANT: Track the success/failure status from each agent consistently. When an agent reports a failure or escalation,
+        ensure this status is passed to subsequent agents. The DeveloperAgent's success status should be verified by QAAgent 
+        before proceeding with CommunicatorAgent.
+        
         {agent_scratchpad}
         """
         
@@ -141,12 +145,27 @@ class LangChainOrchestrator:
                 logger.error(f"Unknown agent: {agent_name}")
                 return {"error": f"Unknown agent: {agent_name}"}
             
+            # Log the input data to help debug status flag issues
+            logger.info(f"Running agent {agent_name} with input: {json.dumps(input_data)[:200]}...")
+            
+            # Check for success/failure flags from previous agents
+            if "success" in input_data and input_data["success"] is False:
+                logger.warning(f"Previous agent reported failure, but still running {agent_name}")
+            
             # Execute the tool with the input data
             result = agent_tool.func(json.dumps(input_data))
             
             # Parse the result back to a dictionary
-            return json.loads(result)
+            result_dict = json.loads(result)
+            
+            # Log the result status
+            if "success" in result_dict:
+                logger.info(f"Agent {agent_name} completed with success={result_dict['success']}")
+            else:
+                logger.warning(f"Agent {agent_name} did not report success/failure status")
+            
+            return result_dict
             
         except Exception as e:
             logger.error(f"Error running agent {agent_name}: {e}")
-            return {"error": str(e)}
+            return {"error": str(e), "success": False}

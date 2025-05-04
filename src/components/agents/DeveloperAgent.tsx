@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { AgentStatus } from '@/hooks/useDashboardState';
-import { AlertTriangle, CheckCircle, XCircle, BarChart, InfoIcon } from 'lucide-react';
+import { AlertTriangle, CheckCircle, XCircle, BarChart, InfoIcon, Code, FileDigit } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -27,6 +27,8 @@ interface DeveloperAgentProps {
   escalationReason?: string;
   confidenceScore?: number;
   earlyEscalation?: boolean;
+  responseQuality?: 'good' | 'generic' | 'invalid';
+  rawResponse?: string | null;
 }
 
 export function DeveloperAgent({ 
@@ -38,7 +40,9 @@ export function DeveloperAgent({
   escalated = false, 
   escalationReason, 
   confidenceScore, 
-  earlyEscalation = false 
+  earlyEscalation = false,
+  responseQuality,
+  rawResponse
 }: DeveloperAgentProps) {
   
   // Get color and tooltip for confidence score
@@ -61,6 +65,50 @@ export function DeveloperAgent({
     if (score >= 80) return "High confidence: The patch is likely to fix the issue with minimal side effects";
     if (score >= 60) return "Medium confidence: The patch addresses the issue but may need further refinement";
     return "Low confidence: The patch may not fully address the issue or could have side effects";
+  };
+
+  const getResponseQualityBadge = () => {
+    if (!responseQuality) return null;
+
+    let badgeVariant: "default" | "secondary" | "destructive" | "outline";
+    let badgeLabel: string;
+    let badgeTooltip: string;
+
+    switch (responseQuality) {
+      case 'good':
+        badgeVariant = "default";
+        badgeLabel = "Good Response";
+        badgeTooltip = "LLM generated a well-formed patch following the requested format";
+        break;
+      case 'generic':
+        badgeVariant = "secondary";
+        badgeLabel = "Generic Response";
+        badgeTooltip = "LLM generated a generic response without specific code changes";
+        break;
+      case 'invalid':
+        badgeVariant = "destructive";
+        badgeLabel = "Invalid Response";
+        badgeTooltip = "LLM generated an invalid patch that couldn't be processed";
+        break;
+      default:
+        return null;
+    }
+
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant={badgeVariant} className="flex items-center gap-1 cursor-help">
+              <FileDigit className="h-3 w-3" />
+              <span>{badgeLabel}</span>
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p>{badgeTooltip}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
   };
   
   return (
@@ -128,12 +176,25 @@ export function DeveloperAgent({
         </TooltipProvider>
       )}
       
+      {responseQuality && (
+        <div className="mb-4 flex gap-2 items-center">
+          <span className="text-sm text-muted-foreground">Response Quality:</span>
+          {getResponseQualityBadge()}
+        </div>
+      )}
+      
       {diffs && diffs.length > 0 && (
         <Tabs defaultValue="diff">
           <div className="flex justify-between items-center mb-2">
             <TabsList className="flex-1">
               <TabsTrigger value="diff" className="flex-1">Code Changes</TabsTrigger>
               <TabsTrigger value="summary" className="flex-1">Summary</TabsTrigger>
+              {rawResponse && (
+                <TabsTrigger value="raw" className="flex-1">
+                  <Code className="h-3 w-3 mr-1" />
+                  Raw Output
+                </TabsTrigger>
+              )}
             </TabsList>
             
             <TooltipProvider>
@@ -229,6 +290,13 @@ export function DeveloperAgent({
                   </div>
                 )}
                 
+                {responseQuality && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Response Quality:</span>
+                    {getResponseQualityBadge()}
+                  </div>
+                )}
+                
                 <Separator />
                 
                 <div className="text-sm">
@@ -244,6 +312,18 @@ export function DeveloperAgent({
               </div>
             </ScrollArea>
           </TabsContent>
+          
+          {rawResponse && (
+            <TabsContent value="raw">
+              <ScrollArea className="h-[300px]">
+                <div className="bg-muted rounded-md p-2 overflow-x-auto">
+                  <pre className="text-xs whitespace-pre-wrap">
+                    <code>{rawResponse}</code>
+                  </pre>
+                </div>
+              </ScrollArea>
+            </TabsContent>
+          )}
         </Tabs>
       )}
       
@@ -257,6 +337,12 @@ export function DeveloperAgent({
             <p className="flex items-center gap-1">
               <AlertTriangle className="h-4 w-4" />
               Maximum attempts reached. Issue has been escalated to human review.
+            </p>
+          )}
+          {responseQuality === 'generic' && (
+            <p className="flex items-center gap-1 mt-2">
+              <InfoIcon className="h-4 w-4" />
+              OpenAI generated a generic response that couldn't be processed.
             </p>
           )}
         </div>
@@ -276,6 +362,11 @@ export function DeveloperAgent({
           {confidenceScore !== undefined && confidenceScore < 60 && (
             <p className="pl-6 text-amber-600">
               Low confidence score: {confidenceScore}%
+            </p>
+          )}
+          {responseQuality === 'generic' && (
+            <p className="pl-6 text-amber-600">
+              OpenAI generated a generic response that couldn't be processed.
             </p>
           )}
         </div>

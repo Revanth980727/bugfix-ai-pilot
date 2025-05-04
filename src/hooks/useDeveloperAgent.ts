@@ -12,6 +12,8 @@ export function useDeveloperAgent() {
   const [escalationReason, setEscalationReason] = useState<string | undefined>(undefined);
   const [earlyEscalation, setEarlyEscalation] = useState(false);
   const [patchAnalytics, setPatchAnalytics] = useState<any>(null);
+  const [rawOpenAIResponse, setRawOpenAIResponse] = useState<string | null>(null);
+  const [responseQuality, setResponseQuality] = useState<'good' | 'generic' | 'invalid' | undefined>(undefined);
   const maxAttempts = 4;
 
   /**
@@ -22,7 +24,11 @@ export function useDeveloperAgent() {
     mockDiffs: CodeDiff[], 
     currentAttempt: number = 1,
     patchConfidence?: number,
-    analytics?: any
+    analytics?: any,
+    options?: {
+      responseQuality?: 'good' | 'generic' | 'invalid';
+      rawResponse?: string;
+    }
   ) => {
     setStatus('working');
     setAttempt(currentAttempt);
@@ -33,6 +39,14 @@ export function useDeveloperAgent() {
     
     if (analytics) {
       setPatchAnalytics(analytics);
+    }
+    
+    if (options?.responseQuality) {
+      setResponseQuality(options.responseQuality);
+    }
+    
+    if (options?.rawResponse) {
+      setRawOpenAIResponse(options.rawResponse);
     }
     
     const interval = setInterval(() => {
@@ -52,22 +66,38 @@ export function useDeveloperAgent() {
   /**
    * Simulate a failure in the developer agent
    */
-  const simulateFailure = (reason?: string) => {
+  const simulateFailure = (reason?: string, responseQuality?: 'good' | 'generic' | 'invalid') => {
     setStatus('error');
     if (reason) {
       setEscalationReason(reason);
+    }
+    if (responseQuality) {
+      setResponseQuality(responseQuality);
     }
   };
   
   /**
    * Simulate an early escalation due to low confidence or complexity
    */
-  const simulateEarlyEscalation = (reason: string, confidence?: number) => {
+  const simulateEarlyEscalation = (
+    reason: string, 
+    confidence?: number, 
+    options?: {
+      responseQuality?: 'good' | 'generic' | 'invalid';
+      rawResponse?: string;
+    }
+  ) => {
     setStatus('escalated');
     setEarlyEscalation(true);
     setEscalationReason(reason);
     if (confidence !== undefined) {
       setConfidenceScore(confidence);
+    }
+    if (options?.responseQuality) {
+      setResponseQuality(options.responseQuality);
+    }
+    if (options?.rawResponse) {
+      setRawOpenAIResponse(options.rawResponse);
     }
   };
 
@@ -83,6 +113,8 @@ export function useDeveloperAgent() {
     setEscalationReason(undefined);
     setEarlyEscalation(false);
     setPatchAnalytics(null);
+    setRawOpenAIResponse(null);
+    setResponseQuality(undefined);
   };
 
   return {
@@ -95,6 +127,8 @@ export function useDeveloperAgent() {
     escalationReason,
     earlyEscalation,
     patchAnalytics,
+    rawOpenAIResponse,
+    responseQuality,
     simulateWork,
     simulateFailure,
     simulateEarlyEscalation,

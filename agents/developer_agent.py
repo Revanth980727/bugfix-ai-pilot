@@ -134,44 +134,24 @@ class DeveloperAgent:
         self.logger.info(f"Sending prompt to GPT-4 for code generation (attempt {attempt})")
         response = self.openai_client.generate_completion(prompt)
         
+        # Log the actual response for debugging
+        self.logger.info(f"Received response from OpenAI API (length: {len(response) if response else 0})")
+        self.logger.debug(f"Full OpenAI response: {response[:500]}...")  # Log first 500 chars to avoid excessive logging
+        
+        # Save the full response to a file for analysis
+        os.makedirs("logs", exist_ok=True)
+        response_file_path = f"logs/openai_response_{task_plan.get('ticket_id', 'unknown')}_attempt_{attempt}.txt"
+        with open(response_file_path, "w") as f:
+            f.write(response or "Empty response")
+        self.logger.info(f"Saved full OpenAI response to {response_file_path}")
+        
         if not response:
             raise Exception(f"Failed to generate code fix. OpenAI API call failed on attempt {attempt}.")
         
         # Parse the response to extract the patch content
         return self._extract_patch(response, task_plan)
             
-    def _read_identified_files(self, files: List[Dict[str, Any]]) -> Dict[str, str]:
-        """
-        Read the contents of the files identified in the task plan
-        
-        Args:
-            files: List of file dictionaries from task plan
-            
-        Returns:
-            Dictionary mapping file paths to their contents
-        """
-        file_contents = {}
-        
-        for file_info in files:
-            if not isinstance(file_info, dict):
-                continue
-                
-            file_path = file_info.get("path", "")
-            if not file_path:
-                continue
-                
-            full_path = os.path.join(self.repo_path, file_path)
-            
-            try:
-                with open(full_path, "r") as f:
-                    content = f.read()
-                    file_contents[file_path] = content
-                    self.logger.info(f"Read file: {file_path}")
-            except Exception as e:
-                self.logger.warning(f"Could not read file {file_path}: {str(e)}")
-                file_contents[file_path] = f"ERROR: Could not read file ({str(e)})"
-                
-        return file_contents
+    # ... keep existing code (file content retrieval logic)
         
     def _create_developer_prompt(self, task_plan: Dict[str, Any], 
                               file_contents: Dict[str, str],
@@ -257,7 +237,9 @@ class DeveloperAgent:
         Please implement a fix for the bug based on the analysis and file contents above.
         
         Provide your solution in the form of a unified diff/patch format. Include the entire file content
-        for each modified file, not just the changes. Format your response like this:
+        for each modified file, not just the changes. Be specific and detailed in your solution.
+        
+        DO NOT provide a generic response. Your solution MUST be in this specific patch format:
         
         ```patch
         --- a/path/to/file1.py
@@ -324,6 +306,11 @@ class DeveloperAgent:
                     
             patch_content = "\n".join(patch_lines)
             
+            # If we still don't have a patch, log an error
+            if not patch_content:
+                self.logger.error("Could not extract patch from response. Response appears to be generic or invalid.")
+                self.logger.debug(f"Response excerpt: {response[:200]}...")
+                
         else:
             # Extract content between code blocks
             patch_start += 8  # Skip ```patch or ```diff
@@ -349,7 +336,12 @@ class DeveloperAgent:
                     file_path = file_info.get("path", "")
                     if file_path:
                         patched_files.append(file_path)
-                    
+        
+        # Log the extraction results            
+        self.logger.info(f"Extracted patch for {len(patched_files)} files: {', '.join(patched_files) if patched_files else 'No files identified'}")
+        if not patch_content or len(patch_content) < 10:
+            self.logger.warning("Patch content appears invalid or too short")
+        
         # Build the result
         return {
             "patch_content": patch_content,
@@ -357,49 +349,4 @@ class DeveloperAgent:
             "commit_message": commit_message
         }
         
-    def apply_patch(self, patch_data: Dict[str, Any]) -> bool:
-        """
-        Apply the patch to the local repository
-        
-        Args:
-            patch_data: Dictionary with patch information
-            
-        Returns:
-            Success status (True/False)
-        """
-        self.logger.info("Applying patch to local repository")
-        
-        # Get patch content safely, handle None case
-        patch_content = patch_data.get("patch_content", "")
-        if not patch_content:
-            self.logger.error("No patch content to apply")
-            return False
-            
-        # Write patch to temp file
-        patch_file = f"temp_patch_{patch_data.get('ticket_id', 'unknown')}.patch"
-        with open(patch_file, "w") as f:
-            f.write(patch_content)
-            
-        # Apply patch using git
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["git", "-C", self.repo_path, "apply", patch_file], 
-                capture_output=True, 
-                text=True
-            )
-            
-            if result.returncode != 0:
-                self.logger.error(f"Failed to apply patch: {result.stderr}")
-                return False
-                
-            self.logger.info("Patch applied successfully")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error applying patch: {str(e)}")
-            return False
-        finally:
-            # Clean up temp file
-            if os.path.exists(patch_file):
-                os.remove(patch_file)
+    # ... keep existing code (remaining methods)
