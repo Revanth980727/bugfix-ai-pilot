@@ -1,4 +1,3 @@
-
 import os
 from dotenv import load_dotenv
 
@@ -10,6 +9,7 @@ GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO_OWNER = os.getenv('GITHUB_REPO_OWNER')
 GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME')
 GITHUB_DEFAULT_BRANCH = os.getenv('GITHUB_DEFAULT_BRANCH', 'main')
+GITHUB_USE_DEFAULT_BRANCH_ONLY = os.getenv('GITHUB_USE_DEFAULT_BRANCH_ONLY', 'False').lower() == 'true'
 
 # JIRA configuration - standardize naming
 JIRA_API_TOKEN = os.getenv('JIRA_API_TOKEN') or os.getenv('JIRA_TOKEN')
@@ -71,7 +71,8 @@ def verify_github_repo_settings():
     
     # Check if we're using repo_owner/repo_name pattern
     if GITHUB_REPO_OWNER and GITHUB_REPO_NAME:
-        return True, f"GitHub repository configured as {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+        use_default_only = "only using default branch" if GITHUB_USE_DEFAULT_BRANCH_ONLY else "allowing branch creation"
+        return True, f"GitHub repository configured as {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME} ({use_default_only})"
     
     return False, "GITHUB_REPO_OWNER and GITHUB_REPO_NAME are required for GitHub operations"
 

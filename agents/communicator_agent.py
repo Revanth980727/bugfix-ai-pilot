@@ -1,4 +1,3 @@
-
 import os
 import json
 from typing import Dict, Any, Optional, List
@@ -20,6 +19,10 @@ class CommunicatorAgent:
         try:
             self.jira_client = JiraClient()
             self.github_client = GitHubClient()
+            
+            # Check if we're configured to use only the default branch
+            self.use_default_branch_only = os.environ.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", "False").lower() == "true"
+            self.default_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
         except Exception as e:
             self.logger.error(f"Error initializing API clients: {str(e)}")
             raise
@@ -240,15 +243,17 @@ class CommunicatorAgent:
             "ticket_status": "unknown"
         }
         
-        # 1. Create a branch for the fix
-        branch_name = f"bugfix/{ticket_id.lower()}"
-        self.logger.info(f"Creating branch {branch_name}")
+        # Determine which branch to use
+        branch_name = self.default_branch if self.use_default_branch_only else f"bugfix/{ticket_id.lower()}"
+        self.logger.info(f"Using branch {branch_name} for fix")
         
-        branch_created = self.github_client.create_branch(branch_name)
-        if not branch_created:
-            self.logger.error(f"Failed to create branch {branch_name}")
-            return result
-            
+        # Only create a branch if we're not using the default branch only mode
+        if not self.use_default_branch_only:
+            branch_created = self.github_client.create_branch(branch_name)
+            if not branch_created:
+                self.logger.error(f"Failed to create branch {branch_name}")
+                return result
+        
         # 2. Commit the changes
         commit_message = patch_data.get("commit_message", f"Fix bug {ticket_id}")
         if not commit_message.startswith(f"Fix {ticket_id}"):
@@ -277,70 +282,77 @@ class CommunicatorAgent:
             result["comments_added"].append(comment)
             
             return result
-            
-        # 3. Create a PR
+        
+        # 3. Create a PR - only if not using default branch only mode
         self.logger.info("Creating pull request")
         
-        pr_title = f"Fix {ticket_id}"
-        
-        # Create a detailed PR description
-        fix_approach = task_plan.get("approach", "")
-        root_cause = task_plan.get("root_cause", "")
-        
-        pr_body = (
-            f"## Fix for {ticket_id}\n\n"
-            f"### Root Cause\n{root_cause}\n\n"
-            f"### Fix Approach\n{fix_approach}\n\n"
-            f"### Changes Made\n"
-        )
-        
-        for file_path in patched_files:
-            pr_body += f"- Modified `{file_path}`\n"
+        pr_url = None
+        if not self.use_default_branch_only:
+            pr_title = f"Fix {ticket_id}"
             
-        pr_body += f"\n### Test Results\n"
-        pr_body += f"✅ All tests passed in {test_results.get('execution_time', 0):.2f} seconds\n"
-        
-        if "test_coverage" in test_results:
-            pr_body += f"📊 Test coverage: {test_results['test_coverage']}%\n"
+            # Create a detailed PR description
+            fix_approach = task_plan.get("approach", "")
+            root_cause = task_plan.get("root_cause", "")
             
-        pr_body += f"\n*This PR was created automatically by BugFix AI*"
-        
-        # Create the PR
-        pr_url = self.github_client.create_pull_request(
-            title=pr_title,
-            body=pr_body,
-            head_branch=branch_name,
-            base_branch=None  # Use default
-        )
-        
-        if not pr_url:
-            self.logger.error("Failed to create pull request")
-            
-            # Update JIRA with error
-            comment = (
-                f"✅ A fix was generated and committed to branch `{branch_name}`, "
-                f"but there was an issue creating the pull request."
+            pr_body = (
+                f"## Fix for {ticket_id}\n\n"
+                f"### Root Cause\n{root_cause}\n\n"
+                f"### Fix Approach\n{fix_approach}\n\n"
+                f"### Changes Made\n"
             )
-            self.jira_client.add_comment(ticket_id, comment)
-            result["comments_added"].append(comment)
             
-            return result
+            for file_path in patched_files:
+                pr_body += f"- Modified `{file_path}`\n"
+                
+            pr_body += f"\n### Test Results\n"
+            pr_body += f"✅ All tests passed in {test_results.get('execution_time', 0):.2f} seconds\n"
             
+            if "test_coverage" in test_results:
+                pr_body += f"📊 Test coverage: {test_results['test_coverage']}%\n"
+                
+            pr_body += f"\n*This PR was created automatically by BugFix AI*"
+            
+            # Create the PR
+            pr_url = self.github_client.create_pull_request(
+                title=pr_title,
+                body=pr_body,
+                head_branch=branch_name,
+                base_branch=None  # Use default
+            )
+            
+            if not pr_url:
+                self.logger.error("Failed to create pull request")
+                
+                # Update JIRA with error
+                comment = (
+                    f"✅ A fix was generated and committed to branch `{branch_name}`, "
+                    f"but there was an issue creating the pull request."
+                )
+                self.jira_client.add_comment(ticket_id, comment)
+                result["comments_added"].append(comment)
+                
+                return result
+        
         # 4. Update JIRA with success
         self.logger.info(f"Updating JIRA ticket {ticket_id}")
         
         comment = (
-            f"✅ Fixed in PR: {pr_url}\n\n"
-            f"A fix has been implemented and all tests are passing.\n"
-            f"Please review the pull request and merge if appropriate.\n\n"
-            f"Fix generated on attempt {attempt}."
+            f"✅ Fix implemented successfully!\n\n"
+            f"All tests are passing.\n"
         )
+        
+        if pr_url:
+            comment += f"Pull Request: {pr_url}\n\n"
+        else:
+            comment += f"Changes were committed directly to the {self.default_branch} branch.\n\n"
+            
+        comment += f"Fix generated on attempt {attempt}."
         
         self.jira_client.add_comment(ticket_id, comment)
         self.jira_client.update_ticket(ticket_id, "In Review", comment)
         
         result["jira_updated"] = True
-        result["pr_created"] = True
+        result["pr_created"] = pr_url is not None
         result["pr_url"] = pr_url
         result["comments_added"].append(comment)
         result["ticket_status"] = "In Review"

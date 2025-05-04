@@ -38,6 +38,9 @@ class CommunicatorAgent(Agent):
             "rejected_patches": 0,
             "rejection_reasons": {}
         }
+        # Check if we're configured to use only the default branch
+        self.use_default_branch_only = os.environ.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", "False").lower() == "true"
+        self.default_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
         
     async def _update_jira_ticket(self, ticket_id: str, status: str, comment: str) -> bool:
         """Update JIRA ticket with status and comment with retry logic"""
@@ -89,8 +92,15 @@ class CommunicatorAgent(Agent):
                 self.log(f"No patch data provided for ticket {ticket_id}")
                 return None
                 
-            # Create or get existing branch
-            success, branch_name = self.github_service.create_fix_branch(ticket_id)
+            # Determine which branch to use based on configuration
+            if self.use_default_branch_only:
+                self.log(f"Using default branch {self.default_branch} instead of creating a fix branch")
+                branch_name = self.default_branch
+                success = True
+            else:
+                # Create or get existing branch
+                success, branch_name = self.github_service.create_fix_branch(ticket_id)
+            
             if not success:
                 self.log(f"Failed to create branch for ticket {ticket_id}")
                 return None
@@ -119,25 +129,30 @@ class CommunicatorAgent(Agent):
                 if not commit_success:
                     self.log(f"Failed to commit changes to branch {branch_name}")
                     return None
-                    
-            # Create PR
-            pr_body = f"This PR fixes {ticket_id}"
-            if "approach" in patch_data:
-                pr_body += f"\n\nApproach: {patch_data['approach']}"
-                
-            pr_url = self.github_service.create_fix_pr(
-                branch_name,
-                ticket_id,
-                f"Fix {ticket_id}: {patch_data.get('bug_summary', 'Bug fix')}",
-                pr_body
-            )
             
-            if pr_url:
-                self.log(f"Successfully created PR for ticket {ticket_id}: {pr_url}")
-                return pr_url
+            # Create PR only if we're not using default branch only mode
+            if not self.use_default_branch_only:
+                # Create PR
+                pr_body = f"This PR fixes {ticket_id}"
+                if "approach" in patch_data:
+                    pr_body += f"\n\nApproach: {patch_data['approach']}"
+                    
+                pr_url = self.github_service.create_fix_pr(
+                    branch_name,
+                    ticket_id,
+                    f"Fix {ticket_id}: {patch_data.get('bug_summary', 'Bug fix')}",
+                    pr_body
+                )
+                
+                if pr_url:
+                    self.log(f"Successfully created PR for ticket {ticket_id}: {pr_url}")
+                    return pr_url
+                else:
+                    self.log(f"Failed to create PR for ticket {ticket_id}")
+                    return None
             else:
-                self.log(f"Failed to create PR for ticket {ticket_id}")
-                return None
+                self.log(f"Skipping PR creation since changes were committed directly to {self.default_branch}")
+                return f"https://github.com/{os.environ.get('GITHUB_REPO_OWNER')}/{os.environ.get('GITHUB_REPO_NAME')}/tree/{self.default_branch}"
                 
         except Exception as e:
             self.log(f"Exception creating/finding PR: {str(e)}")

@@ -1,4 +1,3 @@
-
 import os
 import sys
 import logging
@@ -19,6 +18,7 @@ class EnvironmentValidator:
         self.variables["GITHUB_REPO_OWNER"] = os.getenv("GITHUB_REPO_OWNER")
         self.variables["GITHUB_REPO_NAME"] = os.getenv("GITHUB_REPO_NAME")
         self.variables["GITHUB_DEFAULT_BRANCH"] = os.getenv("GITHUB_DEFAULT_BRANCH", "main")
+        self.variables["GITHUB_USE_DEFAULT_BRANCH_ONLY"] = os.getenv("GITHUB_USE_DEFAULT_BRANCH_ONLY", "False").lower() == "true"
         
         # JIRA configuration
         self.variables["JIRA_API_TOKEN"] = os.getenv("JIRA_API_TOKEN") or os.getenv("JIRA_TOKEN")
@@ -89,7 +89,8 @@ class EnvironmentValidator:
             "token": self.variables.get("GITHUB_TOKEN"),
             "owner": self.variables.get("GITHUB_REPO_OWNER"),
             "repo": self.variables.get("GITHUB_REPO_NAME"),
-            "default_branch": self.variables.get("GITHUB_DEFAULT_BRANCH")
+            "default_branch": self.variables.get("GITHUB_DEFAULT_BRANCH"),
+            "use_default_branch_only": self.variables.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", False)
         }
     
     def get_jira_config(self) -> Dict[str, Any]:
