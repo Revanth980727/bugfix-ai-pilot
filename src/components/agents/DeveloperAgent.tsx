@@ -6,6 +6,8 @@ import { Badge } from '../ui/badge';
 import { Separator } from '../ui/separator';
 import { useDeveloperAgent } from '../../hooks/useDeveloperAgent';
 import GitHubSourceInfo from './GitHubSourceInfo';
+import { AlertCircle } from 'lucide-react';
+import { Alert, AlertDescription } from '../ui/alert';
 
 interface DeveloperAgentProps {
   onStart?: () => void;
@@ -24,6 +26,8 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
     earlyEscalation,
     patchMode,
     gitHubSource,
+    fileContext,
+    fileRetrievalErrors,
     simulateWork
   } = useDeveloperAgent();
 
@@ -90,6 +94,10 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
     }
   };
 
+  // Check if we have file context data
+  const fileCount = Object.keys(fileContext).length;
+  const errorCount = Object.keys(fileRetrievalErrors).length;
+
   return (
     <Card className="w-full">
       <CardHeader className="pb-2">
@@ -103,7 +111,25 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
       </CardHeader>
       <CardContent>
         {/* GitHub Source Information */}
-        {gitHubSource && <GitHubSourceInfo source={gitHubSource} />}
+        <GitHubSourceInfo source={gitHubSource} fileErrors={fileRetrievalErrors} />
+
+        {/* File Access Diagnostics */}
+        {(errorCount > 0 || fileCount === 0) && (
+          <Alert className="mb-4 bg-amber-50 border-amber-300">
+            <AlertCircle className="h-4 w-4 text-amber-600" />
+            <AlertDescription className="text-xs text-amber-800">
+              {fileCount === 0 ? (
+                <div className="font-medium">No files could be retrieved from the repository.</div>
+              ) : (
+                <div className="font-medium">{fileCount} files retrieved, {errorCount} file access errors.</div>
+              )}
+              <div className="mt-1">
+                This may result in generic responses from the LLM as it lacks context about your code.
+                Please check your GitHub configuration and repository access.
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Agent Status */}
         <div className="space-y-4">
@@ -155,6 +181,28 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
               <p className="text-sm">{escalationReason || "Unknown error"}</p>
             </div>
           )}
+          
+          {/* Debug Information */}
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer font-medium">Debug Information</summary>
+              <div className="mt-2 space-y-2 bg-muted p-2 rounded-md">
+                <div>
+                  <strong>File Access:</strong> {fileCount} files retrieved, {errorCount} errors
+                </div>
+                <div>
+                  <strong>Files:</strong> {Object.keys(fileContext).join(', ') || 'None'}
+                </div>
+                <div>
+                  <strong>Errors:</strong> {Object.keys(fileRetrievalErrors).length > 0 
+                    ? Object.entries(fileRetrievalErrors).map(([file, error]) => 
+                        <div key={file} className="ml-2 text-red-500">{file}: {error}</div>
+                      )
+                    : 'None'}
+                </div>
+              </div>
+            </details>
+          </div>
         </div>
       </CardContent>
     </Card>

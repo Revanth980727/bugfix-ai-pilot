@@ -18,6 +18,7 @@ export function useDeveloperAgent() {
   const [patchMode, setPatchMode] = useState<'intelligent' | 'line-by-line' | 'direct'>('line-by-line');
   const [gitHubSource, setGitHubSource] = useState<GitHubSource | null>(null);
   const [fileContext, setFileContext] = useState<Record<string, string>>({});
+  const [fileRetrievalErrors, setFileRetrievalErrors] = useState<Record<string, string>>({});
   const maxAttempts = 4;
 
   // Get GitHub configuration on component mount
@@ -45,12 +46,39 @@ export function useDeveloperAgent() {
           // Attempt to fetch some example files to verify access
           if (isValid) {
             await testRepositoryAccess(source);
+          } else {
+            // Try from environment as fallback
+            console.log("Config invalid, trying environment variables as fallback...");
+            const envSource = extractGitHubSourceFromEnv();
+            const envValid = isValidGitHubSource(envSource);
+            
+            if (envValid) {
+              setGitHubSource(envSource);
+              setPatchMode(envSource.patch_mode as 'intelligent' | 'line-by-line' | 'direct' || 'line-by-line');
+              await testRepositoryAccess(envSource);
+            } else {
+              console.error("Neither config nor env provides valid GitHub source information");
+            }
           }
         } else {
           console.warn("No GitHub config returned, will try environment variables as fallback");
+          const envSource = extractGitHubSourceFromEnv();
+          const isValid = isValidGitHubSource(envSource);
+          
+          if (isValid) {
+            setGitHubSource(envSource);
+            setPatchMode(envSource.patch_mode as 'intelligent' | 'line-by-line' | 'direct' || 'line-by-line');
+            await testRepositoryAccess(envSource);
+          } else {
+            console.error("Environment variables do not provide valid GitHub source information");
+          }
         }
       } catch (error) {
         console.error('Error fetching GitHub config:', error);
+        setFileRetrievalErrors(prev => ({
+          ...prev,
+          'config': `Failed to fetch GitHub configuration: ${error}`
+        }));
       }
     };
     
@@ -71,28 +99,43 @@ export function useDeveloperAgent() {
         'src/index.js',
         'src/index.ts',
         'src/App.js',
-        'src/App.tsx'
+        'src/App.tsx',
+        'GraphRAG.py' // Specific file from logs
       ];
       
       let accessSuccessful = false;
+      const errors: Record<string, string> = {};
       
       for (const file of commonFiles) {
-        const exists = await checkFileExists(file);
-        if (exists) {
-          console.log(`Found file in repository: ${file}`);
-          const content = await getFileContent(file);
-          if (content) {
-            console.log(`Successfully retrieved content for ${file} (${content.length} bytes)`);
-            // Store this file content in our context
-            setFileContext(prev => ({
-              ...prev,
-              [file]: content
-            }));
-            accessSuccessful = true;
-            break;
+        try {
+          console.log(`Testing access to file: ${file}`);
+          const exists = await checkFileExists(file);
+          if (exists) {
+            console.log(`Found file in repository: ${file}`);
+            const content = await getFileContent(file);
+            if (content) {
+              console.log(`Successfully retrieved content for ${file} (${content.length} bytes)`);
+              // Store this file content in our context
+              setFileContext(prev => ({
+                ...prev,
+                [file]: content
+              }));
+              accessSuccessful = true;
+            } else {
+              errors[file] = `File exists but content is empty or null`;
+              console.warn(`File ${file} exists but content could not be retrieved`);
+            }
+          } else {
+            errors[file] = 'File does not exist in repository';
+            console.log(`File ${file} does not exist in repository`);
           }
+        } catch (err) {
+          errors[file] = `Error accessing file: ${err}`;
+          console.error(`Error accessing file ${file}:`, err);
         }
       }
+      
+      setFileRetrievalErrors(errors);
       
       if (!accessSuccessful) {
         console.warn("Could not access any common files in the repository");
@@ -102,6 +145,10 @@ export function useDeveloperAgent() {
       
     } catch (error) {
       console.error("Repository access test failed:", error);
+      setFileRetrievalErrors(prev => ({
+        ...prev, 
+        'access_test': `Repository access test failed: ${error}`
+      }));
     }
   };
 
@@ -256,6 +303,7 @@ export function useDeveloperAgent() {
     patchMode,
     gitHubSource,
     fileContext,
+    fileRetrievalErrors,
     simulateWork,
     simulateFailure: (reason?: string, responseQuality?: 'good' | 'generic' | 'invalid') => {
       setStatus('error');

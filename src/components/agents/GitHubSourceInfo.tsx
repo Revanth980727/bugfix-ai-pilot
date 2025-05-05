@@ -1,16 +1,28 @@
 
 import React from 'react';
 import { GitHubSource } from '@/utils/developerSourceLogger';
-import { Github } from 'lucide-react';
+import { Github, AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 
 interface GitHubSourceInfoProps {
   source: GitHubSource | null;
+  fileErrors?: Record<string, string>;
 }
 
-const GitHubSourceInfo: React.FC<GitHubSourceInfoProps> = ({ source }) => {
+const GitHubSourceInfo: React.FC<GitHubSourceInfoProps> = ({ source, fileErrors = {} }) => {
   if (!source || (!source.repo_owner && !source.repo_name)) {
-    return null;
+    return (
+      <Alert className="mb-4 bg-red-50 border-red-300">
+        <div className="flex items-center gap-2">
+          <AlertCircle size={16} className="text-red-500" />
+          <AlertTitle className="text-red-700">Missing GitHub Source</AlertTitle>
+        </div>
+        <AlertDescription className="mt-2 text-xs text-red-700">
+          No GitHub repository information available. This will prevent file access.
+        </AlertDescription>
+      </Alert>
+    );
   }
 
   const repoUrl = source.repo_owner && source.repo_name 
@@ -25,9 +37,12 @@ const GitHubSourceInfo: React.FC<GitHubSourceInfoProps> = ({ source }) => {
   const displayBranch = source.branch || source.default_branch || 'main';
   // Ensure we have a patch_mode to display, using fallback
   const displayPatchMode = source.patch_mode || 'line-by-line';
+  
+  // Check for file errors
+  const hasFileErrors = Object.keys(fileErrors).length > 0;
 
   return (
-    <Alert className="mb-4 bg-muted/50">
+    <Alert className={`mb-4 ${hasFileErrors ? 'bg-amber-50 border-amber-300' : 'bg-muted/50'}`}>
       <div className="flex items-center gap-2">
         <Github size={16} />
         <AlertTitle>GitHub Source</AlertTitle>
@@ -68,6 +83,19 @@ const GitHubSourceInfo: React.FC<GitHubSourceInfoProps> = ({ source }) => {
             <span className="font-medium">Patch Mode:</span>
             <span>{displayPatchMode}</span>
           </div>
+          
+          {hasFileErrors && (
+            <div className="mt-2 pt-2 border-t border-amber-200">
+              <div className="font-medium text-amber-700 mb-1">File Access Issues:</div>
+              <Badge variant="outline" className="bg-amber-100 text-amber-800 mb-1">
+                {Object.keys(fileErrors).length} files with errors
+              </Badge>
+              <div className="text-xs text-amber-700">
+                The system is having trouble accessing files from this repository.
+                This may cause generic responses from the LLM.
+              </div>
+            </div>
+          )}
         </div>
       </AlertDescription>
     </Alert>

@@ -23,6 +23,14 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
     console.log(`Using branch: ${config.branch} (default: ${config.default_branch})`);
     console.log(`Using patch mode: ${config.patch_mode}`);
     
+    // Log raw environment variables (redacted) for debugging
+    console.log('Environment variables present:', {
+      GITHUB_REPO_OWNER: Boolean(process.env.GITHUB_REPO_OWNER),
+      VITE_GITHUB_REPO_OWNER: Boolean(import.meta.env.VITE_GITHUB_REPO_OWNER),
+      GITHUB_REPO_NAME: Boolean(process.env.GITHUB_REPO_NAME),
+      VITE_GITHUB_REPO_NAME: Boolean(import.meta.env.VITE_GITHUB_REPO_NAME)
+    });
+    
     // Validate the configuration
     const valid = isValidGitHubSource(config);
     if (!valid) {
@@ -79,9 +87,16 @@ export const generateDiff = (originalContent: string, modifiedContent: string, f
  */
 export const checkFileExists = async (filePath: string): Promise<boolean> => {
   console.log(`Checking if file exists: ${filePath}`);
-  // In a real implementation, this would call the backend
-  // For now, always return true for testing
-  return true;
+  try {
+    // In a real implementation, this would call the backend
+    // For testing, simulate file existence
+    const result = true;
+    console.log(`File ${filePath} exists: ${result}`);
+    return result;
+  } catch (error) {
+    console.error(`Error checking if file exists [${filePath}]:`, error);
+    return false;
+  }
 };
 
 /**
@@ -93,11 +108,21 @@ export const getFileContent = async (filePath: string): Promise<string | null> =
   
   try {
     // In a real implementation, this would call the backend API
-    // For now, return mock content for testing
-    return `// Mock content for ${filePath}\n// This would be the actual file content in a real implementation\n\nfunction exampleCode() {\n  console.log("This is mock content");\n}\n`;
+    // For testing, return mock content based on file type
+    let mockContent = `// Mock content for ${filePath}\n// This would be the actual file content in a real implementation\n\n`;
+    
+    if (filePath.endsWith('.py')) {
+      mockContent += `import os\nimport sys\n\ndef main():\n    print("This is mock Python content")\n\nif __name__ == "__main__":\n    main()\n`;
+    } else if (filePath.endsWith('.js') || filePath.endsWith('.ts')) {
+      mockContent += `function exampleCode() {\n  console.log("This is mock JavaScript content");\n}\n\nexport default exampleCode;\n`;
+    } else {
+      mockContent += `function exampleCode() {\n  console.log("This is mock content");\n}\n`;
+    }
+    
+    console.log(`Successfully generated mock content for ${filePath} (${mockContent.length} bytes)`);
+    return mockContent;
   } catch (error) {
     console.error(`Failed to get content for ${filePath}:`, error);
     return null;
   }
 };
-

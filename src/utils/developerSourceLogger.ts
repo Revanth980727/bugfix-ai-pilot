@@ -43,6 +43,16 @@ export function extractGitHubSourceFromEnv(): GitHubSource {
   console.log(`Extracted branch: ${source.branch || source.default_branch || 'main'}`);
   console.log(`Extracted patch mode: ${source.patch_mode || 'line-by-line'}`);
   
+  // Log the actual values - helpful for debugging
+  console.log('Actual source values:', {
+    repo_owner: source.repo_owner || 'undefined',
+    repo_name: source.repo_name || 'undefined',
+    branch: source.branch || 'undefined',
+    default_branch: source.default_branch || 'undefined',
+    patch_mode: source.patch_mode || 'undefined',
+    commit_sha: source.commit_sha || 'undefined'
+  });
+  
   return source;
 }
 
@@ -50,7 +60,10 @@ export function extractGitHubSourceFromEnv(): GitHubSource {
  * Check if GitHub source information is valid and complete
  */
 export function isValidGitHubSource(source: GitHubSource | null): boolean {
-  if (!source) return false;
+  if (!source) {
+    console.log('GitHub source validation: Invalid (source is null)');
+    return false;
+  }
   
   const hasOwner = Boolean(source.repo_owner);
   const hasRepo = Boolean(source.repo_name);
@@ -58,6 +71,15 @@ export function isValidGitHubSource(source: GitHubSource | null): boolean {
   
   const isValid = hasOwner && hasRepo && hasBranch;
   console.log(`GitHub source validation: ${isValid ? 'Valid' : 'Invalid'} (Owner: ${hasOwner}, Repo: ${hasRepo}, Branch: ${hasBranch})`);
+  
+  // Additional info for debugging if invalid
+  if (!isValid) {
+    console.log('Missing GitHub source components:', {
+      repo_owner: !hasOwner ? 'missing' : 'present',
+      repo_name: !hasRepo ? 'missing' : 'present',
+      branch: !hasBranch ? 'missing' : 'present',
+    });
+  }
   
   return isValid;
 }
@@ -80,4 +102,3 @@ export function logGitHubSource(source: GitHubSource | null): void {
     console.log(`Commit SHA: ${source.commit_sha}`);
   }
 }
-
