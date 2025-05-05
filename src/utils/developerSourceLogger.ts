@@ -16,9 +16,19 @@ export interface GitHubSource {
  * Extract GitHub source information from environment variables
  */
 export function extractGitHubSourceFromEnv(): GitHubSource {
-  // In the browser, we can't access environment variables directly
-  // This would normally be populated from a backend API
-  return {
+  console.log('Extracting GitHub source information from environment variables...');
+  
+  // Log available environment variables without exposing sensitive values
+  console.log('Available GitHub env variables:', {
+    GITHUB_REPO_OWNER: Boolean(process.env.GITHUB_REPO_OWNER || import.meta.env.VITE_GITHUB_REPO_OWNER),
+    GITHUB_REPO_NAME: Boolean(process.env.GITHUB_REPO_NAME || import.meta.env.VITE_GITHUB_REPO_NAME),
+    GITHUB_BRANCH: Boolean(process.env.GITHUB_BRANCH || import.meta.env.VITE_GITHUB_BRANCH),
+    GITHUB_DEFAULT_BRANCH: Boolean(process.env.GITHUB_DEFAULT_BRANCH || import.meta.env.VITE_GITHUB_DEFAULT_BRANCH),
+    PATCH_MODE: Boolean(process.env.PATCH_MODE || import.meta.env.VITE_PATCH_MODE),
+    GITHUB_COMMIT_SHA: Boolean(process.env.GITHUB_COMMIT_SHA || import.meta.env.VITE_GITHUB_COMMIT_SHA),
+  });
+  
+  const source = {
     repo_owner: process.env.GITHUB_REPO_OWNER || import.meta.env.VITE_GITHUB_REPO_OWNER as string,
     repo_name: process.env.GITHUB_REPO_NAME || import.meta.env.VITE_GITHUB_REPO_NAME as string,
     branch: process.env.GITHUB_BRANCH || import.meta.env.VITE_GITHUB_BRANCH as string,
@@ -26,6 +36,30 @@ export function extractGitHubSourceFromEnv(): GitHubSource {
     patch_mode: process.env.PATCH_MODE || import.meta.env.VITE_PATCH_MODE as string || 'line-by-line',
     commit_sha: process.env.GITHUB_COMMIT_SHA || import.meta.env.VITE_GITHUB_COMMIT_SHA as string
   };
+  
+  // Log the actual values for debugging
+  const repoInfo = `${source.repo_owner || 'unknown'}/${source.repo_name || 'unknown'}`;
+  console.log(`Extracted repository: ${repoInfo}`);
+  console.log(`Extracted branch: ${source.branch || source.default_branch || 'main'}`);
+  console.log(`Extracted patch mode: ${source.patch_mode || 'line-by-line'}`);
+  
+  return source;
+}
+
+/**
+ * Check if GitHub source information is valid and complete
+ */
+export function isValidGitHubSource(source: GitHubSource | null): boolean {
+  if (!source) return false;
+  
+  const hasOwner = Boolean(source.repo_owner);
+  const hasRepo = Boolean(source.repo_name);
+  const hasBranch = Boolean(source.branch || source.default_branch);
+  
+  const isValid = hasOwner && hasRepo && hasBranch;
+  console.log(`GitHub source validation: ${isValid ? 'Valid' : 'Invalid'} (Owner: ${hasOwner}, Repo: ${hasRepo}, Branch: ${hasBranch})`);
+  
+  return isValid;
 }
 
 /**
@@ -46,3 +80,4 @@ export function logGitHubSource(source: GitHubSource | null): void {
     console.log(`Commit SHA: ${source.commit_sha}`);
   }
 }
+

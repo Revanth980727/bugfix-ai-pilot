@@ -1,9 +1,8 @@
-
 import { useState, useEffect } from 'react';
 import { CodeDiff } from '../types/ticket';
 import { AgentStatus } from './useDashboardState';
-import { extractGitHubSourceFromEnv, logGitHubSource, GitHubSource } from '../utils/developerSourceLogger';
-import { getGitHubConfig } from '../services/githubService';
+import { extractGitHubSourceFromEnv, logGitHubSource, GitHubSource, isValidGitHubSource } from '../utils/developerSourceLogger';
+import { getGitHubConfig, checkFileExists, getFileContent } from '../services/githubService';
 
 export function useDeveloperAgent() {
   const [status, setStatus] = useState<AgentStatus>('idle');
@@ -18,22 +17,37 @@ export function useDeveloperAgent() {
   const [responseQuality, setResponseQuality] = useState<'good' | 'generic' | 'invalid' | undefined>(undefined);
   const [patchMode, setPatchMode] = useState<'intelligent' | 'line-by-line' | 'direct'>('line-by-line');
   const [gitHubSource, setGitHubSource] = useState<GitHubSource | null>(null);
+  const [fileContext, setFileContext] = useState<Record<string, string>>({});
   const maxAttempts = 4;
 
   // Get GitHub configuration on component mount
   useEffect(() => {
     const fetchGitHubConfig = async () => {
       try {
+        console.log("Initializing developer agent: Fetching GitHub config...");
         const config = await getGitHubConfig();
         if (config) {
-          setGitHubSource({
+          const source = {
             repo_owner: config.repo_owner,
             repo_name: config.repo_name,
             branch: config.branch,
             default_branch: config.default_branch || 'main', // Provide default value
             patch_mode: config.patch_mode || 'line-by-line' // Provide default value
-          });
+          };
+          
+          setGitHubSource(source);
           setPatchMode(config.patch_mode || 'line-by-line');
+          
+          // Validate the GitHub source
+          const isValid = isValidGitHubSource(source);
+          console.log(`GitHub config validation result: ${isValid ? 'Valid' : 'Invalid'}`);
+          
+          // Attempt to fetch some example files to verify access
+          if (isValid) {
+            await testRepositoryAccess(source);
+          }
+        } else {
+          console.warn("No GitHub config returned, will try environment variables as fallback");
         }
       } catch (error) {
         console.error('Error fetching GitHub config:', error);
@@ -42,6 +56,54 @@ export function useDeveloperAgent() {
     
     fetchGitHubConfig();
   }, []);
+  
+  /**
+   * Test repository access by trying to fetch a common file
+   */
+  const testRepositoryAccess = async (source: GitHubSource) => {
+    try {
+      console.log(`Testing repository access for ${source.repo_owner}/${source.repo_name}...`);
+      
+      // Try to access some common files
+      const commonFiles = [
+        'README.md',
+        'package.json',
+        'src/index.js',
+        'src/index.ts',
+        'src/App.js',
+        'src/App.tsx'
+      ];
+      
+      let accessSuccessful = false;
+      
+      for (const file of commonFiles) {
+        const exists = await checkFileExists(file);
+        if (exists) {
+          console.log(`Found file in repository: ${file}`);
+          const content = await getFileContent(file);
+          if (content) {
+            console.log(`Successfully retrieved content for ${file} (${content.length} bytes)`);
+            // Store this file content in our context
+            setFileContext(prev => ({
+              ...prev,
+              [file]: content
+            }));
+            accessSuccessful = true;
+            break;
+          }
+        }
+      }
+      
+      if (!accessSuccessful) {
+        console.warn("Could not access any common files in the repository");
+      } else {
+        console.log("Repository access test: SUCCESS");
+      }
+      
+    } catch (error) {
+      console.error("Repository access test failed:", error);
+    }
+  };
 
   /**
    * Simulate developer agent work
@@ -60,6 +122,8 @@ export function useDeveloperAgent() {
   ) => {
     setStatus('working');
     setAttempt(currentAttempt);
+    console.log(`Developer agent starting work (attempt ${currentAttempt}/${maxAttempts})`);
+    console.log(`Using patch mode: ${options?.patchMode || patchMode}`);
     
     if (patchConfidence !== undefined) {
       setConfidenceScore(patchConfidence);
@@ -83,12 +147,27 @@ export function useDeveloperAgent() {
 
     // If GitHub source isn't set yet from config, try from env
     if (!gitHubSource) {
+      console.log("No GitHub source yet, extracting from environment...");
       const source = extractGitHubSourceFromEnv();
       // Ensure default_branch and patch_mode have fallback values
       source.default_branch = source.default_branch || 'main';
       source.patch_mode = source.patch_mode || 'line-by-line';
       setGitHubSource(source);
       logGitHubSource(source);
+      
+      // Validate the GitHub source
+      const isValid = isValidGitHubSource(source);
+      console.log(`GitHub environment variables validation: ${isValid ? 'Valid' : 'Invalid'}`);
+    } else {
+      console.log("Using existing GitHub source information");
+      logGitHubSource(gitHubSource);
+    }
+    
+    // Log the available file context
+    const fileCount = Object.keys(fileContext).length;
+    console.log(`Available file context: ${fileCount} files`);
+    if (fileCount > 0) {
+      console.log("Files in context:", Object.keys(fileContext));
     }
     
     const interval = setInterval(() => {
@@ -97,6 +176,7 @@ export function useDeveloperAgent() {
           clearInterval(interval);
           setStatus('success');
           setDiffs(mockDiffs);
+          console.log(`Developer agent completed work successfully with ${mockDiffs.length} diffs`);
           onComplete();
           return 100;
         }
@@ -158,6 +238,7 @@ export function useDeveloperAgent() {
     setRawOpenAIResponse(null);
     setResponseQuality(undefined);
     setGitHubSource(null);
+    setFileContext({});
   };
 
   return {
@@ -174,9 +255,38 @@ export function useDeveloperAgent() {
     responseQuality,
     patchMode,
     gitHubSource,
+    fileContext,
     simulateWork,
-    simulateFailure,
-    simulateEarlyEscalation,
+    simulateFailure: (reason?: string, responseQuality?: 'good' | 'generic' | 'invalid') => {
+      setStatus('error');
+      if (reason) {
+        setEscalationReason(reason);
+      }
+      if (responseQuality) {
+        setResponseQuality(responseQuality);
+      }
+    },
+    simulateEarlyEscalation: (
+      reason: string, 
+      confidence?: number, 
+      options?: {
+        responseQuality?: 'good' | 'generic' | 'invalid';
+        rawResponse?: string;
+      }
+    ) => {
+      setStatus('escalated');
+      setEarlyEscalation(true);
+      setEscalationReason(reason);
+      if (confidence !== undefined) {
+        setConfidenceScore(confidence);
+      }
+      if (options?.responseQuality) {
+        setResponseQuality(options.responseQuality);
+      }
+      if (options?.rawResponse) {
+        setRawOpenAIResponse(options.rawResponse);
+      }
+    },
     reset
   };
 }
