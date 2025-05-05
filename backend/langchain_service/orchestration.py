@@ -143,7 +143,7 @@ class LangChainOrchestrator:
             
             if not agent_tool:
                 logger.error(f"Unknown agent: {agent_name}")
-                return {"error": f"Unknown agent: {agent_name}"}
+                return {"error": f"Unknown agent: {agent_name}", "success": False}
             
             # Log the input data to help debug status flag issues
             logger.info(f"Running agent {agent_name} with input: {json.dumps(input_data)[:200]}...")
@@ -151,6 +151,12 @@ class LangChainOrchestrator:
             # Check for success/failure flags from previous agents
             if "success" in input_data and input_data["success"] is False:
                 logger.warning(f"Previous agent reported failure, but still running {agent_name}")
+            
+            # Special handling for the patch_mode parameter when running DeveloperAgent
+            if agent_name == "DeveloperAgent" and "patch_mode" not in input_data:
+                patch_mode = os.environ.get("PATCH_MODE", "line-by-line")
+                input_data["patch_mode"] = patch_mode
+                logger.info(f"Setting patch_mode to {patch_mode} for DeveloperAgent")
             
             # Execute the tool with the input data
             result = agent_tool.func(json.dumps(input_data))
@@ -163,6 +169,8 @@ class LangChainOrchestrator:
                 logger.info(f"Agent {agent_name} completed with success={result_dict['success']}")
             else:
                 logger.warning(f"Agent {agent_name} did not report success/failure status")
+                # Set default success status if missing
+                result_dict["success"] = True
             
             return result_dict
             

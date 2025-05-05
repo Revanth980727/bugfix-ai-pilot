@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -6,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { AgentStatus } from '@/hooks/useDashboardState';
-import { AlertTriangle, CheckCircle, XCircle, BarChart, InfoIcon, Code, FileDigit } from 'lucide-react';
+import { AlertTriangle, CheckCircle, XCircle, BarChart, InfoIcon, Code, FileDigit, GitCommit } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -29,6 +28,7 @@ interface DeveloperAgentProps {
   earlyEscalation?: boolean;
   responseQuality?: 'good' | 'generic' | 'invalid';
   rawResponse?: string | null;
+  patchMode?: 'intelligent' | 'line-by-line' | 'direct';
 }
 
 export function DeveloperAgent({ 
@@ -42,7 +42,8 @@ export function DeveloperAgent({
   confidenceScore, 
   earlyEscalation = false,
   responseQuality,
-  rawResponse
+  rawResponse,
+  patchMode = 'line-by-line'
 }: DeveloperAgentProps) {
   
   // Get color and tooltip for confidence score
@@ -111,6 +112,28 @@ export function DeveloperAgent({
     );
   };
   
+  const getPatchModeLabel = (mode?: string) => {
+    switch(mode) {
+      case 'line-by-line': return "Line-by-line patching";
+      case 'intelligent': return "Intelligent patching";
+      case 'direct': return "Direct replacement";
+      default: return "Standard patching";
+    }
+  }
+  
+  const getPatchModeDescription = (mode?: string) => {
+    switch(mode) {
+      case 'line-by-line': 
+        return "Applies changes at the individual line level, preserving as much of the original file as possible";
+      case 'intelligent': 
+        return "Uses heuristics to determine the best patch strategy based on the diff content";
+      case 'direct': 
+        return "Directly replaces file content when a clean diff cannot be applied";
+      default: 
+        return "Standard patching strategy";
+    }
+  }
+  
   return (
     <AgentCard title="Developer" type="developer" status={status} progress={progress}>
       {status === 'idle' && (
@@ -174,6 +197,24 @@ export function DeveloperAgent({
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
+      )}
+      
+      {patchMode && status !== 'idle' && (
+        <div className="mb-4 flex gap-2 items-center">
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className="flex items-center gap-1 cursor-help">
+                  <GitCommit className="h-3 w-3" />
+                  <span>{getPatchModeLabel(patchMode)}</span>
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>{getPatchModeDescription(patchMode)}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       )}
       
       {responseQuality && (

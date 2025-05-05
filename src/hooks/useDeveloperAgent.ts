@@ -14,6 +14,7 @@ export function useDeveloperAgent() {
   const [patchAnalytics, setPatchAnalytics] = useState<any>(null);
   const [rawOpenAIResponse, setRawOpenAIResponse] = useState<string | null>(null);
   const [responseQuality, setResponseQuality] = useState<'good' | 'generic' | 'invalid' | undefined>(undefined);
+  const [patchMode, setPatchMode] = useState<'intelligent' | 'line-by-line' | 'direct'>('line-by-line');
   const maxAttempts = 4;
 
   /**
@@ -28,6 +29,7 @@ export function useDeveloperAgent() {
     options?: {
       responseQuality?: 'good' | 'generic' | 'invalid';
       rawResponse?: string;
+      patchMode?: 'intelligent' | 'line-by-line' | 'direct';
     }
   ) => {
     setStatus('working');
@@ -47,6 +49,10 @@ export function useDeveloperAgent() {
     
     if (options?.rawResponse) {
       setRawOpenAIResponse(options.rawResponse);
+    }
+    
+    if (options?.patchMode) {
+      setPatchMode(options.patchMode);
     }
     
     const interval = setInterval(() => {
@@ -129,6 +135,7 @@ export function useDeveloperAgent() {
     patchAnalytics,
     rawOpenAIResponse,
     responseQuality,
+    patchMode,
     simulateWork,
     simulateFailure,
     simulateEarlyEscalation,

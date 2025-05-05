@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -24,11 +23,100 @@ class DeveloperAgent(Agent):
         self.output_dir = os.path.join(os.path.dirname(__file__), "developer_outputs")
         os.makedirs(self.output_dir, exist_ok=True)
         
+        # Get patch mode from environment (line-by-line, intelligent, direct)
+        self.patch_mode = os.getenv("PATCH_MODE", "line-by-line")
+        self.log(f"Using patch mode: {self.patch_mode}")
+        
         # Initialize OpenAI client
         self.client = openai.OpenAI(api_key=self.api_key)
 
-    # ... keep existing code (_build_prompt and _send_gpt4_request methods)
+    def _build_prompt(self, bug_title: str, bug_description: str, root_cause: str, 
+                     code_context: Dict[str, str], ticket_id: str) -> str:
+        """Build a prompt for GPT-4"""
+        prompt = f"""
+        You are a senior software developer tasked with fixing a bug. Please provide a patch for the bug described below:
+
+        Ticket ID: {ticket_id}
         
+        Bug Title: {bug_title}
+
+        Bug Description:
+        {bug_description}
+
+        Root Cause Analysis:
+        {root_cause}
+
+        Your task is to generate code changes that will fix this bug. Please provide your solution in the form of a patch/diff format.
+        
+        Here are the contents of the affected files:
+
+        """
+
+        # Add code context
+        for file_path, content in code_context.items():
+            prompt += f"\n---FILE: {file_path}---\n"
+            prompt += f"{content}\n"
+
+        # Add instructions for response format
+        prompt += """
+        For each file that needs changes, format your response like:
+
+        ---FILE: path/to/file---
+        Brief explanation of the changes made.
+
+        ```diff
+        - line to remove
+        + line to add
+        ```
+
+        Make sure to:
+        1. Include proper diff markers (- for removed lines, + for added lines)
+        2. Provide concise but clear explanations of changes
+        3. Only include the lines that are changing plus a few lines of context
+        4. Make the smallest possible changes needed to fix the bug
+
+        If you need more context or information to properly fix the issue, please specify what additional information would help.
+        """
+
+        return prompt
+
+    def _send_gpt4_request(self, prompt: str) -> Optional[str]:
+        """Send a request to GPT-4 API and return the response"""
+        if not self.api_key:
+            self.log("Error: No OpenAI API key provided")
+            return None
+            
+        try:
+            self.log("Sending request to OpenAI API")
+            response = self.client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+                messages=[
+                    {"role": "system", "content": "You are a senior software developer fixing bugs."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                max_tokens=4000
+            )
+            
+            # Check if we got a valid response
+            if not response or not hasattr(response, 'choices') or not response.choices:
+                self.log("Error: Invalid or empty response from OpenAI API")
+                return None
+                
+            # Extract completion text with null safety
+            completion = response.choices[0].message.content if response.choices else None
+            
+            if completion:
+                self.log(f"Received {len(completion)} characters from OpenAI API")
+            else:
+                self.log("Warning: Empty completion from OpenAI API")
+                
+            return completion
+            
+        except Exception as e:
+            self.log(f"Error calling OpenAI API: {str(e)}")
+            return None
+
     def _parse_gpt_response(self, response: str) -> List[Dict[str, Any]]:
         """Parse GPT-4 response into structured file changes with improved path handling"""
         if not response:
@@ -118,7 +206,8 @@ class DeveloperAgent(Agent):
             "files_modified": [],
             "files_failed": [],
             "patches_applied": 0,
-            "patched_code": {}  # Will store the actual patched code content
+            "patched_code": {},  # Will store the actual patched code content
+            "patch_mode": self.patch_mode
         }
         
         for change in file_changes:
@@ -168,16 +257,32 @@ class DeveloperAgent(Agent):
                 with open(full_path, 'r', encoding='utf-8') as f:
                     original_content = f.read()
                 
-                # Parse the diff to identify changed lines
-                modified_content = self._apply_line_by_line_changes(original_content, diff)
+                # Apply patch based on selected mode
+                if self.patch_mode == "line-by-line":
+                    modified_content = self._apply_line_by_line_changes(original_content, diff)
+                    self.log(f"Applied line-by-line patching for {file_path}")
+                elif self.patch_mode == "intelligent":
+                    modified_content = self._apply_intelligent_patching(original_content, diff)
+                    self.log(f"Applied intelligent patching for {file_path}")
+                else:
+                    # Direct mode - use clean diff content if available, otherwise keep original
+                    clean_content = self._clean_diff_markers(diff)
+                    if clean_content and clean_content.strip():
+                        modified_content = clean_content
+                        self.log(f"Applied direct content replacement for {file_path}")
+                    else:
+                        modified_content = original_content
+                        self.log(f"Direct mode failed to extract content for {file_path}")
                 
-                # If no changes were applied through diff format, check if it's a direct content replacement
+                # Skip if no changes were made
                 if modified_content == original_content:
-                    # Try to detect if entire file was meant to be replaced
-                    if not any(line.startswith('+') or line.startswith('-') for line in diff.splitlines()):
-                        self.log(f"No diff markers found, cleaning content for {file_path}")
-                        modified_content = self._clean_diff_markers(diff)
-                
+                    self.log(f"No changes were applied to {file_path}")
+                    results["files_failed"].append({
+                        "file": file_path,
+                        "reason": "No changes could be applied"
+                    })
+                    continue
+                    
                 # Write the modified content back
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write(modified_content)
@@ -232,6 +337,8 @@ class DeveloperAgent(Agent):
         Returns:
             Modified content with changes applied
         """
+        self.log("Applying changes using line-by-line patching strategy")
+        
         # Check if this is a proper diff format with +/- markers
         has_diff_markers = any(line.startswith('+') or line.startswith('-') 
                               for line in diff.splitlines())
@@ -248,6 +355,10 @@ class DeveloperAgent(Agent):
         original_lines = original_content.splitlines()
         result_lines = original_lines.copy()
         
+        # Track specific added and removed lines precisely
+        lines_to_remove = []  # List of (line_number, content) tuples
+        lines_to_add = []     # List of (insert_position, content) tuples
+        
         # Process diff lines to extract changes
         diff_lines = diff.splitlines()
         line_idx = 0  # Pointer to the current line in original content
@@ -255,8 +366,6 @@ class DeveloperAgent(Agent):
         # Find chunks with hunk headers
         hunk_pattern = r'@@ -(\d+),(\d+) \+(\d+),(\d+) @@'
         current_hunk = None
-        skip_lines = 0
-        tracking_changes = False
         
         # Check if diff has hunk headers (standard diff format)
         has_hunk_headers = any(re.match(hunk_pattern, line) for line in diff_lines)
@@ -269,134 +378,126 @@ class DeveloperAgent(Agent):
                 if hunk_match:
                     # Start of a new hunk
                     old_start = int(hunk_match.group(1))
-                    old_count = int(hunk_match.group(2))
-                    new_start = int(hunk_match.group(3))
-                    new_count = int(hunk_match.group(4))
-                    
-                    # Reset position to the start of this hunk
                     line_idx = old_start - 1  # Adjust for 0-indexing
-                    tracking_changes = True
                     continue
                 
-                # Skip if we haven't found a hunk yet
-                if not tracking_changes:
-                    continue
-                    
                 # Process line changes
                 if diff_line.startswith('-'):
                     # Line to remove
-                    if line_idx < len(result_lines) and diff_line[1:].strip() == result_lines[line_idx].strip():
-                        # Remove the line by setting to None (will filter later)
-                        result_lines[line_idx] = None
+                    if line_idx < len(result_lines):
+                        lines_to_remove.append((line_idx, diff_line[1:]))
                         line_idx += 1
-                    else:
-                        # Try to find the line to remove
-                        line_to_remove = diff_line[1:]
-                        for i in range(line_idx, min(line_idx + 10, len(result_lines))):
-                            if result_lines[i] is not None and line_to_remove.strip() == result_lines[i].strip():
-                                result_lines[i] = None
-                                line_idx = i + 1
-                                break
                 
                 elif diff_line.startswith('+'):
                     # Line to add
-                    added_line = diff_line[1:]
-                    
-                    # Insert the new line at current position
-                    result_lines.insert(line_idx, added_line)
-                    line_idx += 1
-                    
+                    lines_to_add.append((line_idx, diff_line[1:]))
+                
                 else:
                     # Context line, just advance
                     if line_idx < len(result_lines):
                         line_idx += 1
-            
-            # Filter out None values (removed lines)
-            result_lines = [line for line in result_lines if line is not None]
-            
         else:
             # Handle simpler diff format (just +/- lines without hunk headers)
-            # This is often what we get from LLMs when they don't follow strict diff format
-            
-            # First, create a mapping of original lines for finding replacements
-            line_mapping = {line.strip(): idx for idx, line in enumerate(original_lines) if line.strip()}
-            
-            # Track lines to remove and add
-            lines_to_remove = []
-            lines_to_add = {}  # maps line number to new content
-            
-            # Find removal lines first
+            # Find removals first, track them with their content for matching
             for diff_line in diff_lines:
                 if diff_line.startswith('-'):
-                    line_content = diff_line[1:].strip()
-                    if line_content in line_mapping:
-                        lines_to_remove.append(line_mapping[line_content])
-                        
-            # Find addition lines and pair them with removals when possible
-            paired_additions = set()
+                    line_content = diff_line[1:]
+                    
+                    # Try to find this line in the original content
+                    found = False
+                    for i, orig_line in enumerate(original_lines):
+                        if orig_line.strip() == line_content.strip():
+                            lines_to_remove.append((i, line_content))
+                            found = True
+                            break
+                            
+                    if not found:
+                        self.log(f"Warning: Could not find line to remove: '{line_content[:40]}...'")
+            
+            # Now process additions and try to pair them with removals
             for i, diff_line in enumerate(diff_lines):
                 if diff_line.startswith('+'):
-                    line_content = diff_line[1:].strip()
-                    # Try to pair with a previous removal
-                    if i > 0 and diff_lines[i-1].startswith('-') and i-1 not in paired_additions:
-                        removal_line = diff_lines[i-1][1:].strip()
-                        if removal_line in line_mapping:
-                            lines_to_add[line_mapping[removal_line]] = diff_line[1:]
-                            paired_additions.add(i-1)
-                        else:
-                            # Add at the beginning if we can't find the removal
-                            lines_to_add[0] = diff_line[1:]
-                    else:
-                        # Add at the beginning if no pairing
-                        lines_to_add[0] = diff_line[1:]
-            
-            # Apply changes (work from end to beginning to avoid index shifts)
-            sorted_removals = sorted(lines_to_remove, reverse=True)
-            for idx in sorted_removals:
-                if 0 <= idx < len(result_lines):
-                    del result_lines[idx]
+                    line_content = diff_line[1:]
                     
-            # Apply additions (work from beginning to end)
-            sorted_additions = sorted(lines_to_add.items())
-            offset = 0  # Track offset as we add lines
-            for idx, content in sorted_additions:
-                insert_pos = min(idx + offset, len(result_lines))
-                result_lines.insert(insert_pos, content)
-                offset += 1
+                    # Try to pair with previous removal
+                    insert_pos = 0
+                    if i > 0 and diff_lines[i-1].startswith('-'):
+                        removal_content = diff_lines[i-1][1:]
+                        
+                        # Find matching removal position
+                        for pos, content in lines_to_remove:
+                            if content.strip() == removal_content.strip():
+                                insert_pos = pos
+                                break
+                    
+                    lines_to_add.append((insert_pos, line_content))
+        
+        # Sort lines to remove in reverse order to avoid index shifting
+        lines_to_remove.sort(reverse=True)
+        
+        # Apply removals
+        for line_num, _ in lines_to_remove:
+            if 0 <= line_num < len(result_lines):
+                del result_lines[line_num]
+                
+        # Sort additions by position
+        lines_to_add.sort()
+        
+        # Apply additions with appropriate index adjustments
+        offset = 0
+        for orig_pos, content in lines_to_add:
+            adjusted_pos = max(0, min(orig_pos + offset, len(result_lines)))
+            result_lines.insert(adjusted_pos, content)
+            offset += 1
         
         # If the diff didn't change anything, log a warning
         if result_lines == original_lines:
-            self.log("Warning: Diff application did not change the file content")
+            self.log("Line-by-line patching did not change the file content")
             
-            # Try alternate approach - directly extract added lines
-            if os.getenv("PATCH_MODE", "intelligent").lower() == "direct":
-                self.log("Using direct patch mode - extracting added lines only")
-                added_lines = [line[1:] for line in diff_lines if line.startswith('+')]
-                if added_lines:
-                    return '\n'.join(added_lines)
-                    
-            # Special handling for the case where patched_code contains diff markers directly
-            # This is often what we see in the output from developer agents
-            if '+' in diff and '-' in diff and '\n' in diff:
-                self.log("Detected direct diff markers in patched_code, applying simple replacement")
-                # Simple replacement strategy: remove lines starting with -, keep normal lines, add lines without + marker
-                new_lines = []
-                for line in diff.splitlines():
-                    if line.startswith('-'):
-                        # Find this line in the original content and remove it
-                        line_content = line[1:].strip()
-                        for i, orig_line in enumerate(original_lines):
-                            if line_content in orig_line:
-                                # Mark for removal by setting to None
-                                original_lines[i] = None
-                    elif line.startswith('+'):
-                        # Add this line (without the + marker)
-                        new_lines.append(line[1:])
-                
-                # Combine remaining original lines with new lines
-                result_lines = [line for line in original_lines if line is not None] + new_lines
+            # Try a fallback approach - extract just the clean content from the diff
+            clean_content = self._clean_diff_markers(diff)
+            if clean_content and clean_content.strip() and clean_content != original_content:
+                self.log("Using fallback clean content extraction")
+                return clean_content
         
         return '\n'.join(result_lines)
+        
+    def _apply_intelligent_patching(self, original_content: str, diff: str) -> str:
+        """
+        Apply intelligent patching that uses multiple strategies based on diff content
+        
+        Args:
+            original_content: The original file content
+            diff: The diff content
+            
+        Returns:
+            Modified content with changes applied
+        """
+        self.log("Applying changes using intelligent patching strategy")
+        
+        # First try standard line-by-line patching
+        modified_content = self._apply_line_by_line_changes(original_content, diff)
+        
+        # If no changes were applied, check if we have a complete file replacement
+        if modified_content == original_content:
+            # Clean the diff and check if it looks like a complete file
+            clean_content = self._clean_diff_markers(diff)
+            
+            # Heuristic: If the clean content has imports or class/function definitions, 
+            # and is reasonably long, it might be a full file replacement
+            looks_like_full_file = False
+            if clean_content:
+                lines = clean_content.splitlines()
+                if len(lines) > 10:  # Reasonably sized file
+                    code_markers = ['import ', 'class ', 'def ', 'function ', 'const ', 'let ', 'var ']
+                    if any(marker in line for line in lines[:20] for marker in code_markers):
+                        looks_like_full_file = True
+                        
+            if looks_like_full_file:
+                self.log("Intelligent patching: Detected full file replacement")
+                return clean_content
+        
+        return modified_content
 
     def _save_output(self, ticket_id: str, output_data: Dict[str, Any]) -> None:
         """Save the agent's output to a JSON file"""
@@ -544,6 +645,7 @@ class DeveloperAgent(Agent):
                     "ticket_id": ticket_id,
                     "error": "No input data provided",
                     "confidence_score": 0,
+                    "patch_mode": self.patch_mode,
                     "timestamp": datetime.now().isoformat()
                 }
             
@@ -597,6 +699,7 @@ class DeveloperAgent(Agent):
                     "ticket_id": ticket_id,
                     "error": "Empty response received from GPT-4",
                     "confidence_score": 0,
+                    "patch_mode": self.patch_mode,
                     "timestamp": datetime.now().isoformat()
                 }
             
@@ -607,6 +710,7 @@ class DeveloperAgent(Agent):
                     "ticket_id": ticket_id,
                     "error": "Developer agent returned a generic response",
                     "confidence_score": 0,
+                    "patch_mode": self.patch_mode,
                     "timestamp": datetime.now().isoformat()
                 }
             
@@ -618,6 +722,7 @@ class DeveloperAgent(Agent):
                     "ticket_id": ticket_id,
                     "error": "No file changes could be extracted from LLM response",
                     "confidence_score": 0,
+                    "patch_mode": self.patch_mode,
                     "timestamp": datetime.now().isoformat()
                 }
                 
@@ -628,7 +733,7 @@ class DeveloperAgent(Agent):
             files_modified = patch_results.get("files_modified", [])
             patches_applied = patch_results.get("patches_applied", 0)
             
-            self.log(f"Applied {patches_applied} changes to {len(files_modified)} files")
+            self.log(f"Applied {patches_applied} changes to {len(files_modified)} files using {self.patch_mode} mode")
             
             # Calculate confidence score with null safety
             confidence_score = self.calculate_confidence_score(
@@ -643,6 +748,7 @@ class DeveloperAgent(Agent):
                 "diff_summary": f"Applied {patches_applied} changes to {len(files_modified)} files",
                 "raw_gpt_response": response,
                 "confidence_score": confidence_score,
+                "patch_mode": self.patch_mode,
                 "patched_code": patch_results.get("patched_code", {}),
                 "timestamp": datetime.now().isoformat()
             }
@@ -661,92 +767,6 @@ class DeveloperAgent(Agent):
                 "ticket_id": input_data.get("ticket_id", "unknown") if input_data else "unknown",
                 "error": error_message,
                 "confidence_score": 0,
+                "patch_mode": self.patch_mode,
                 "timestamp": datetime.now().isoformat()
             }
-
-    def _build_prompt(self, bug_title: str, bug_description: str, root_cause: str, 
-                     code_context: Dict[str, str], ticket_id: str) -> str:
-        """Build a prompt for GPT-4"""
-        prompt = f"""
-        You are a senior software developer tasked with fixing a bug. Please provide a patch for the bug described below:
-
-        Ticket ID: {ticket_id}
-        
-        Bug Title: {bug_title}
-
-        Bug Description:
-        {bug_description}
-
-        Root Cause Analysis:
-        {root_cause}
-
-        Your task is to generate code changes that will fix this bug. Please provide your solution in the form of a patch/diff format.
-        
-        Here are the contents of the affected files:
-
-        """
-
-        # Add code context
-        for file_path, content in code_context.items():
-            prompt += f"\n---FILE: {file_path}---\n"
-            prompt += f"{content}\n"
-
-        # Add instructions for response format
-        prompt += """
-        For each file that needs changes, format your response like:
-
-        ---FILE: path/to/file---
-        Brief explanation of the changes made.
-
-        ```diff
-        - line to remove
-        + line to add
-        ```
-
-        Make sure to:
-        1. Include proper diff markers (- for removed lines, + for added lines)
-        2. Provide concise but clear explanations of changes
-        3. Only include the lines that are changing plus a few lines of context
-        4. Make the smallest possible changes needed to fix the bug
-
-        If you need more context or information to properly fix the issue, please specify what additional information would help.
-        """
-
-        return prompt
-
-    def _send_gpt4_request(self, prompt: str) -> Optional[str]:
-        """Send a request to GPT-4 API and return the response"""
-        if not self.api_key:
-            self.log("Error: No OpenAI API key provided")
-            return None
-            
-        try:
-            self.log("Sending request to OpenAI API")
-            response = self.client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-                messages=[
-                    {"role": "system", "content": "You are a senior software developer fixing bugs."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                max_tokens=4000
-            )
-            
-            # Check if we got a valid response
-            if not response or not hasattr(response, 'choices') or not response.choices:
-                self.log("Error: Invalid or empty response from OpenAI API")
-                return None
-                
-            # Extract completion text with null safety
-            completion = response.choices[0].message.content if response.choices else None
-            
-            if completion:
-                self.log(f"Received {len(completion)} characters from OpenAI API")
-            else:
-                self.log("Warning: Empty completion from OpenAI API")
-                
-            return completion
-            
-        except Exception as e:
-            self.log(f"Error calling OpenAI API: {str(e)}")
-            return None
