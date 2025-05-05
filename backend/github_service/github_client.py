@@ -1,3 +1,4 @@
+
 import logging
 from typing import Dict, Any, Optional, List
 from github import Github, GithubException
@@ -11,6 +12,7 @@ class GitHubClient:
     def __init__(self):
         self.client = Github(GITHUB_TOKEN)
         self.token = GITHUB_TOKEN
+        self.pr_mapping = {}  # Store ticket ID to PR number mappings
         
         # Verify token is valid
         try:
@@ -168,6 +170,14 @@ class GitHubClient:
             # Return the first matching PR if any
             for pr in existing_prs:
                 logger.info(f"Found existing PR #{pr.number}: {pr.html_url}")
+                
+                # Extract the ticket ID from branch name if it follows fix/TICKET-ID pattern
+                ticket_match = re.search(r'fix/([A-Z]+-\d+)', head_branch)
+                if ticket_match:
+                    ticket_id = ticket_match.group(1)
+                    self.pr_mapping[ticket_id] = pr.number
+                    logger.info(f"Mapped ticket {ticket_id} to PR #{pr.number}")
+                
                 return {
                     'number': pr.number,
                     'url': pr.html_url,
@@ -182,7 +192,7 @@ class GitHubClient:
             return None
     
     def create_pull_request(self, title: str, body: str,
-                          head_branch: str, base_branch: str = None) -> Optional[str]:
+                          head_branch: str, base_branch: str = None) -> Optional[Dict[str, Any]]:
         """Create a pull request from the specified branch."""
         try:
             if not self.repo:
@@ -196,7 +206,7 @@ class GitHubClient:
             existing_pr = self.check_for_existing_pr(head_branch, base_branch)
             if existing_pr:
                 logger.info(f"Using existing PR: {existing_pr['url']}")
-                return existing_pr['url']
+                return existing_pr
             
             # Create new PR if none exists
             pr = self.repo.create_pull(
@@ -206,8 +216,20 @@ class GitHubClient:
                 base=base_branch
             )
             
+            # Extract the ticket ID from branch name if it follows fix/TICKET-ID pattern
+            ticket_match = re.search(r'fix/([A-Z]+-\d+)', head_branch)
+            if ticket_match:
+                ticket_id = ticket_match.group(1)
+                self.pr_mapping[ticket_id] = pr.number
+                logger.info(f"Mapped ticket {ticket_id} to PR #{pr.number}")
+            
             logger.info(f"Created new pull request: {pr.html_url}")
-            return pr.html_url
+            return {
+                'number': pr.number,
+                'url': pr.html_url,
+                'title': pr.title,
+                'body': pr.body
+            }
             
         except GithubException as e:
             if e.status == 422:
@@ -218,8 +240,21 @@ class GitHubClient:
                     # Look for any open PRs from this head branch
                     for pr in self.repo.get_pulls(state='open'):
                         if pr.head.ref == head_branch:
+                            
+                            # Extract the ticket ID from branch name
+                            ticket_match = re.search(r'fix/([A-Z]+-\d+)', head_branch)
+                            if ticket_match:
+                                ticket_id = ticket_match.group(1)
+                                self.pr_mapping[ticket_id] = pr.number
+                                logger.info(f"Mapped ticket {ticket_id} to PR #{pr.number}")
+                                
                             logger.info(f"Found existing PR after error: {pr.html_url}")
-                            return pr.html_url
+                            return {
+                                'number': pr.number,
+                                'url': pr.html_url,
+                                'title': pr.title,
+                                'body': pr.body
+                            }
                 except Exception as search_error:
                     logger.error(f"Error in broader PR search: {str(search_error)}")
                     
@@ -240,14 +275,19 @@ class GitHubClient:
             # If it's a numeric string, convert directly
             if isinstance(pr_identifier, str) and pr_identifier.isdigit():
                 return int(pr_identifier)
+                
+            # If it's a JIRA ticket ID that we have mapped to a PR
+            if isinstance(pr_identifier, str) and pr_identifier in self.pr_mapping:
+                logger.info(f"Using mapped PR #{self.pr_mapping[pr_identifier]} for ticket {pr_identifier}")
+                return self.pr_mapping[pr_identifier]
             
             # Try to extract PR number from a URL
             if isinstance(pr_identifier, str) and '/' in pr_identifier:
                 # For URL format: https://github.com/owner/repo/pull/123
                 parts = pr_identifier.split('/')
-                for part in parts:
-                    if part.isdigit():
-                        return int(part)
+                for i, part in enumerate(parts):
+                    if part == "pull" and i+1 < len(parts) and parts[i+1].isdigit():
+                        return int(parts[i+1])
             
             # For GitHub's short URL format: owner/repo#123
             if isinstance(pr_identifier, str) and '#' in pr_identifier:
@@ -258,6 +298,23 @@ class GitHubClient:
             # If it's already a numeric type
             if isinstance(pr_identifier, int):
                 return pr_identifier
+                
+            # Don't extract numbers from JIRA ticket IDs
+            if isinstance(pr_identifier, str) and re.match(r'^[A-Z]+-\d+$', pr_identifier):
+                logger.info(f"Not extracting numbers from JIRA ticket ID: {pr_identifier}")
+                
+                # Instead, try to find a PR for this ticket
+                try:
+                    # Look for PRs with this ticket ID in title or branch name
+                    for pr in self.repo.get_pulls(state='open'):
+                        if pr_identifier in pr.title or f"fix/{pr_identifier}" == pr.head.ref:
+                            self.pr_mapping[pr_identifier] = pr.number
+                            logger.info(f"Found PR #{pr.number} for ticket {pr_identifier}")
+                            return pr.number
+                except Exception as e:
+                    logger.error(f"Error searching for PR by ticket ID: {str(e)}")
+                
+                return None
                 
             logger.warning(f"Could not extract PR number from: {pr_identifier}")
             return None
@@ -300,26 +357,11 @@ class GitHubClient:
                 
             except GithubException as pr_error:
                 if pr_error.status == 404:
-                    # The PR number might be invalid, try to extract it from a URL
-                    if isinstance(pr_identifier, str) and '/' in pr_identifier:
-                        # Try extracting PR number from URL
-                        parts = pr_identifier.split('/')
-                        pr_id = next((part for part in parts if part.isdigit()), None)
-                        
-                        if pr_id:
-                            try:
-                                # Try again with extracted number
-                                pr_number = int(pr_id)
-                                pr = self.repo.get_pull(pr_number)
-                                pr.create_issue_comment(comment)
-                                logger.info(f"Successfully added comment to PR #{pr_number} after URL extraction")
-                                return True
-                            except Exception as inner_error:
-                                logger.error(f"Failed to add comment after URL extraction: {str(inner_error)}")
-                                return False
-                                
-                logger.error(f"PR #{pr_number} not found or cannot be accessed: {str(pr_error)}")
-                return False
+                    logger.error(f"PR #{pr_number} not found or cannot be accessed: {str(pr_error)}")
+                    return False
+                else:
+                    logger.error(f"GitHub error adding comment to PR: {str(pr_error)}")
+                    return False
                 
         except Exception as e:
             logger.error(f"Unexpected error adding comment to PR: {str(e)}")

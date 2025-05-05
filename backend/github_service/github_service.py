@@ -1,3 +1,4 @@
+
 import os
 import re
 import logging
@@ -20,6 +21,7 @@ class GitHubService:
         self.repo_name = repo_name or GITHUB_REPO_NAME
         self.default_branch = default_branch or GITHUB_DEFAULT_BRANCH
         self.default_repo = f"{self.repo_owner}/{self.repo_name}" if self.repo_owner and self.repo_name else None
+        self.pr_mapping = {}  # Store mappings between ticket IDs and PR numbers
         
         if not self.github_token:
             logger.warning("GitHub token not provided. Some functionality will be limited.")
@@ -146,7 +148,7 @@ class GitHubService:
             logger.error(f"Error committing changes: {str(e)}")
             return False
     
-    def create_fix_pr(self, branch_name: str, ticket_id: str, title: str, body: str) -> Optional[str]:
+    def create_fix_pr(self, branch_name: str, ticket_id: str, title: str, body: str) -> Optional[Dict[str, Any]]:
         """
         Create a pull request for a bug fix or return existing PR URL
         
@@ -157,7 +159,7 @@ class GitHubService:
             body: The body of the pull request
             
         Returns:
-            str: The URL of the pull request if successful, None otherwise
+            Dict with PR details or None if failed
         """
         if not self.client:
             logger.warning("GitHub client not initialized, cannot create pull request")
@@ -170,7 +172,9 @@ class GitHubService:
             existing_pr = self.check_for_existing_pr(branch_name, self.default_branch) or self.find_pr_for_ticket(ticket_id)
             if existing_pr:
                 logger.info(f"PR already exists for branch {branch_name} or ticket {ticket_id}: {existing_pr['url']}")
-                return existing_pr['url']
+                # Store the PR mapping for future use
+                self.pr_mapping[ticket_id] = existing_pr['number']
+                return existing_pr
                 
             # Create the pull request
             pr = repo.create_pull(
@@ -181,7 +185,16 @@ class GitHubService:
             )
             
             logger.info(f"Pull request created successfully: {pr.html_url}")
-            return pr.html_url
+            
+            # Store PR number in the mapping
+            self.pr_mapping[ticket_id] = pr.number
+            
+            return {
+                "number": pr.number,
+                "url": pr.html_url,
+                "title": pr.title,
+                "state": pr.state
+            }
         except GithubException as e:
             logger.error(f"GitHub error creating pull request: {str(e)}")
             
@@ -191,7 +204,9 @@ class GitHubService:
                 existing_pr = self.find_pr_for_ticket(ticket_id) or self.check_for_existing_pr(branch_name, self.default_branch)
                 if existing_pr:
                     logger.info(f"Found existing PR: {existing_pr['url']}")
-                    return existing_pr['url']
+                    # Store the PR mapping
+                    self.pr_mapping[ticket_id] = existing_pr['number']
+                    return existing_pr
             return None
         except Exception as e:
             logger.error(f"Error creating pull request: {str(e)}")
@@ -216,6 +231,11 @@ class GitHubService:
             if isinstance(pr_identifier, str) and pr_identifier.isdigit():
                 return int(pr_identifier)
             
+            # Check if it's a JIRA ticket ID that we've mapped to a PR
+            if isinstance(pr_identifier, str) and pr_identifier in self.pr_mapping:
+                logger.info(f"Found PR mapping for ticket {pr_identifier}: PR #{self.pr_mapping[pr_identifier]}")
+                return self.pr_mapping[pr_identifier]
+            
             # Try to extract from URL: https://github.com/owner/repo/pull/123
             if isinstance(pr_identifier, str):
                 # Look for /pull/NUMBER pattern
@@ -227,13 +247,12 @@ class GitHubService:
                 hash_match = re.search(r'(?:PR)?#(\d+)', pr_identifier)
                 if hash_match:
                     return int(hash_match.group(1))
-                
-                # If it contains digits, try to extract them
-                digits_match = re.search(r'(\d+)', pr_identifier)
-                if digits_match:
-                    logger.warning(f"Falling back to extracting any digits from: {pr_identifier}")
-                    return int(digits_match.group(1))
             
+            # DO NOT extract digits from JIRA ticket IDs
+            if isinstance(pr_identifier, str) and re.match(r'^[A-Z]+-\d+$', pr_identifier):
+                logger.info(f"Not extracting PR number from JIRA ticket ID: {pr_identifier}")
+                return None
+                
             logger.error(f"Could not extract PR number from: {pr_identifier}")
             return None
             
@@ -263,7 +282,17 @@ class GitHubService:
             pr_number = self.extract_pr_number(pr_identifier)
             if pr_number is None:
                 logger.error(f"Failed to extract PR number from: {pr_identifier}")
-                return False
+                
+                # Try to find the PR by other means if it's a ticket ID
+                if isinstance(pr_identifier, str) and re.match(r'^[A-Z]+-\d+$', pr_identifier):
+                    pr_info = self.find_pr_for_ticket(pr_identifier)
+                    if pr_info and 'number' in pr_info:
+                        pr_number = pr_info['number']
+                        logger.info(f"Found PR #{pr_number} for ticket {pr_identifier}")
+                    else:
+                        return False
+                else:
+                    return False
             
             try:
                 pull = repo.get_pull(pr_number)
@@ -543,6 +572,21 @@ class GitHubService:
         try:
             repo = self.client.get_repo(self.default_repo)
             
+            # Check if we already have a mapping for this ticket
+            if ticket_id in self.pr_mapping:
+                try:
+                    pr = repo.get_pull(self.pr_mapping[ticket_id])
+                    return {
+                        "number": pr.number,
+                        "url": pr.html_url,
+                        "title": pr.title,
+                        "state": pr.state,
+                        "branch": pr.head.ref
+                    }
+                except Exception:
+                    # If PR not found, continue with other methods
+                    pass
+            
             # Try different branch name patterns
             branch_names = [
                 f"fix/{ticket_id}", 
@@ -559,6 +603,8 @@ class GitHubService:
                     
                     if pull_list:
                         pr = pull_list[0]  # Get the first matching PR
+                        # Store this mapping for future use
+                        self.pr_mapping[ticket_id] = pr.number
                         return {
                             "number": pr.number,
                             "url": pr.html_url,
@@ -573,6 +619,8 @@ class GitHubService:
             open_pulls = repo.get_pulls(state='open')
             for pr in open_pulls:
                 if ticket_id in pr.title or ticket_id in pr.body:
+                    # Store this mapping for future use
+                    self.pr_mapping[ticket_id] = pr.number
                     return {
                         "number": pr.number,
                         "url": pr.html_url,
@@ -609,6 +657,13 @@ class GitHubService:
             
             if pull_list:
                 pr = pull_list[0]  # Get the first matching PR
+                
+                # If this branch is for a ticket, add to mapping
+                match = re.search(r'fix/([A-Z]+-\d+)', branch_name)
+                if match:
+                    ticket_id = match.group(1)
+                    self.pr_mapping[ticket_id] = pr.number
+                    
                 return {
                     "number": pr.number,
                     "url": pr.html_url,

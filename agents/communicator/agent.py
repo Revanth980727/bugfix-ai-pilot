@@ -109,7 +109,7 @@ async def deploy_fix(request: DeployRequest):
         if 'github_service' in globals():
             # Create a branch for the fix
             branch_name = f"fix/{request.ticket_id}"
-            branch_created = github_service.create_fix_branch(
+            branch_created, branch_name = github_service.create_fix_branch(
                 request.ticket_id,
                 "main"  # Use main branch as base
             )
@@ -121,17 +121,14 @@ async def deploy_fix(request: DeployRequest):
             
             # Check if PR already exists
             existing_pr = github_service.check_for_existing_pr(branch_name, "main")
+            pr_number = None
+            pr_url = None
+            
             if existing_pr:
                 logger.info(f"Found existing PR for branch {branch_name}: {existing_pr['url']}")
                 pr_url = existing_pr['url']
-                # Extract PR number from URL for comment
-                pr_number = None
-                if 'number' in existing_pr:
-                    pr_number = existing_pr['number']
-                else:
-                    pr_match = re.search(r'/pull/(\d+)', pr_url)
-                    if pr_match:
-                        pr_number = pr_match.group(1)
+                # Get PR number from the existing PR
+                pr_number = existing_pr.get('number')
             else:
                 # Format the diffs for the commit
                 file_changes = []
@@ -153,7 +150,7 @@ async def deploy_fix(request: DeployRequest):
                     raise HTTPException(status_code=500, detail="Failed to commit changes")
                 
                 # Create pull request
-                pr_url = github_service.create_fix_pr(
+                pr_result = github_service.create_fix_pr(
                     branch_name,
                     request.ticket_id,
                     f"Fix for {request.ticket_id}",
@@ -161,16 +158,12 @@ async def deploy_fix(request: DeployRequest):
                     "\n".join([f"- {diff.filename}: {diff.explanation or 'No explanation provided'}" for diff in request.diffs])
                 )
                 
-                if not pr_url:
+                if not pr_result:
                     raise HTTPException(status_code=500, detail="Failed to create or find PR")
                 
-                logger.info(f"PR created or exists at: {pr_url}")
-                
-                # Extract PR number from URL for comment
-                pr_number = None
-                pr_match = re.search(r'/pull/(\d+)', pr_url)
-                if pr_match:
-                    pr_number = pr_match.group(1)
+                pr_url = pr_result.get('url')
+                pr_number = pr_result.get('number')
+                logger.info(f"PR created at: {pr_url} with number {pr_number}")
         else:
             # Fallback to github_utils
             branch_name = create_branch(
@@ -214,7 +207,7 @@ async def deploy_fix(request: DeployRequest):
             # No easy way to get PR number here
             pr_number = None
         
-        # Add a comment to the PR if it exists
+        # Add a comment to the PR if it exists and we have a PR number
         if pr_url and 'github_service' in globals() and pr_number:
             comment = f"This PR was created automatically by BugFix AI to fix issue {request.ticket_id}\n\n"
             comment += "Test results:\n"
@@ -223,13 +216,12 @@ async def deploy_fix(request: DeployRequest):
                 comment += f"- {status_emoji} {test.name}: {test.status}\n"
             
             try:
-                # Now use the extracted PR number
-                if pr_number:
-                    comment_success = github_service.add_pr_comment(pr_number, comment)
-                    if not comment_success:
-                        logger.warning(f"Failed to add comment to PR #{pr_number}")
+                # Use the PR number directly, not the ticket ID
+                comment_success = github_service.add_pr_comment(pr_number, comment)
+                if comment_success:
+                    logger.info(f"Successfully added comment to PR #{pr_number}")
                 else:
-                    logger.warning(f"Could not extract PR number from URL: {pr_url}")
+                    logger.warning(f"Failed to add comment to PR #{pr_number}")
             except Exception as e:
                 logger.error(f"Error adding comment to PR {pr_url}: {str(e)}")
         
@@ -332,22 +324,20 @@ async def post_pr_comment(pr_url: str, comment: str) -> bool:
         logger.warning("GitHub service not available for PR comment")
         return False
     
-    # Extract PR number from URL - now using improved extraction
-    # Instead of simple regex match that expects specific format
+    # Extract PR number from URL
     pr_number = None
     
-    # Try different PR extraction methods
     try:
         # First, try URL pattern extraction
         pr_match = re.search(r'/pull/(\d+)', pr_url)
         if pr_match:
-            pr_number = pr_match.group(1)
+            pr_number = int(pr_match.group(1))
+            logger.info(f"Extracted PR number {pr_number} from URL")
         else:
-            # If URL extraction fails, try letting the service handle it directly
-            # The github service now has robust PR identifier handling
-            pr_number = pr_url
+            logger.warning(f"Could not extract PR number from URL: {pr_url}")
+            return False
             
-        logger.info(f"Attempting to post comment using PR identifier: {pr_number}")
+        logger.info(f"Attempting to post comment to PR #{pr_number}")
         
         # Try up to 3 times with a delay between attempts
         max_retries = 3
@@ -355,7 +345,7 @@ async def post_pr_comment(pr_url: str, comment: str) -> bool:
         
         for attempt in range(1, max_retries + 1):
             try:
-                # Use the GitHub service to post the comment
+                # Use the GitHub service to post the comment using the PR number
                 result = github_service.add_pr_comment(pr_number, comment)
                 if result:
                     logger.info(f"Successfully added comment to PR on attempt {attempt}")
