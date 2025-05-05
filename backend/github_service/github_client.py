@@ -1,15 +1,17 @@
+
 import os
 import base64
 import requests
 from typing import Dict, Any, List, Optional, Tuple
-from .logger import Logger
+import logging  # Use standard logging instead of custom Logger
 
 class GitHubClient:
     """Client for interacting with the GitHub API"""
     
     def __init__(self):
         """Initialize GitHub client with environment variables"""
-        self.logger = Logger("github_client")
+        # Set up logging
+        self.logger = logging.getLogger("github_client")
         
         # Get credentials from environment variables
         self.github_token = os.environ.get("GITHUB_TOKEN")
