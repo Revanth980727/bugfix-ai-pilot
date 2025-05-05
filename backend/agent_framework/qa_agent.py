@@ -43,6 +43,9 @@ class QAAgent(Agent):
             "success": False
         }
         
+        # Log the developer agent input
+        logger.info(f"QA Agent received developer input with success={input_data.get('success', False)}")
+        
         # Validate developer input
         if not self._validate_developer_input(input_data, result):
             result["error_message"] = "Invalid input from developer agent"
@@ -50,7 +53,7 @@ class QAAgent(Agent):
             return result
             
         # Check if developer agent reported success
-        if input_data.get("success") is False:
+        if not input_data.get("success", False):
             result["error_message"] = "Developer agent reported failure"
             logger.error("Developer agent reported failure, skipping QA tests")
             return result
@@ -80,6 +83,7 @@ class QAAgent(Agent):
             result["test_results"] = self._parse_test_output(test_output)
             result["execution_time"] = self._calculate_execution_time(test_output)
             
+        logger.info(f"QA Agent completed with success={result['success']}")
         return result
         
     def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:

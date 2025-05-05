@@ -47,7 +47,7 @@ class DeveloperAgent(Agent):
             "commit_message": "",
             "attempt": input_data.get("context", {}).get("attempt", 1),
             "error": None,
-            "success": False
+            "success": False  # Initialize as False, will be set to True only if all steps succeed
         }
         
         try:
@@ -75,7 +75,8 @@ class DeveloperAgent(Agent):
                 return result
                 
             # Apply the generated fix to the codebase
-            if not self.apply_patch(result):
+            patch_applied = self.apply_patch(result)
+            if not patch_applied:
                 logger.error("Failed to apply patch")
                 result["error"] = "Failed to apply generated patch"
                 return result
@@ -88,11 +89,19 @@ class DeveloperAgent(Agent):
                 
             # If we got here, mark as success
             result["success"] = True
+            logger.info("Developer agent completed successfully with valid output structure")
+            
+            # Final logging of the result
+            logger.info(f"Developer result - success: {result['success']}, "
+                      f"patched_files: {result['patched_files']}, "
+                      f"confidence_score: {result['confidence_score']}")
+            
             return result
             
         except Exception as e:
             logger.error(f"Error in developer agent: {str(e)}")
             result["error"] = f"Error in developer agent: {str(e)}"
+            result["success"] = False
             return result
             
     def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -311,16 +320,38 @@ class DeveloperAgent(Agent):
             for file_path in patched_files:
                 if file_path in patched_code:
                     # Create directory if it doesn't exist
-                    os.makedirs(os.path.dirname(os.path.join(repo_path, file_path)), exist_ok=True)
+                    full_path = os.path.join(repo_path, file_path)
+                    os.makedirs(os.path.dirname(full_path), exist_ok=True)
                     
                     # Write file
-                    with open(os.path.join(repo_path, file_path), "w") as f:
+                    with open(full_path, "w") as f:
                         f.write(patched_code[file_path])
                     
                     logger.info(f"Applied patch to {file_path}")
                 else:
                     logger.warning(f"File {file_path} in patched_files but not in patched_code")
                     
+            # Verify changes were actually made using git diff
+            try:
+                diff_process = subprocess.run(
+                    ["git", "diff", "--exit-code"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True
+                )
+                
+                # If git diff exits with code 0, there are no changes
+                if diff_process.returncode == 0:
+                    logger.warning("No code changes detected by git diff after applying patch")
+                    return False
+                    
+                # Changes detected
+                logger.info("Code changes confirmed by git diff")
+                
+            except Exception as e:
+                logger.error(f"Error checking for code changes: {str(e)}")
+                # Continue anyway since this is just a verification step
+                
             return True
             
         except Exception as e:

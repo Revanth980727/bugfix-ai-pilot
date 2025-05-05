@@ -1,4 +1,3 @@
-
 import os
 import logging
 import json
@@ -69,10 +68,23 @@ class GitHubService:
         if not commit_message:
             commit_message = f"Fix bug for {ticket_id}"
             
+        # Log received data
+        self.logger.info(f"Committing bug fix for ticket {ticket_id} to branch {branch_name}")
+        self.logger.info(f"Number of file changes: {len(file_changes) if file_changes else 0}")
+            
         try:
+            # Validate file changes input
+            if not file_changes or not isinstance(file_changes, list):
+                self.logger.error(f"Invalid file_changes: {file_changes}")
+                return False
+                
             # Track files for patch
             file_paths = [change.get("filename") for change in file_changes if change.get("filename")]
             
+            if not file_paths:
+                self.logger.error("No valid file paths in file_changes")
+                return False
+                
             # Create a combined patch
             combined_patch = ""
             for change in file_changes:
