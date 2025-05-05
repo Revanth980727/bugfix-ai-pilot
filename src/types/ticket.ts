@@ -20,6 +20,13 @@ export interface Ticket {
   }>;
   early_escalation?: boolean;
   code_context?: { [filePath: string]: string }; // Added code_context property
+  github_source?: {
+    repo_owner?: string;
+    repo_name?: string;
+    branch?: string;
+    default_branch?: string;
+    patch_mode?: string;
+  };
 }
 
 export interface AffectedFile {
@@ -68,4 +75,18 @@ export interface Update {
   type: UpdateType;
   confidenceScore?: number;
   metadata?: any; // Added metadata property to support validation results and other additional data
+  github_source?: {
+    repo_owner?: string;
+    repo_name?: string;
+    branch?: string;
+    patch_mode?: string;
+  };
+}
+
+export interface GitHubConfig {
+  repo_owner: string;
+  repo_name: string;
+  default_branch: string;
+  branch: string;
+  patch_mode: 'intelligent' | 'line-by-line' | 'direct';
 }

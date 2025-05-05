@@ -1,8 +1,9 @@
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { CodeDiff } from '../types/ticket';
 import { AgentStatus } from './useDashboardState';
 import { extractGitHubSourceFromEnv, logGitHubSource, GitHubSource } from '../utils/developerSourceLogger';
+import { getGitHubConfig } from '../services/githubService';
 
 export function useDeveloperAgent() {
   const [status, setStatus] = useState<AgentStatus>('idle');
@@ -18,6 +19,29 @@ export function useDeveloperAgent() {
   const [patchMode, setPatchMode] = useState<'intelligent' | 'line-by-line' | 'direct'>('line-by-line');
   const [gitHubSource, setGitHubSource] = useState<GitHubSource | null>(null);
   const maxAttempts = 4;
+
+  // Get GitHub configuration on component mount
+  useEffect(() => {
+    const fetchGitHubConfig = async () => {
+      try {
+        const config = await getGitHubConfig();
+        if (config) {
+          setGitHubSource({
+            repo_owner: config.repo_owner,
+            repo_name: config.repo_name,
+            branch: config.branch,
+            default_branch: config.default_branch,
+            patch_mode: config.patch_mode
+          });
+          setPatchMode(config.patch_mode);
+        }
+      } catch (error) {
+        console.error('Error fetching GitHub config:', error);
+      }
+    };
+    
+    fetchGitHubConfig();
+  }, []);
 
   /**
    * Simulate developer agent work
@@ -57,10 +81,12 @@ export function useDeveloperAgent() {
       setPatchMode(options.patchMode);
     }
 
-    // Log GitHub source information
-    const source = extractGitHubSourceFromEnv();
-    setGitHubSource(source);
-    logGitHubSource(source);
+    // If GitHub source isn't set yet from config, try from env
+    if (!gitHubSource) {
+      const source = extractGitHubSourceFromEnv();
+      setGitHubSource(source);
+      logGitHubSource(source);
+    }
     
     const interval = setInterval(() => {
       setProgress(prev => {
@@ -112,11 +138,6 @@ export function useDeveloperAgent() {
     if (options?.rawResponse) {
       setRawOpenAIResponse(options.rawResponse);
     }
-
-    // Log GitHub source information for escalation
-    const source = extractGitHubSourceFromEnv();
-    setGitHubSource(source);
-    logGitHubSource(source);
   };
 
   /**

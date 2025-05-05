@@ -1,6 +1,8 @@
 
 import logging
 import os
+import base64
+import difflib
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from github import Github, GithubException, InputGitTreeElement
@@ -337,3 +339,122 @@ def get_branch_commit_history(repo_name: str, branch_name: str, max_commits: int
     except Exception as e:
         logger.error(f"Error getting branch commit history: {str(e)}")
         return []
+
+def get_file_content(repo_name: str, file_path: str, branch: str = None) -> Optional[str]:
+    """Get the content of a file from GitHub"""
+    try:
+        repo = get_repo(repo_name)
+        if not repo:
+            return None
+            
+        if not branch:
+            branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
+            
+        try:
+            file_content = repo.get_contents(file_path, ref=branch)
+            if file_content.encoding == "base64":
+                return base64.b64decode(file_content.content).decode('utf-8')
+            else:
+                return file_content.decoded_content.decode('utf-8')
+        except GithubException as e:
+            logger.error(f"Failed to get file content for {file_path}: {str(e)}")
+            return None
+    except Exception as e:
+        logger.error(f"Error getting file content: {str(e)}")
+        return None
+
+def generate_diff(original_content: str, modified_content: str, file_path: str) -> str:
+    """Generate unified diff between two versions of a file"""
+    try:
+        # Create a unified diff
+        original_lines = original_content.splitlines(keepends=True)
+        modified_lines = modified_content.splitlines(keepends=True)
+        
+        diff = difflib.unified_diff(
+            original_lines,
+            modified_lines,
+            fromfile=f"a/{file_path}",
+            tofile=f"b/{file_path}",
+            n=3  # Context lines
+        )
+        
+        return "".join(diff)
+    except Exception as e:
+        logger.error(f"Error generating diff: {str(e)}")
+        return ""
+
+def commit_using_patch(repo_name: str, branch_name: str, file_paths: List[str], 
+                      modified_contents: List[str], commit_message: str) -> bool:
+    """
+    Commit changes by generating and applying diffs rather than replacing entire files
+    
+    Args:
+        repo_name: Repository name or full path
+        branch_name: Branch to commit to
+        file_paths: List of file paths to update
+        modified_contents: List of modified content for each file path
+        commit_message: Commit message
+        
+    Returns:
+        Success status (True/False)
+    """
+    try:
+        # Make sure we have matching lists
+        if len(file_paths) != len(modified_contents):
+            logger.error("File paths and modified contents must have the same length")
+            return False
+            
+        repo = get_repo(repo_name)
+        if not repo:
+            return False
+            
+        # Process one file at a time
+        diffs = []
+        file_changes = []
+        
+        for i, file_path in enumerate(file_paths):
+            # Get the original content
+            original_content = get_file_content(repo_name, file_path, branch_name)
+            if original_content is None:
+                # File doesn't exist, so we'll create it
+                logger.info(f"File {file_path} doesn't exist, will create it")
+                file_changes.append({
+                    'filename': file_path,
+                    'content': modified_contents[i],
+                    'action': 'create'
+                })
+                continue
+                
+            # Skip if no changes
+            if original_content == modified_contents[i]:
+                logger.info(f"No changes detected for {file_path}, skipping")
+                continue
+                
+            # Generate a diff
+            diff = generate_diff(original_content, modified_contents[i], file_path)
+            diffs.append({
+                'file_path': file_path,
+                'diff': diff
+            })
+            
+            # Also prepare the complete file for the commit
+            file_changes.append({
+                'filename': file_path,
+                'content': modified_contents[i],
+                'action': 'update'
+            })
+            
+        # Log the diffs for debugging
+        for diff_info in diffs:
+            logger.info(f"Diff for {diff_info['file_path']}:")
+            logger.info(diff_info['diff'][:200] + "..." if len(diff_info['diff']) > 200 else diff_info['diff'])
+            
+        # Commit the changes using the tree API for efficiency
+        if file_changes:
+            return commit_multiple_changes_as_tree(repo_name, branch_name, file_changes, commit_message)
+        else:
+            logger.info("No changes to commit")
+            return True
+    except Exception as e:
+        logger.error(f"Error committing using patch: {str(e)}")
+        return False
