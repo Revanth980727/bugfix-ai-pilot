@@ -52,6 +52,16 @@ export function usePlannerAgent() {
     }, 100);
   };
 
+  // Add function to validate that analysis is complete
+  const validateAnalysis = (analysis: PlannerAnalysis): boolean => {
+    return !!(
+      analysis.ticket_id &&
+      analysis.bug_summary &&
+      analysis.affected_files &&
+      analysis.error_type
+    );
+  };
+
   const reset = () => {
     setStatus('idle');
     setProgress(0);
@@ -64,6 +74,7 @@ export function usePlannerAgent() {
     analysis,
     simulateWork,
     simulateWorkWithFallback,
+    validateAnalysis,
     reset
   };
 }

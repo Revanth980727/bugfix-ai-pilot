@@ -6,7 +6,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { AgentStatus } from '@/hooks/useDashboardState';
 import { Badge } from '@/components/ui/badge';
 import { AffectedFile } from '@/types/ticket';
-import { CheckCircle2, XCircle } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 
 interface PlannerAgentProps {
   status: AgentStatus;
@@ -43,6 +43,9 @@ export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) 
   const errorType = analysis?.error_type;
   const usingFallback = analysis?.using_fallback;
   
+  // Check if analysis is incomplete
+  const isIncomplete = analysis && (!bugSummary || !errorType || affectedFiles.length === 0);
+  
   return (
     <AgentCard title="Planner" type="planner" status={status} progress={progress}>
       {status === 'idle' && (
@@ -69,6 +72,13 @@ export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) 
             <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300">
               Fallback Analysis
             </Badge>
+          )}
+          
+          {isIncomplete && (
+            <div className="flex items-center gap-2 text-amber-700 bg-amber-50 p-2 rounded">
+              <AlertTriangle className="h-4 w-4" />
+              <span className="text-xs">Analysis may be incomplete</span>
+            </div>
           )}
           
           <Tabs defaultValue="summary" className="w-full">

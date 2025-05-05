@@ -31,9 +31,17 @@ def test_agent_workflow():
         # Planner analysis
         plan = planner.process(ticket_data)
         logger.info(f"Planner status: {planner.status}")
+        logger.info(f"Planner output: {plan}")
         
         # Developer implementation
-        dev_result = developer.process(plan)
+        # Make sure all relevant information from planner is passed to developer
+        dev_input = {
+            **plan,  # Include all planner output
+            "ticket_id": ticket_data["ticket_id"],
+            "title": ticket_data["title"],
+            "description": ticket_data["description"]
+        }
+        dev_result = developer.process(dev_input)
         logger.info(f"Developer status: {developer.status}")
         
         # QA testing
@@ -54,4 +62,3 @@ def test_agent_workflow():
 
 if __name__ == "__main__":
     test_agent_workflow()
-
