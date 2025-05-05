@@ -113,7 +113,7 @@ async def cleanup_old_logs(days):
             dir_path = os.path.join("logs", log_dir)
             
             # Skip if not a ticket log directory
-            if not (log_dir.startswith("DEMO-") or log_dir.startswith("BUG-") or log_dir.startswith("FEAT-")):
+            if not (log_dir.startswith("DEMO-") or log_dir.startswith("BUG-") or log_dir.startswith("FEAT-") or log_dir.startswith("SCRUM-")):
                 continue
                 
             # Check modification time of directory

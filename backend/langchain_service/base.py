@@ -1,79 +1,109 @@
 
+import json
 import logging
-from typing import Dict, List, Any, Optional
-from langchain.chains import LLMChain
-from langchain.llms.openai import OpenAI
-from langchain.prompts import PromptTemplate
-from langchain.memory import ConversationBufferMemory
-from langchain.agents import Tool, AgentExecutor, LLMSingleActionAgent, AgentOutputParser
-from langchain.schema import AgentAction, AgentFinish
 import re
-import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+from typing import Dict, Any, List, Union, Optional
+from langchain.schema import AgentAction, AgentFinish
+from langchain.agents import AgentOutputParser
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("langchain-service")
-
-class TicketMemory:
-    """Memory manager for ticket processing workflow"""
-    
-    def __init__(self):
-        # Initialize shared memory for all tickets
-        self.memories = {}
-        
-    def get_memory(self, ticket_id: str) -> ConversationBufferMemory:
-        """Get or create memory for a specific ticket"""
-        if ticket_id not in self.memories:
-            self.memories[ticket_id] = ConversationBufferMemory(memory_key="chat_history")
-        return self.memories[ticket_id]
-    
-    def save_to_memory(self, ticket_id: str, role: str, content: str) -> None:
-        """Save an interaction to memory"""
-        memory = self.get_memory(ticket_id)
-        memory.chat_memory.add_user_message(f"[{role}] {content}")
-        
-    def get_memory_context(self, ticket_id: str) -> str:
-        """Get the current memory context as a string"""
-        if ticket_id not in self.memories:
-            return ""
-        
-        return self.memories[ticket_id].buffer
-    
-    def clear_memory(self, ticket_id: str) -> None:
-        """Clear memory for a ticket when processing completes"""
-        if ticket_id in self.memories:
-            del self.memories[ticket_id]
-            logger.info(f"Memory cleared for ticket {ticket_id}")
-
-# Create a singleton instance
-ticket_memory = TicketMemory()
+logger = logging.getLogger("langchain-base")
 
 class OrchestratorOutputParser(AgentOutputParser):
-    """Parser for orchestrator outputs that handles agent decisions"""
+    """Parser for orchestrator agent output"""
     
-    def parse(self, llm_output: str) -> AgentAction or AgentFinish:
-        # Check if the output indicates a final decision
-        if "Final Answer:" in llm_output:
+    def parse(self, text: str) -> Union[AgentAction, AgentFinish]:
+        """Parse text into agent action or finish"""
+        # Check if this is a final answer
+        if "Final Answer:" in text:
             return AgentFinish(
-                return_values={"output": llm_output.split("Final Answer:")[-1].strip()},
-                log=llm_output
+                return_values={"output": text.split("Final Answer:")[-1].strip()},
+                log=text,
             )
         
-        # Parse the action and input
-        regex = r"Action: (.*?)\nAction Input: (.*)"
-        match = re.search(regex, llm_output, re.DOTALL)
+        # Parse out the action and action input
+        regex = r"Action: (.*?)[\n]*Action Input: (.*)"
+        match = re.search(regex, text, re.DOTALL)
         
         if not match:
+            logger.warning(f"Could not parse LLM output: {text}")
             return AgentFinish(
-                return_values={"output": "Could not parse LLM output: " + llm_output},
-                log=llm_output,
+                return_values={"output": "I couldn't determine what to do next. Please try again."},
+                log=text,
             )
             
         action = match.group(1).strip()
         action_input = match.group(2).strip()
         
-        return AgentAction(tool=action, tool_input=action_input, log=llm_output)
+        # Some cleanup for JSON strings
+        if action_input.startswith("```json"):
+            action_input = action_input[7:-3].strip()
+        elif action_input.startswith("```"):
+            action_input = action_input[3:-3].strip()
+            
+        return AgentAction(tool=action, tool_input=action_input, log=text)
+
+
+class TicketMemory:
+    """In-memory storage for ticket processing data"""
+    
+    def __init__(self):
+        self.memories = {}
+        self.agent_results = {}
+        
+    def save_to_memory(self, ticket_id: str, source: str, message: str):
+        """Save a message to the ticket's memory"""
+        if ticket_id not in self.memories:
+            self.memories[ticket_id] = []
+            
+        self.memories[ticket_id].append({
+            "source": source,
+            "message": message
+        })
+        
+    def get_memory(self, ticket_id: str):
+        """Get the memory buffer for a ticket"""
+        if ticket_id not in self.memories:
+            return None
+            
+        # Create a ConversationBufferMemory-like object
+        class MemoryBuffer:
+            def __init__(self, buffer):
+                self.buffer = buffer
+                
+        buffer = "\n".join([f"{mem['source']}: {mem['message']}" for mem in self.memories[ticket_id]])
+        return MemoryBuffer(buffer)
+        
+    def get_memory_context(self, ticket_id: str) -> List[Dict[str, str]]:
+        """Get memory as a context list"""
+        if ticket_id not in self.memories:
+            return []
+            
+        return self.memories[ticket_id]
+        
+    def clear_memory(self, ticket_id: str):
+        """Clear the memory for a ticket"""
+        if ticket_id in self.memories:
+            del self.memories[ticket_id]
+    
+    def save_agent_result(self, ticket_id: str, agent_type: str, result: Dict[str, Any]):
+        """Save complete agent result for retrieval by other agents"""
+        if ticket_id not in self.agent_results:
+            self.agent_results[ticket_id] = {}
+        
+        # Store the complete result
+        self.agent_results[ticket_id][agent_type] = result
+        logger.info(f"Saved {agent_type} result for ticket {ticket_id} with keys: {list(result.keys())}")
+    
+    def get_agent_result(self, ticket_id: str, agent_type: str) -> Optional[Dict[str, Any]]:
+        """Get the stored result for a specific agent and ticket"""
+        if ticket_id not in self.agent_results or agent_type not in self.agent_results[ticket_id]:
+            logger.warning(f"No {agent_type} result found for ticket {ticket_id}")
+            return None
+        
+        return self.agent_results[ticket_id][agent_type]
+
+
+# Singleton instance of TicketMemory
+ticket_memory = TicketMemory()

@@ -20,6 +20,7 @@ logger = logging.getLogger("jira-service")
 
 # Import after setting up paths
 from jira_service.jira_service import main
+from langchain_service.base import ticket_memory
 
 if __name__ == "__main__":
     try:
@@ -27,6 +28,12 @@ if __name__ == "__main__":
         
         # Set environment variable to indicate we're in the JIRA service
         os.environ["SERVICE_NAME"] = "jira_service"
+        
+        # Ensure debug logs directory exists
+        os.makedirs("debug_logs", exist_ok=True)
+        
+        # Initialize ticket memory system
+        logger.info("Initializing ticket memory system")
         
         # Run the service
         asyncio.run(main())

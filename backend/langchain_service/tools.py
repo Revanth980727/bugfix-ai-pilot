@@ -45,6 +45,9 @@ class AgentTools:
             # Debug log the result
             logger.debug(f"Planner result: {json.dumps(result, indent=2)}")
             
+            # Store complete result in memory for other agents to access
+            ticket_memory.save_agent_result(ticket_id, "planner", result)
+            
             return json.dumps(result)
         except Exception as e:
             logger.error(f"Error running planner agent: {str(e)}")
@@ -82,6 +85,9 @@ class AgentTools:
                 f"Generated fix for attempt {attempt} with confidence score: {confidence}%"
             )
             
+            # Store complete result in memory for QA agent to access
+            ticket_memory.save_agent_result(ticket_id, "developer", result)
+            
             # Log the keys in result for debugging
             logger.info(f"Developer result keys: {list(result.keys())}")
             
@@ -100,6 +106,20 @@ class AgentTools:
             logger.info(f"Running QA agent for ticket {ticket_id}")
             logger.info(f"QA input keys: {list(input_data.keys())}")
             
+            # Retrieve developer result from memory to ensure QA has complete data
+            developer_result = ticket_memory.get_agent_result(ticket_id, "developer")
+            if developer_result:
+                logger.info(f"Found developer result in memory with keys: {list(developer_result.keys())}")
+                
+                # Merge developer result with QA input to ensure all data is passed
+                for key, value in developer_result.items():
+                    if key not in input_data:
+                        input_data[key] = value
+                        
+                logger.info(f"Enhanced QA input now has keys: {list(input_data.keys())}")
+            else:
+                logger.warning(f"No developer result found in memory for ticket {ticket_id}")
+            
             # Debug: Write QA input to file for inspection
             debug_dir = "debug_logs"
             os.makedirs(debug_dir, exist_ok=True)
@@ -114,6 +134,9 @@ class AgentTools:
             failure_summary = result.get("failure_summary", "")
             message = f"QA tests {passed}. {failure_summary if failure_summary else ''}"
             ticket_memory.save_to_memory(ticket_id, "QA", message)
+            
+            # Store complete result in memory for other agents to access
+            ticket_memory.save_agent_result(ticket_id, "qa", result)
             
             return json.dumps(result)
         except Exception as e:
@@ -130,6 +153,35 @@ class AgentTools:
             logger.info(f"Running communicator agent for ticket {ticket_id}")
             logger.info(f"Communicator input keys: {list(input_data.keys())}")
             
+            # Retrieve developer and QA results from memory to ensure communicator has complete data
+            developer_result = ticket_memory.get_agent_result(ticket_id, "developer")
+            qa_result = ticket_memory.get_agent_result(ticket_id, "qa")
+            
+            if developer_result:
+                logger.info("Found developer result in memory")
+                # Add developer result to input if not already present
+                for key, value in developer_result.items():
+                    if key not in input_data:
+                        input_data[key] = value
+                        
+                # Ensure developer_result is available as a nested object too
+                if "developer_result" not in input_data:
+                    input_data["developer_result"] = developer_result
+            
+            if qa_result:
+                logger.info("Found QA result in memory")
+                # Add test results if not already present
+                if "test_results" not in input_data and "test_results" in qa_result:
+                    input_data["test_results"] = qa_result["test_results"]
+                
+                # Add test passed flag if not already present
+                if "qa_passed" not in input_data:
+                    input_data["qa_passed"] = qa_result.get("passed", False)
+                    
+                # Ensure qa_result is available as a nested object too
+                if "qa_result" not in input_data:
+                    input_data["qa_result"] = qa_result
+            
             # Debug: Write communicator input to file for inspection
             debug_dir = "debug_logs"
             os.makedirs(debug_dir, exist_ok=True)
@@ -142,6 +194,9 @@ class AgentTools:
             # Store the result in memory
             status = "succeeded" if result.get("communications_success", False) else "failed"
             ticket_memory.save_to_memory(ticket_id, "Communicator", f"Communications {status}")
+            
+            # Store complete result in memory
+            ticket_memory.save_agent_result(ticket_id, "communicator", result)
             
             return json.dumps(result)
         except Exception as e:

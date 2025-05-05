@@ -44,7 +44,17 @@ class QAAgent(Agent):
         }
         
         # Log the developer agent input
-        logger.info(f"QA Agent received developer input: {json.dumps(input_data, indent=2)}")
+        logger.info(f"QA Agent received input with keys: {list(input_data.keys())}")
+        
+        # Debug input data to better diagnose issues
+        debug_dir = "debug_logs"
+        os.makedirs(debug_dir, exist_ok=True)
+        try:
+            with open(f"{debug_dir}/qa_received_input.json", "w") as f:
+                json.dump(input_data, f, indent=2)
+            logger.info(f"Saved received input to {debug_dir}/qa_received_input.json")
+        except Exception as e:
+            logger.error(f"Error saving input for debugging: {str(e)}")
         
         # Validate developer input
         if not self._validate_developer_input(input_data, result):
@@ -76,6 +86,9 @@ class QAAgent(Agent):
             result["test_results"] = self._parse_test_output(test_output)
             result["execution_time"] = self._calculate_execution_time(test_output)
             result["success"] = True
+            
+            # Add a failure_summary field for consistency even when tests pass
+            result["failure_summary"] = ""
         else:
             logger.error("Tests failed")
             result["passed"] = False
@@ -83,7 +96,10 @@ class QAAgent(Agent):
             result["test_results"] = self._parse_test_output(test_output)
             result["execution_time"] = self._calculate_execution_time(test_output)
             
-        logger.info(f"QA Agent completed with success={result['success']}")
+            # Extract a failure summary from the test output
+            result["failure_summary"] = self._extract_failure_summary(test_output)
+            
+        logger.info(f"QA Agent completed with success={result['success']} and passed={result['passed']}")
         return result
         
     def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -108,13 +124,13 @@ class QAAgent(Agent):
         validation_errors = []
         
         # Log the received input keys to help debugging
-        logger.info(f"Developer input keys: {list(input_data.keys())}")
+        logger.info(f"Validating developer input with keys: {list(input_data.keys())}")
         
         # Check if patched_code exists and is not empty
         if "patched_code" not in input_data:
             validation_errors.append("Missing patched_code in developer output")
             valid = False
-            logger.error("Missing patched_code in developer output")
+            logger.error(f"Missing patched_code in developer output. Keys available: {list(input_data.keys())}")
         elif not input_data["patched_code"]:
             validation_errors.append("Empty patched_code in developer output")
             valid = False
@@ -126,7 +142,7 @@ class QAAgent(Agent):
         if "confidence_score" not in input_data:
             validation_errors.append("Missing confidence_score in developer output")
             valid = False
-            logger.error("Missing confidence_score in developer output")
+            logger.error(f"Missing confidence_score in developer output. Keys available: {list(input_data.keys())}")
         elif input_data.get("confidence_score", 0) <= 0:
             validation_errors.append(f"Invalid confidence score: {input_data.get('confidence_score', 0)}")
             valid = False
@@ -138,7 +154,7 @@ class QAAgent(Agent):
         if "patched_files" not in input_data:
             validation_errors.append("Missing patched_files in developer output")
             valid = False
-            logger.error("Missing patched_files in developer output")
+            logger.error(f"Missing patched_files in developer output. Keys available: {list(input_data.keys())}")
         elif not input_data.get("patched_files", []):
             validation_errors.append("Empty patched_files list in developer output")
             valid = False
@@ -146,12 +162,23 @@ class QAAgent(Agent):
         else:
             logger.info(f"Found patched_files: {input_data.get('patched_files')}")
             
+        # Add relaxed validation - if we have diffs but not patched_code or patched_files
+        if "diffs" in input_data and input_data.get("diffs") and "patched_code" not in input_data:
+            logger.warning("Using 'diffs' instead of missing 'patched_code'")
+            input_data["patched_code"] = {d["file"]: d["content"] for d in input_data["diffs"] if "file" in d and "content" in d}
+            if not "patched_files" in input_data:
+                input_data["patched_files"] = [d["file"] for d in input_data["diffs"] if "file" in d]
+            logger.info(f"Constructed patched_code and patched_files from diffs: {list(input_data['patched_code'].keys())}")
+            
         # Log validation results
         if validation_errors:
             result["validation_errors"] = validation_errors
             logger.warning(f"Developer input validation failed: {validation_errors}")
             try:
-                logger.warning(f"Developer input dump: {json.dumps(input_data, indent=2)}")
+                # Log a limited sample of the input for debugging
+                sample_input = {k: str(v)[:100] + "..." if isinstance(v, str) and len(str(v)) > 100 else v 
+                              for k, v in input_data.items()}
+                logger.warning(f"Developer input sample: {json.dumps(sample_input, indent=2)}")
             except Exception as e:
                 logger.warning(f"Could not serialize developer input for logging: {str(e)}")
                 # Try to log keys at least
@@ -253,3 +280,28 @@ class QAAgent(Agent):
         # Simple implementation - in a real system, you would extract the actual
         # execution time from the test output
         return 1.5  # Mock execution time
+        
+    def _extract_failure_summary(self, output: str) -> str:
+        """
+        Extract a concise failure summary from test output
+        
+        Args:
+            output: Test output
+            
+        Returns:
+            Concise failure summary
+        """
+        # Look for common failure patterns in test output
+        failure_lines = []
+        
+        # Process the output line by line to extract key failure information
+        for line in output.split('\n'):
+            if "FAILED" in line or "Error:" in line or "Exception:" in line:
+                failure_lines.append(line.strip())
+                
+        # If we found specific failure lines, join them
+        if failure_lines:
+            return "\n".join(failure_lines[:3])  # Limit to first 3 failures for conciseness
+            
+        # Fallback: Return a generic message with a snippet of the output
+        return f"Tests failed. Output: {output[:200]}..." if len(output) > 200 else output
