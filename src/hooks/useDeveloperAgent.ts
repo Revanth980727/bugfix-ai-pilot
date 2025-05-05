@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { CodeDiff } from '../types/ticket';
 import { AgentStatus } from './useDashboardState';
+import { extractGitHubSourceFromEnv, logGitHubSource, GitHubSource } from '../utils/developerSourceLogger';
 
 export function useDeveloperAgent() {
   const [status, setStatus] = useState<AgentStatus>('idle');
@@ -15,6 +16,7 @@ export function useDeveloperAgent() {
   const [rawOpenAIResponse, setRawOpenAIResponse] = useState<string | null>(null);
   const [responseQuality, setResponseQuality] = useState<'good' | 'generic' | 'invalid' | undefined>(undefined);
   const [patchMode, setPatchMode] = useState<'intelligent' | 'line-by-line' | 'direct'>('line-by-line');
+  const [gitHubSource, setGitHubSource] = useState<GitHubSource | null>(null);
   const maxAttempts = 4;
 
   /**
@@ -54,6 +56,11 @@ export function useDeveloperAgent() {
     if (options?.patchMode) {
       setPatchMode(options.patchMode);
     }
+
+    // Log GitHub source information
+    const source = extractGitHubSourceFromEnv();
+    setGitHubSource(source);
+    logGitHubSource(source);
     
     const interval = setInterval(() => {
       setProgress(prev => {
@@ -105,6 +112,11 @@ export function useDeveloperAgent() {
     if (options?.rawResponse) {
       setRawOpenAIResponse(options.rawResponse);
     }
+
+    // Log GitHub source information for escalation
+    const source = extractGitHubSourceFromEnv();
+    setGitHubSource(source);
+    logGitHubSource(source);
   };
 
   /**
@@ -121,6 +133,7 @@ export function useDeveloperAgent() {
     setPatchAnalytics(null);
     setRawOpenAIResponse(null);
     setResponseQuality(undefined);
+    setGitHubSource(null);
   };
 
   return {
@@ -136,6 +149,7 @@ export function useDeveloperAgent() {
     rawOpenAIResponse,
     responseQuality,
     patchMode,
+    gitHubSource,
     simulateWork,
     simulateFailure,
     simulateEarlyEscalation,
