@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import os
@@ -30,6 +29,18 @@ async def run_controller():
     """Main controller loop that runs every 60 seconds"""
     while True:
         try:
+            # First, check if git is installed
+            try:
+                import subprocess
+                result = subprocess.run(['which', 'git'], capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.error("Git is not installed in the container. This will cause issues with git operations.")
+                    logger.error("Please rebuild the container with git installed.")
+                else:
+                    logger.info(f"Git is installed at: {result.stdout.strip()}")
+            except Exception as git_check_error:
+                logger.error(f"Error checking for git: {git_check_error}")
+            
             # Fetch new tickets from JIRA
             new_tickets = await fetch_jira_tickets()
             

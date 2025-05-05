@@ -1,4 +1,3 @@
-
 import os
 import logging
 import json
@@ -28,6 +27,18 @@ class CommunicatorAgent:
         # Check if we're configured to use only the default branch
         self.use_default_branch_only = os.environ.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", "False").lower() == "true"
         self.default_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
+        
+    def run(self, communication_task: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute communication tasks based on the results of previous agents
+        
+        Args:
+            communication_task: Dictionary with task details
+                
+        Returns:
+            Dictionary with results of the communication tasks
+        """
+        return self.process(communication_task)
         
     def process(self, communication_task: Dict[str, Any]) -> Dict[str, Any]:
         """
