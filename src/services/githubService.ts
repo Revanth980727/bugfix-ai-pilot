@@ -1,3 +1,4 @@
+
 import { GitHubConfig } from '@/types/ticket';
 import { isValidGitHubSource, diagnoseGitHubAccessIssues } from '@/utils/developerSourceLogger';
 
@@ -262,7 +263,8 @@ export const extractPRNumber = (prIdentifier: string | number): number | null =>
     return parseInt(urlMatch[1], 10);
   }
   
-  // Don't extract numbers from JIRA ticket IDs
+  // IMPORTANT: Do NOT extract numbers from JIRA ticket IDs
+  // Previously, we would extract digits from SCRUM-2 to get PR #2, which is incorrect
   if (/^[A-Z]+-\d+$/.test(prIdentifier)) {
     console.log(`Not extracting PR number from JIRA ticket ID: ${prIdentifier}`);
     return null;
