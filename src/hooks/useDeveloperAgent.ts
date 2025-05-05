@@ -30,10 +30,10 @@ export function useDeveloperAgent() {
             repo_owner: config.repo_owner,
             repo_name: config.repo_name,
             branch: config.branch,
-            default_branch: config.default_branch,
-            patch_mode: config.patch_mode
+            default_branch: config.default_branch || 'main', // Provide default value
+            patch_mode: config.patch_mode || 'line-by-line' // Provide default value
           });
-          setPatchMode(config.patch_mode);
+          setPatchMode(config.patch_mode || 'line-by-line');
         }
       } catch (error) {
         console.error('Error fetching GitHub config:', error);
@@ -84,6 +84,9 @@ export function useDeveloperAgent() {
     // If GitHub source isn't set yet from config, try from env
     if (!gitHubSource) {
       const source = extractGitHubSourceFromEnv();
+      // Ensure default_branch and patch_mode have fallback values
+      source.default_branch = source.default_branch || 'main';
+      source.patch_mode = source.patch_mode || 'line-by-line';
       setGitHubSource(source);
       logGitHubSource(source);
     }

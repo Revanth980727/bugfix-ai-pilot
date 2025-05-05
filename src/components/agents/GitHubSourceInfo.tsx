@@ -21,6 +21,11 @@ const GitHubSourceInfo: React.FC<GitHubSourceInfoProps> = ({ source }) => {
     ? `${repoUrl}/tree/${source.branch}` 
     : null;
 
+  // Ensure we have a branch to display, using fallbacks
+  const displayBranch = source.branch || source.default_branch || 'main';
+  // Ensure we have a patch_mode to display, using fallback
+  const displayPatchMode = source.patch_mode || 'line-by-line';
+
   return (
     <Alert className="mb-4 bg-muted/50">
       <div className="flex items-center gap-2">
@@ -53,18 +58,16 @@ const GitHubSourceInfo: React.FC<GitHubSourceInfoProps> = ({ source }) => {
                 rel="noopener noreferrer"
                 className="text-blue-600 hover:underline dark:text-blue-400"
               >
-                {source.branch || source.default_branch}
+                {displayBranch}
               </a>
             ) : (
-              <span>{source.branch || source.default_branch}</span>
+              <span>{displayBranch}</span>
             )}
           </div>
-          {source.patch_mode && (
-            <div className="flex justify-between">
-              <span className="font-medium">Patch Mode:</span>
-              <span>{source.patch_mode}</span>
-            </div>
-          )}
+          <div className="flex justify-between">
+            <span className="font-medium">Patch Mode:</span>
+            <span>{displayPatchMode}</span>
+          </div>
         </div>
       </AlertDescription>
     </Alert>
