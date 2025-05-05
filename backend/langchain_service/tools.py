@@ -1,14 +1,15 @@
-
 import json
 import logging
 import os
 from typing import Dict, List, Any, Optional
 from langchain.agents import Tool
-from ..agent_framework.planner_agent import PlannerAgent
-from ..agent_framework.developer_agent import DeveloperAgent
-from ..agent_framework.qa_agent import QAAgent
-from ..agent_framework.communicator_agent import CommunicatorAgent
-from .base import ticket_memory
+
+# Use absolute imports instead of relative
+from backend.agent_framework.planner_agent import PlannerAgent
+from backend.agent_framework.developer_agent import DeveloperAgent
+from backend.agent_framework.qa_agent import QAAgent
+from backend.agent_framework.communicator_agent import CommunicatorAgent
+from backend.langchain_service.base import ticket_memory
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
