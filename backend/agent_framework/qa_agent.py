@@ -4,12 +4,13 @@ import logging
 import subprocess
 import json
 from typing import Dict, Any, Optional, List
+from .agent_base import Agent
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("qa_agent")
 
-class QAAgent:
+class QAAgent(Agent):
     """
     Agent responsible for running tests to validate developer-generated fixes.
     Ensures that fixes pass all tests before proceeding.
@@ -17,10 +18,9 @@ class QAAgent:
     
     def __init__(self):
         """Initialize the QA agent"""
-        self.status = "idle"
-        self.name = "QA Agent"
+        super().__init__(name="QA Agent")
     
-    def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process input from developer agent and run tests to validate the fix
         
@@ -31,7 +31,6 @@ class QAAgent:
             Dictionary with test results
         """
         logger.info("QA Agent starting test process")
-        self.status = "running"
         
         # Initialize result structure
         result = {
@@ -40,20 +39,25 @@ class QAAgent:
             "execution_time": 0,
             "error_message": None,
             "code_changes_detected": False,
-            "validation_errors": []
+            "validation_errors": [],
+            "success": False
         }
         
         # Validate developer input
         if not self._validate_developer_input(input_data, result):
-            self.status = "failed"
             result["error_message"] = "Invalid input from developer agent"
             logger.error(f"Developer input validation failed: {result['validation_errors']}")
+            return result
+            
+        # Check if developer agent reported success
+        if input_data.get("success") is False:
+            result["error_message"] = "Developer agent reported failure"
+            logger.error("Developer agent reported failure, skipping QA tests")
             return result
             
         # Verify that code changes were actually made
         logger.info("Verifying code changes")
         if not self._verify_code_changes(result):
-            self.status = "failed"
             result["error_message"] = "No code changes detected"
             logger.error("No code changes detected in the repository")
             return result
@@ -68,6 +72,7 @@ class QAAgent:
             result["passed"] = True
             result["test_results"] = self._parse_test_output(test_output)
             result["execution_time"] = self._calculate_execution_time(test_output)
+            result["success"] = True
         else:
             logger.error("Tests failed")
             result["passed"] = False
@@ -75,8 +80,14 @@ class QAAgent:
             result["test_results"] = self._parse_test_output(test_output)
             result["execution_time"] = self._calculate_execution_time(test_output)
             
-        self.status = "success" if result["passed"] else "failed"
         return result
+        
+    def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Legacy method for backwards compatibility.
+        Delegates to run() method.
+        """
+        return self.run(input_data)
         
     def _validate_developer_input(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
         """
@@ -120,7 +131,10 @@ class QAAgent:
         if validation_errors:
             result["validation_errors"] = validation_errors
             logger.warning(f"Developer input validation failed: {validation_errors}")
-            logger.warning(f"Developer input: {json.dumps(input_data, indent=2)}")
+            try:
+                logger.warning(f"Developer input: {json.dumps(input_data, indent=2)}")
+            except:
+                logger.warning("Could not serialize developer input for logging")
         
         return valid
         
@@ -216,12 +230,3 @@ class QAAgent:
         # Simple implementation - in a real system, you would extract the actual
         # execution time from the test output
         return 1.5  # Mock execution time
-        
-    def report(self) -> str:
-        """
-        Generate a report of the agent's activity
-        
-        Returns:
-            String with report
-        """
-        return f"QA Agent Status: {self.status}"

@@ -15,6 +15,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+# Import after setting up paths
 from jira_service.jira_service import main
 
 if __name__ == "__main__":

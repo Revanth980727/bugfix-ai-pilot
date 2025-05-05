@@ -1,14 +1,16 @@
+
 import os
 import logging
 import json
 import subprocess
 from typing import Dict, Any, List, Optional
+from .agent_base import Agent
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("developer_agent")
 
-class DeveloperAgent:
+class DeveloperAgent(Agent):
     """
     Agent responsible for generating code fixes based on the analysis from the planner.
     Produces patches that can be applied to the codebase to fix the identified bugs.
@@ -21,11 +23,10 @@ class DeveloperAgent:
         Args:
             max_retries: Maximum number of retry attempts for generating a fix
         """
-        self.status = "idle"
-        self.name = "Developer Agent"
+        super().__init__(name="Developer Agent")
         self.max_retries = max_retries
         
-    def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process input from planner and generate code fixes
         
@@ -36,7 +37,6 @@ class DeveloperAgent:
             Dictionary with code fixes and metadata
         """
         logger.info("Developer Agent starting code fix generation")
-        self.status = "running"
         
         # Initialize result structure - ensure it always has the required fields
         result = {
@@ -46,7 +46,8 @@ class DeveloperAgent:
             "confidence_score": 0,
             "commit_message": "",
             "attempt": input_data.get("context", {}).get("attempt", 1),
-            "error": None
+            "error": None,
+            "success": False
         }
         
         try:
@@ -57,7 +58,6 @@ class DeveloperAgent:
             if not self._validate_input(input_data):
                 logger.error("Invalid input data")
                 result["error"] = "Invalid input data from planner"
-                self.status = "failed"
                 return result
                 
             # In a real system, here you would:
@@ -72,31 +72,35 @@ class DeveloperAgent:
             if not fix_generated:
                 logger.error("Failed to generate fix")
                 result["error"] = "Failed to generate code fix"
-                self.status = "failed"
                 return result
                 
             # Apply the generated fix to the codebase
             if not self.apply_patch(result):
                 logger.error("Failed to apply patch")
                 result["error"] = "Failed to apply generated patch"
-                self.status = "failed"
                 return result
                 
             # Validate the output structure
             if not self._validate_output(result):
                 logger.error("Invalid output structure")
                 result["error"] = "Generated output does not meet required structure"
-                self.status = "failed"
                 return result
                 
-            self.status = "success"
+            # If we got here, mark as success
+            result["success"] = True
             return result
             
         except Exception as e:
             logger.error(f"Error in developer agent: {str(e)}")
             result["error"] = f"Error in developer agent: {str(e)}"
-            self.status = "failed"
             return result
+            
+    def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Legacy method for backwards compatibility.
+        Delegates to run() method.
+        """
+        return self.run(input_data)
             
     def _validate_input(self, input_data: Dict[str, Any]) -> bool:
         """
@@ -109,7 +113,7 @@ class DeveloperAgent:
             Boolean indicating if input is valid
         """
         # Check required fields
-        required_fields = ["ticket_id", "summary"]
+        required_fields = ["ticket_id"]
         for field in required_fields:
             if field not in input_data:
                 logger.error(f"Missing required field in input data: {field}")
@@ -139,7 +143,10 @@ class DeveloperAgent:
             
             # Get the ticket details
             ticket_id = input_data.get("ticket_id", "unknown")
-            summary = input_data.get("summary", "")
+            summary = input_data.get("bug_summary", input_data.get("summary", ""))
+            
+            # Log input details to help debug
+            logger.info(f"Generating fix for ticket {ticket_id} with summary: {summary}")
             
             # Check for known bug patterns in the summary
             if "import" in summary.lower() and "networkx" in summary.lower():
@@ -170,7 +177,18 @@ class DeveloperAgent:
             else:
                 # Generic fix for unknown bugs
                 logger.warning("Unknown bug type, generating generic fix")
-                affected_files = input_data.get("affected_files", ["unknown.py"])
+                affected_files = []
+                
+                # Extract affected files from input data
+                if "affected_files" in input_data and isinstance(input_data["affected_files"], list):
+                    for file_info in input_data["affected_files"]:
+                        if isinstance(file_info, dict) and "file" in file_info:
+                            affected_files.append(file_info["file"])
+                        elif isinstance(file_info, str):
+                            affected_files.append(file_info)
+                
+                if not affected_files:
+                    affected_files = ["unknown.py"]
                 
                 if affected_files and len(affected_files) > 0:
                     file_to_fix = affected_files[0]
@@ -316,4 +334,4 @@ class DeveloperAgent:
         Returns:
             String with report
         """
-        return f"Developer Agent Status: {self.status}"
+        return f"Developer Agent Status: {self.status.value if hasattr(self, 'status') else 'unknown'}"

@@ -42,6 +42,10 @@ class LangChainOrchestrator:
                 max_iterations=15
             )
             
+            # Default confidence threshold for escalations
+            self.confidence_threshold = float(os.environ.get("CONFIDENCE_THRESHOLD", "70"))
+            logger.info(f"Using confidence threshold: {self.confidence_threshold}%")
+            
             logger.info("LangChain orchestrator initialized successfully")
         
         except Exception as e:
@@ -164,6 +168,20 @@ class LangChainOrchestrator:
             # Parse the result back to a dictionary
             result_dict = json.loads(result)
             
+            # Validate developer output if applicable
+            if agent_name == "DeveloperAgent":
+                if not self._validate_developer_output(result_dict):
+                    logger.error("Developer output validation failed")
+                    result_dict["success"] = False
+                    return result_dict
+            
+            # Additional validation for Communicator Agent
+            if agent_name == "CommunicatorAgent":
+                if not self._validate_communicator_input(input_data, result_dict):
+                    logger.error("Cannot proceed with communicator - validation failed")
+                    result_dict["success"] = False
+                    return result_dict
+            
             # Log the result status
             if "success" in result_dict:
                 logger.info(f"Agent {agent_name} completed with success={result_dict['success']}")
@@ -177,3 +195,72 @@ class LangChainOrchestrator:
         except Exception as e:
             logger.error(f"Error running agent {agent_name}: {e}")
             return {"error": str(e), "success": False}
+            
+    def _validate_developer_output(self, result: Dict[str, Any]) -> bool:
+        """
+        Validate that developer output meets the required structure before proceeding
+        
+        Args:
+            result: Result dictionary from developer agent
+            
+        Returns:
+            Boolean indicating if output is valid
+        """
+        # Check if confidence score is too low
+        confidence_score = result.get("confidence_score", 0)
+        if confidence_score <= 0:
+            logger.error(f"Developer confidence score is too low: {confidence_score}")
+            result["error"] = f"Confidence score is too low: {confidence_score}"
+            return False
+            
+        # Check if patched_code is empty
+        patched_code = result.get("patched_code", {})
+        if not patched_code:
+            logger.error("Developer patched_code is empty")
+            result["error"] = "Generated patch is empty"
+            return False
+            
+        # Check if patched_files is empty
+        patched_files = result.get("patched_files", [])
+        if not patched_files:
+            logger.error("Developer patched_files is empty")
+            result["error"] = "No files were patched"
+            return False
+            
+        return True
+            
+    def _validate_communicator_input(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
+        """
+        Validate that inputs to communicator meet requirements before proceeding
+        
+        Args:
+            input_data: Input data to communicator
+            result: Result from communicator
+            
+        Returns:
+            Boolean indicating if input is valid
+        """
+        # Check if PR was successfully created
+        pr_created = result.get("pr_created", False)
+        
+        # Check if QA passed
+        qa_passed = input_data.get("qa_result", {}).get("passed", False)
+        
+        # Check confidence score
+        confidence_score = input_data.get("developer_result", {}).get("confidence_score", 0)
+        
+        # Only set JIRA to "Done" if all conditions are met
+        if not pr_created:
+            logger.warning("Cannot mark JIRA as Done - PR was not created")
+            return False
+            
+        if not qa_passed:
+            logger.warning("Cannot mark JIRA as Done - QA tests did not pass")
+            return False
+            
+        if confidence_score < self.confidence_threshold:
+            logger.warning(f"Cannot mark JIRA as Done - Confidence score {confidence_score} below threshold {self.confidence_threshold}")
+            return False
+            
+        logger.info("All criteria met for communicator to update JIRA to Done status")
+        return True
