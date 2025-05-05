@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import signal
@@ -294,7 +293,13 @@ class JiraService:
                 try:
                     logger.info("Executing developer agent...")
                     developer_result = self.developer_agent.run(developer_input)
-                    logger.info(f"Developer agent returned: {developer_result}")
+                    
+                    # Log the keys for debugging
+                    if developer_result and isinstance(developer_result, dict):
+                        logger.info(f"Developer agent returned keys: {list(developer_result.keys())}")
+                    else:
+                        logger.error("Developer agent didn't return a dictionary result!")
+                        developer_result = {}
                 except Exception as e:
                     logger.error(f"Error running developer agent: {e}")
                     logger.error(traceback.format_exc())
@@ -309,8 +314,21 @@ class JiraService:
                 
                 # Step 3: Run the QA agent to test the fix
                 logger.info(f"Running QA agent for ticket {ticket_id} (attempt {attempt}/{max_retries})")
-                qa_input = {"ticket_id": ticket_id}
-                logger.info(f"QA input: {qa_input}")
+                
+                # FIXED: Pass the developer result to QA input instead of just ticket_id
+                qa_input = {
+                    "ticket_id": ticket_id,
+                    **developer_result  # Include all developer output in QA input
+                }
+                
+                # Debug log the QA input
+                logger.info(f"QA input keys: {list(qa_input.keys())}")
+                
+                # Write QA input to disk for debugging
+                debug_dir = "debug_logs"
+                os.makedirs(debug_dir, exist_ok=True)
+                with open(f"{debug_dir}/qa_input_{ticket_id}_{attempt}.json", "w") as f:
+                    json.dump(qa_input, f, indent=2)
                 
                 try:
                     logger.info("Executing QA agent...")
@@ -354,6 +372,7 @@ class JiraService:
                 "ticket_id": ticket_id,
                 "success": success,
                 "planner_result": planner_result,
+                "developer_result": developer_result if 'developer_result' in locals() else {},
                 "qa_result": qa_result if 'qa_result' in locals() else {"passed": False}
             }
             logger.info(f"Communicator input: {communicator_input}")

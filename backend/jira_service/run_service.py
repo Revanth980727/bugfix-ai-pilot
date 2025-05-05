@@ -18,9 +18,9 @@ logging.basicConfig(
 
 logger = logging.getLogger("jira-service")
 
-# Import after setting up paths
-from jira_service.jira_service import main
-from langchain_service.base import ticket_memory
+# Import using absolute imports
+from backend.jira_service.jira_service import main
+from backend.langchain_service.base import ticket_memory
 
 if __name__ == "__main__":
     try:

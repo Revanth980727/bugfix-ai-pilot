@@ -107,19 +107,40 @@ class AgentTools:
             logger.info(f"Running QA agent for ticket {ticket_id}")
             logger.info(f"QA input keys: {list(input_data.keys())}")
             
-            # Retrieve developer result from memory to ensure QA has complete data
-            developer_result = ticket_memory.get_agent_result(ticket_id, "developer")
-            if developer_result:
-                logger.info(f"Found developer result in memory with keys: {list(developer_result.keys())}")
-                
-                # Merge developer result with QA input to ensure all data is passed
-                for key, value in developer_result.items():
-                    if key not in input_data:
-                        input_data[key] = value
-                        
-                logger.info(f"Enhanced QA input now has keys: {list(input_data.keys())}")
-            else:
-                logger.warning(f"No developer result found in memory for ticket {ticket_id}")
+            # Validate required fields in the input data
+            missing_fields = []
+            for required_field in ["patched_code", "confidence_score", "patched_files"]:
+                if required_field not in input_data:
+                    missing_fields.append(required_field)
+                    logger.error(f"Missing {required_field} in developer output")
+            
+            # If required fields are missing, try to retrieve developer result from memory
+            if missing_fields:
+                developer_result = ticket_memory.get_agent_result(ticket_id, "developer")
+                if developer_result:
+                    logger.info(f"Found developer result in memory with keys: {list(developer_result.keys())}")
+                    
+                    # Merge developer result with QA input to ensure all data is passed
+                    for key, value in developer_result.items():
+                        if key not in input_data:
+                            input_data[key] = value
+                            
+                    logger.info(f"Enhanced QA input now has keys: {list(input_data.keys())}")
+                else:
+                    logger.warning(f"No developer result found in memory for ticket {ticket_id}")
+                    
+                    # Still missing required fields?
+                    missing_fields = []
+                    for required_field in ["patched_code", "confidence_score", "patched_files"]:
+                        if required_field not in input_data:
+                            missing_fields.append(required_field)
+                    
+                    if missing_fields:
+                        logger.error(f"Still missing required fields after memory lookup: {missing_fields}")
+                        return json.dumps({
+                            "error": f"Missing required developer output: {', '.join(missing_fields)}",
+                            "passed": False
+                        })
             
             # Debug: Write QA input to file for inspection
             debug_dir = "debug_logs"
