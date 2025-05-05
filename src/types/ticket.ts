@@ -1,3 +1,4 @@
+
 export interface Ticket {
   id: string;
   title: string;
@@ -45,6 +46,8 @@ export interface CodeDiff {
   diff: string;
   linesAdded: number;
   linesRemoved: number;
+  // Removed oldPath and newPath properties and replaced with filename
+  // Removed content property and replaced with diff
 }
 
 export type TestStatus = 'pass' | 'fail';

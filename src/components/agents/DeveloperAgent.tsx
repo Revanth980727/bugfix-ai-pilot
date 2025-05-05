@@ -37,9 +37,8 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
         }, 
         [
           { 
-            oldPath: 'src/components/BuggyComponent.js', 
-            newPath: 'src/components/FixedComponent.js', 
-            content: `@@ -1,7 +1,7 @@
+            filename: 'src/components/BuggyComponent.js', 
+            diff: `@@ -1,7 +1,7 @@
  const BuggyComponent = () => {
 -  const handleClick = () => {
 -    console.log("This has a bug");
@@ -56,7 +55,10 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
 +      <button onClick={handleClick}>Click me</button>
      </div>
    );
- };`}
+ };`,
+            linesAdded: 2,
+            linesRemoved: 2
+          }
         ],
         1,
         85,
@@ -82,7 +84,7 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
       case 'error':
         return <Badge variant="destructive">Failed</Badge>;
       case 'escalated':
-        return <Badge variant="warning">Escalated</Badge>;
+        return <Badge variant="default">Escalated</Badge>;
       default:
         return <Badge variant="outline">Idle</Badge>;
     }
@@ -123,7 +125,7 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
               <div className="flex items-center justify-between">
                 <span>Fix Generated</span>
                 {confidenceScore !== undefined && (
-                  <Badge variant={confidenceScore > 75 ? "success" : "warning"}>
+                  <Badge variant={confidenceScore > 75 ? "success" : "default"}>
                     {confidenceScore}% Confidence
                   </Badge>
                 )}
@@ -135,9 +137,9 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
                   {diffs.map((diff, index) => (
                     <div key={index} className="mb-2">
                       <div className="text-xs text-muted-foreground mb-1">
-                        {diff.oldPath} → {diff.newPath}
+                        {diff.filename}
                       </div>
-                      <pre className="whitespace-pre-wrap">{diff.content}</pre>
+                      <pre className="whitespace-pre-wrap">{diff.diff}</pre>
                     </div>
                   ))}
                 </div>
