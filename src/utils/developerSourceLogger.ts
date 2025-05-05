@@ -102,3 +102,36 @@ export function logGitHubSource(source: GitHubSource | null): void {
     console.log(`Commit SHA: ${source.commit_sha}`);
   }
 }
+
+/**
+ * Diagnoses possible reasons for GitHub file access issues
+ */
+export function diagnoseGitHubAccessIssues(source: GitHubSource | null): string[] {
+  const issues: string[] = [];
+  
+  if (!source) {
+    issues.push('No GitHub repository information available');
+    return issues;
+  }
+  
+  if (!source.repo_owner) {
+    issues.push('Missing GitHub repository owner');
+  }
+  
+  if (!source.repo_name) {
+    issues.push('Missing GitHub repository name');
+  }
+  
+  if (!source.branch && !source.default_branch) {
+    issues.push('Missing GitHub branch information');
+  }
+  
+  // If we have all required fields but still having issues
+  if (issues.length === 0) {
+    issues.push('Possible authorization/authentication issues with GitHub');
+    issues.push('Repository might be private and requires proper access token');
+    issues.push('Repository path might be incorrect');
+  }
+  
+  return issues;
+}

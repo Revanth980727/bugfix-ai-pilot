@@ -1,13 +1,15 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Progress } from '../ui/progress';
 import { Badge } from '../ui/badge';
 import { Separator } from '../ui/separator';
+import { Button } from '../ui/button';
 import { useDeveloperAgent } from '../../hooks/useDeveloperAgent';
 import GitHubSourceInfo from './GitHubSourceInfo';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, File, FileX } from 'lucide-react';
 import { Alert, AlertDescription } from '../ui/alert';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
 
 interface DeveloperAgentProps {
   onStart?: () => void;
@@ -28,8 +30,14 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
     gitHubSource,
     fileContext,
     fileRetrievalErrors,
-    simulateWork
+    diagnosisLogs,
+    simulateWork,
+    tryAccessFile
   } = useDeveloperAgent();
+
+  const [specificFile, setSpecificFile] = useState('');
+  const [fileAccessResult, setFileAccessResult] = useState<{success: boolean, content?: string, error?: string} | null>(null);
+  const [isTestingFile, setIsTestingFile] = useState(false);
 
   // For demonstration purposes, simulate work when status is idle and component mounts
   React.useEffect(() => {
@@ -98,6 +106,25 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
   const fileCount = Object.keys(fileContext).length;
   const errorCount = Object.keys(fileRetrievalErrors).length;
 
+  // Handle specific file access test
+  const handleSpecificFileTest = async () => {
+    if (!specificFile) return;
+    setIsTestingFile(true);
+    setFileAccessResult(null);
+    
+    try {
+      const result = await tryAccessFile(specificFile);
+      setFileAccessResult(result);
+    } catch (error) {
+      setFileAccessResult({
+        success: false,
+        error: `Unexpected error: ${error}`
+      });
+    } finally {
+      setIsTestingFile(false);
+    }
+  };
+
   return (
     <Card className="w-full">
       <CardHeader className="pb-2">
@@ -126,6 +153,45 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
               <div className="mt-1">
                 This may result in generic responses from the LLM as it lacks context about your code.
                 Please check your GitHub configuration and repository access.
+              </div>
+              
+              {/* Specific file test feature */}
+              <div className="mt-2 pt-2 border-t border-amber-200">
+                <div className="mb-1">Test specific file access:</div>
+                <div className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={specificFile}
+                    onChange={(e) => setSpecificFile(e.target.value)}
+                    placeholder="Enter file path (e.g., GraphRAG.py)"
+                    className="flex-1 px-2 py-1 text-xs border rounded"
+                  />
+                  <Button 
+                    size="sm" 
+                    className="h-7 text-xs" 
+                    onClick={handleSpecificFileTest}
+                    disabled={isTestingFile || !specificFile}
+                  >
+                    {isTestingFile ? 'Testing...' : 'Test'}
+                  </Button>
+                </div>
+                
+                {fileAccessResult && (
+                  <div className={`mt-2 p-2 rounded text-xs ${fileAccessResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                    <div className="flex items-center gap-1">
+                      {fileAccessResult.success ? 
+                        <File size={12} className="text-green-500" /> : 
+                        <FileX size={12} className="text-red-500" />
+                      }
+                      <span>{fileAccessResult.success ? `Successfully accessed ${specificFile}` : fileAccessResult.error}</span>
+                    </div>
+                    {fileAccessResult.success && fileAccessResult.content && (
+                      <div className="mt-1 p-1 bg-white/50 rounded border border-green-200 max-h-32 overflow-auto">
+                        <pre className="text-xs whitespace-pre-wrap">{fileAccessResult.content.substring(0, 200)}...</pre>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </AlertDescription>
           </Alert>
@@ -184,9 +250,13 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
           
           {/* Debug Information */}
           <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer font-medium">Debug Information</summary>
-              <div className="mt-2 space-y-2 bg-muted p-2 rounded-md">
+            <Collapsible>
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" className="text-xs text-muted-foreground p-0 h-auto">
+                  <span className="font-medium">Debug Information</span>
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-2 space-y-2 bg-muted p-2 rounded-md text-xs">
                 <div>
                   <strong>File Access:</strong> {fileCount} files retrieved, {errorCount} errors
                 </div>
@@ -200,8 +270,16 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
                       )
                     : 'None'}
                 </div>
-              </div>
-            </details>
+                <div>
+                  <strong>Diagnosis Logs:</strong>
+                  <div className="mt-1 p-1 bg-black/90 text-green-400 rounded max-h-48 overflow-auto">
+                    {diagnosisLogs.map((log, i) => (
+                      <div key={i}>{log}</div>
+                    ))}
+                  </div>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </div>
         </div>
       </CardContent>

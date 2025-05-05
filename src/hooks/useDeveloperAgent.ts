@@ -19,6 +19,8 @@ export function useDeveloperAgent() {
   const [gitHubSource, setGitHubSource] = useState<GitHubSource | null>(null);
   const [fileContext, setFileContext] = useState<Record<string, string>>({});
   const [fileRetrievalErrors, setFileRetrievalErrors] = useState<Record<string, string>>({});
+  const [diagnosisLogs, setDiagnosisLogs] = useState<string[]>([]);
+  const [fileAccessAttempts, setFileAccessAttempts] = useState<{file: string, success: boolean, error?: string}[]>([]);
   const maxAttempts = 4;
 
   // Get GitHub configuration on component mount
@@ -42,12 +44,14 @@ export function useDeveloperAgent() {
           // Validate the GitHub source
           const isValid = isValidGitHubSource(source);
           console.log(`GitHub config validation result: ${isValid ? 'Valid' : 'Invalid'}`);
+          setDiagnosisLogs(prev => [...prev, `GitHub config validation: ${isValid ? 'Valid' : 'Invalid'}`]);
           
           // Attempt to fetch some example files to verify access
           if (isValid) {
             await testRepositoryAccess(source);
           } else {
             // Try from environment as fallback
+            setDiagnosisLogs(prev => [...prev, "Config invalid, trying environment variables as fallback"]);
             console.log("Config invalid, trying environment variables as fallback...");
             const envSource = extractGitHubSourceFromEnv();
             const envValid = isValidGitHubSource(envSource);
@@ -57,10 +61,12 @@ export function useDeveloperAgent() {
               setPatchMode(envSource.patch_mode as 'intelligent' | 'line-by-line' | 'direct' || 'line-by-line');
               await testRepositoryAccess(envSource);
             } else {
+              setDiagnosisLogs(prev => [...prev, "Neither config nor env provides valid GitHub source information"]);
               console.error("Neither config nor env provides valid GitHub source information");
             }
           }
         } else {
+          setDiagnosisLogs(prev => [...prev, "No GitHub config returned, will try environment variables as fallback"]);
           console.warn("No GitHub config returned, will try environment variables as fallback");
           const envSource = extractGitHubSourceFromEnv();
           const isValid = isValidGitHubSource(envSource);
@@ -70,10 +76,12 @@ export function useDeveloperAgent() {
             setPatchMode(envSource.patch_mode as 'intelligent' | 'line-by-line' | 'direct' || 'line-by-line');
             await testRepositoryAccess(envSource);
           } else {
+            setDiagnosisLogs(prev => [...prev, "Environment variables do not provide valid GitHub source information"]);
             console.error("Environment variables do not provide valid GitHub source information");
           }
         }
       } catch (error) {
+        setDiagnosisLogs(prev => [...prev, `Error fetching GitHub config: ${error}`]);
         console.error('Error fetching GitHub config:', error);
         setFileRetrievalErrors(prev => ({
           ...prev,
@@ -90,6 +98,7 @@ export function useDeveloperAgent() {
    */
   const testRepositoryAccess = async (source: GitHubSource) => {
     try {
+      setDiagnosisLogs(prev => [...prev, `Testing repository access for ${source.repo_owner}/${source.repo_name}`]);
       console.log(`Testing repository access for ${source.repo_owner}/${source.repo_name}...`);
       
       // Try to access some common files
@@ -105,15 +114,18 @@ export function useDeveloperAgent() {
       
       let accessSuccessful = false;
       const errors: Record<string, string> = {};
+      const attempts: {file: string, success: boolean, error?: string}[] = [];
       
       for (const file of commonFiles) {
         try {
+          setDiagnosisLogs(prev => [...prev, `Testing access to file: ${file}`]);
           console.log(`Testing access to file: ${file}`);
           const exists = await checkFileExists(file);
           if (exists) {
             console.log(`Found file in repository: ${file}`);
             const content = await getFileContent(file);
             if (content) {
+              setDiagnosisLogs(prev => [...prev, `Successfully retrieved content for ${file} (${content.length} bytes)`]);
               console.log(`Successfully retrieved content for ${file} (${content.length} bytes)`);
               // Store this file content in our context
               setFileContext(prev => ({
@@ -121,34 +133,111 @@ export function useDeveloperAgent() {
                 [file]: content
               }));
               accessSuccessful = true;
+              attempts.push({file, success: true});
             } else {
-              errors[file] = `File exists but content is empty or null`;
+              const errorMsg = `File exists but content is empty or null`;
+              errors[file] = errorMsg;
+              attempts.push({file, success: false, error: errorMsg});
+              setDiagnosisLogs(prev => [...prev, `File ${file} exists but content could not be retrieved`]);
               console.warn(`File ${file} exists but content could not be retrieved`);
             }
           } else {
-            errors[file] = 'File does not exist in repository';
+            const errorMsg = 'File does not exist in repository';
+            errors[file] = errorMsg;
+            attempts.push({file, success: false, error: errorMsg});
+            setDiagnosisLogs(prev => [...prev, `File ${file} does not exist in repository`]);
             console.log(`File ${file} does not exist in repository`);
           }
         } catch (err) {
-          errors[file] = `Error accessing file: ${err}`;
+          const errorMsg = `Error accessing file: ${err}`;
+          errors[file] = errorMsg;
+          attempts.push({file, success: false, error: errorMsg});
+          setDiagnosisLogs(prev => [...prev, `Error accessing file ${file}: ${err}`]);
           console.error(`Error accessing file ${file}:`, err);
         }
       }
       
       setFileRetrievalErrors(errors);
+      setFileAccessAttempts(attempts);
       
       if (!accessSuccessful) {
+        setDiagnosisLogs(prev => [...prev, "Could not access any common files in the repository"]);
         console.warn("Could not access any common files in the repository");
       } else {
+        setDiagnosisLogs(prev => [...prev, "Repository access test: SUCCESS"]);
         console.log("Repository access test: SUCCESS");
       }
       
     } catch (error) {
+      setDiagnosisLogs(prev => [...prev, `Repository access test failed: ${error}`]);
       console.error("Repository access test failed:", error);
       setFileRetrievalErrors(prev => ({
         ...prev, 
         'access_test': `Repository access test failed: ${error}`
       }));
+    }
+  };
+
+  /**
+   * Try to access a specific file
+   * @param filePath The path to the file
+   */
+  const tryAccessFile = async (filePath: string): Promise<{success: boolean, content?: string, error?: string}> => {
+    if (!gitHubSource || !gitHubSource.repo_owner || !gitHubSource.repo_name) {
+      return {
+        success: false,
+        error: "No valid GitHub source configuration"
+      };
+    }
+    
+    try {
+      setDiagnosisLogs(prev => [...prev, `Explicitly trying to access file: ${filePath}`]);
+      console.log(`Explicitly trying to access file: ${filePath}`);
+      
+      const exists = await checkFileExists(filePath);
+      if (!exists) {
+        const error = `File does not exist: ${filePath}`;
+        setDiagnosisLogs(prev => [...prev, error]);
+        return {
+          success: false,
+          error
+        };
+      }
+      
+      const content = await getFileContent(filePath);
+      if (!content) {
+        const error = `Failed to get content for file: ${filePath}`;
+        setDiagnosisLogs(prev => [...prev, error]);
+        return {
+          success: false,
+          error
+        };
+      }
+      
+      setDiagnosisLogs(prev => [...prev, `Successfully retrieved ${filePath} (${content.length} bytes)`]);
+      
+      // Add this file to our context
+      setFileContext(prev => ({
+        ...prev,
+        [filePath]: content
+      }));
+      
+      return {
+        success: true,
+        content
+      };
+    } catch (error) {
+      const errorMsg = `Error accessing file ${filePath}: ${error}`;
+      setDiagnosisLogs(prev => [...prev, errorMsg]);
+      setFileRetrievalErrors(prev => ({
+        ...prev,
+        [filePath]: errorMsg
+      }));
+      
+      return {
+        success: false,
+        error: errorMsg
+      };
     }
   };
 
@@ -304,7 +393,10 @@ export function useDeveloperAgent() {
     gitHubSource,
     fileContext,
     fileRetrievalErrors,
+    diagnosisLogs,
+    fileAccessAttempts,
     simulateWork,
+    tryAccessFile,
     simulateFailure: (reason?: string, responseQuality?: 'good' | 'generic' | 'invalid') => {
       setStatus('error');
       if (reason) {

@@ -1,6 +1,6 @@
 
 import { GitHubConfig } from '@/types/ticket';
-import { isValidGitHubSource } from '@/utils/developerSourceLogger';
+import { isValidGitHubSource, diagnoseGitHubAccessIssues } from '@/utils/developerSourceLogger';
 
 /**
  * Get GitHub configuration from environment variables or API
@@ -35,6 +35,8 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
     const valid = isValidGitHubSource(config);
     if (!valid) {
       console.warn('GitHub configuration is incomplete or invalid');
+      const issues = diagnoseGitHubAccessIssues(config);
+      console.warn('Potential GitHub access issues:', issues);
     }
     
     return config;
@@ -124,5 +126,86 @@ export const getFileContent = async (filePath: string): Promise<string | null> =
   } catch (error) {
     console.error(`Failed to get content for ${filePath}:`, error);
     return null;
+  }
+};
+
+/**
+ * Detailed debugging function to pinpoint file access issues
+ */
+export const debugFileAccess = async (repo: string, branch: string, filePath: string): Promise<{
+  success: boolean;
+  message: string;
+  details: Record<string, any>;
+}> => {
+  console.log(`Debugging file access: ${repo} / ${branch} / ${filePath}`);
+  
+  try {
+    // Test if GitHub configuration is available
+    const config = await getGitHubConfig();
+    if (!config) {
+      return {
+        success: false,
+        message: "GitHub configuration unavailable",
+        details: {
+          reason: "Missing GitHub configuration",
+          environment: {
+            repoOwnerPresent: Boolean(process.env.GITHUB_REPO_OWNER || import.meta.env.VITE_GITHUB_REPO_OWNER),
+            repoNamePresent: Boolean(process.env.GITHUB_REPO_NAME || import.meta.env.VITE_GITHUB_REPO_NAME)
+          }
+        }
+      };
+    }
+    
+    // Check if file exists
+    const exists = await checkFileExists(filePath);
+    if (!exists) {
+      return {
+        success: false,
+        message: `File not found: ${filePath}`,
+        details: {
+          reason: "File not found",
+          path: filePath,
+          repository: repo,
+          branch: branch
+        }
+      };
+    }
+    
+    // Try to get content
+    const content = await getFileContent(filePath);
+    if (!content) {
+      return {
+        success: false,
+        message: `Content retrieval failed for: ${filePath}`,
+        details: {
+          reason: "Content retrieval error",
+          path: filePath,
+          repository: repo,
+          branch: branch
+        }
+      };
+    }
+    
+    return {
+      success: true,
+      message: `Successfully accessed file: ${filePath}`,
+      details: {
+        path: filePath,
+        repository: repo,
+        branch: branch,
+        contentLength: content.length
+      }
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Error debugging file access: ${error}`,
+      details: {
+        error: String(error),
+        path: filePath,
+        repository: repo,
+        branch: branch
+      }
+    };
   }
 };
