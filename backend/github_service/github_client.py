@@ -1,4 +1,3 @@
-
 import logging
 from typing import Dict, Any, Optional, List
 from github import Github, GithubException
@@ -227,12 +226,52 @@ class GitHubClient:
             logger.error(f"Failed to create pull request: {str(e)}")
             return None
 
-    def add_pr_comment(self, pr_number: int, comment: str) -> bool:
+    def extract_pr_number(self, pr_identifier: str) -> Optional[int]:
         """
-        Add a comment to a pull request
+        Extract a numeric PR number from various formats
         
         Args:
-            pr_number: The PR number
+            pr_identifier: PR identifier (number, URL, or other string)
+            
+        Returns:
+            int: PR number if found, None otherwise
+        """
+        try:
+            # If it's a numeric string, convert directly
+            if isinstance(pr_identifier, str) and pr_identifier.isdigit():
+                return int(pr_identifier)
+            
+            # Try to extract PR number from a URL
+            if isinstance(pr_identifier, str) and '/' in pr_identifier:
+                # For URL format: https://github.com/owner/repo/pull/123
+                parts = pr_identifier.split('/')
+                for part in parts:
+                    if part.isdigit():
+                        return int(part)
+            
+            # For GitHub's short URL format: owner/repo#123
+            if isinstance(pr_identifier, str) and '#' in pr_identifier:
+                parts = pr_identifier.split('#')
+                if len(parts) > 1 and parts[1].isdigit():
+                    return int(parts[1])
+            
+            # If it's already a numeric type
+            if isinstance(pr_identifier, int):
+                return pr_identifier
+                
+            logger.warning(f"Could not extract PR number from: {pr_identifier}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error extracting PR number: {str(e)}")
+            return None
+
+    def add_pr_comment(self, pr_identifier: Any, comment: str) -> bool:
+        """
+        Add a comment to a pull request, handling various PR identifier formats
+        
+        Args:
+            pr_identifier: The PR identifier (number, URL, or other string)
             comment: The comment text
             
         Returns:
@@ -243,9 +282,11 @@ class GitHubClient:
                 logger.error("Repository connection not established")
                 return False
                 
-            # Convert pr_number to int if it's a string
-            if isinstance(pr_number, str) and pr_number.isdigit():
-                pr_number = int(pr_number)
+            # Extract PR number from the identifier
+            pr_number = self.extract_pr_number(pr_identifier)
+            if pr_number is None:
+                logger.error(f"Could not extract PR number from: {pr_identifier}")
+                return False
                 
             logger.info(f"Adding comment to PR #{pr_number}")
             
@@ -260,9 +301,9 @@ class GitHubClient:
             except GithubException as pr_error:
                 if pr_error.status == 404:
                     # The PR number might be invalid, try to extract it from a URL
-                    if isinstance(pr_number, str) and '/' in pr_number:
+                    if isinstance(pr_identifier, str) and '/' in pr_identifier:
                         # Try extracting PR number from URL
-                        parts = pr_number.split('/')
+                        parts = pr_identifier.split('/')
                         pr_id = next((part for part in parts if part.isdigit()), None)
                         
                         if pr_id:
@@ -281,5 +322,5 @@ class GitHubClient:
                 return False
                 
         except Exception as e:
-            logger.error(f"Unexpected error adding comment to PR #{pr_number}: {str(e)}")
+            logger.error(f"Unexpected error adding comment to PR: {str(e)}")
             return False

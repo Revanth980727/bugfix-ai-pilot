@@ -1,4 +1,3 @@
-
 import { GitHubConfig } from '@/types/ticket';
 import { isValidGitHubSource, diagnoseGitHubAccessIssues } from '@/utils/developerSourceLogger';
 
@@ -207,5 +206,64 @@ export const debugFileAccess = async (repo: string, branch: string, filePath: st
         branch: branch
       }
     };
+  }
+};
+
+/**
+ * Safely extract a numeric PR number from various input formats
+ * @param prIdentifier - Can be a number, string number, URL, or other identifier
+ * @returns A PR number as an integer, or null if not extractable
+ */
+export const extractPRNumber = (prIdentifier: string | number): number | null => {
+  console.log(`Attempting to extract PR number from: ${prIdentifier}`);
+  
+  // If already a number, return it
+  if (typeof prIdentifier === 'number') {
+    return prIdentifier;
+  }
+  
+  // If string is just a number, convert it
+  if (/^\d+$/.test(prIdentifier)) {
+    return parseInt(prIdentifier, 10);
+  }
+  
+  // Try to extract PR number from a GitHub URL
+  // Format: https://github.com/owner/repo/pull/123
+  const urlMatch = /\/pull\/(\d+)/.exec(prIdentifier);
+  if (urlMatch && urlMatch[1]) {
+    return parseInt(urlMatch[1], 10);
+  }
+  
+  // Cannot extract a PR number
+  console.warn(`Could not extract PR number from: ${prIdentifier}`);
+  return null;
+};
+
+/**
+ * Add a comment to a PR, handling various input formats for the PR identifier
+ * @param prIdentifier - PR number or URL
+ * @param comment - Comment content
+ * @returns Success status
+ */
+export const addPRComment = async (prIdentifier: string | number, comment: string): Promise<boolean> => {
+  // Extract numeric PR number if needed
+  const prNumber = extractPRNumber(prIdentifier);
+  
+  // If we couldn't get a PR number, log error and return false
+  if (prNumber === null) {
+    console.error(`Failed to extract PR number from: ${prIdentifier}`);
+    return false;
+  }
+  
+  console.log(`Adding comment to PR #${prNumber}`);
+  
+  try {
+    // In a real implementation, this would call an API to add the comment
+    // For testing, log the comment that would be added
+    console.log(`Would add comment to PR #${prNumber}: ${comment.substring(0, 50)}${comment.length > 50 ? '...' : ''}`);
+    return true;
+  } catch (error) {
+    console.error(`Error adding comment to PR #${prNumber}:`, error);
+    return false;
   }
 };

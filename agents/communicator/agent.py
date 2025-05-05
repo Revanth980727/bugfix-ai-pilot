@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -333,38 +332,50 @@ async def post_pr_comment(pr_url: str, comment: str) -> bool:
         logger.warning("GitHub service not available for PR comment")
         return False
     
-    # Extract PR number from URL
-    pr_match = re.search(r'/pull/(\d+)', pr_url)
-    if not pr_match:
-        logger.warning(f"Could not extract PR number from URL: {pr_url}")
-        return False
+    # Extract PR number from URL - now using improved extraction
+    # Instead of simple regex match that expects specific format
+    pr_number = None
     
-    pr_number = pr_match.group(1)
-    
-    # Try up to 3 times with a delay between attempts
-    max_retries = 3
-    retry_delay = 2  # seconds
-    
-    for attempt in range(1, max_retries + 1):
-        try:
-            # Use the GitHub service to post the comment
-            result = github_service.add_pr_comment(pr_number, comment)
-            if result:
-                logger.info(f"Successfully added comment to PR #{pr_number} on attempt {attempt}")
-                return True
-            else:
-                logger.warning(f"Failed to add comment to PR #{pr_number} on attempt {attempt}")
+    # Try different PR extraction methods
+    try:
+        # First, try URL pattern extraction
+        pr_match = re.search(r'/pull/(\d+)', pr_url)
+        if pr_match:
+            pr_number = pr_match.group(1)
+        else:
+            # If URL extraction fails, try letting the service handle it directly
+            # The github service now has robust PR identifier handling
+            pr_number = pr_url
+            
+        logger.info(f"Attempting to post comment using PR identifier: {pr_number}")
+        
+        # Try up to 3 times with a delay between attempts
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Use the GitHub service to post the comment
+                result = github_service.add_pr_comment(pr_number, comment)
+                if result:
+                    logger.info(f"Successfully added comment to PR on attempt {attempt}")
+                    return True
+                else:
+                    logger.warning(f"Failed to add comment to PR on attempt {attempt}")
+                    if attempt < max_retries:
+                        logger.info(f"Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+            except Exception as e:
+                logger.error(f"Error posting comment to PR on attempt {attempt}: {e}")
                 if attempt < max_retries:
                     logger.info(f"Retrying in {retry_delay} seconds...")
                     await asyncio.sleep(retry_delay)
-        except Exception as e:
-            logger.error(f"Error posting comment to PR #{pr_number} on attempt {attempt}: {e}")
-            if attempt < max_retries:
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-    
-    logger.error(f"Max retries reached for GitHub comment on PR {pr_url}")
-    return False
+        
+        logger.error(f"Max retries reached for GitHub comment on PR {pr_url}")
+        return False
+    except Exception as e:
+        logger.error(f"Error preparing PR comment: {str(e)}")
+        return False
 
 async def send_notifications(ticket_id: str, pr_url: str, repository: str) -> None:
     """Send notifications about the fix via email and/or Slack"""
