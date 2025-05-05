@@ -24,6 +24,11 @@ from jira_service.jira_service import main
 if __name__ == "__main__":
     try:
         logger.info("Starting JIRA service")
+        
+        # Set environment variable to indicate we're in the JIRA service
+        os.environ["SERVICE_NAME"] = "jira_service"
+        
+        # Run the service
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("Service stopped by user")

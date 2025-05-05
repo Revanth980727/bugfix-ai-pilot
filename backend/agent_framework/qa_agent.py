@@ -44,7 +44,7 @@ class QAAgent(Agent):
         }
         
         # Log the developer agent input
-        logger.info(f"QA Agent received developer input with success={input_data.get('success', False)}")
+        logger.info(f"QA Agent received developer input: {json.dumps(input_data, indent=2)}")
         
         # Validate developer input
         if not self._validate_developer_input(input_data, result):
@@ -107,38 +107,57 @@ class QAAgent(Agent):
         valid = True
         validation_errors = []
         
+        # Log the received input keys to help debugging
+        logger.info(f"Developer input keys: {list(input_data.keys())}")
+        
         # Check if patched_code exists and is not empty
         if "patched_code" not in input_data:
             validation_errors.append("Missing patched_code in developer output")
             valid = False
+            logger.error("Missing patched_code in developer output")
         elif not input_data["patched_code"]:
             validation_errors.append("Empty patched_code in developer output")
             valid = False
+            logger.error("Empty patched_code in developer output")
+        else:
+            logger.info(f"Found patched_code with {len(input_data['patched_code'])} entries")
             
         # Check confidence score
         if "confidence_score" not in input_data:
             validation_errors.append("Missing confidence_score in developer output")
             valid = False
+            logger.error("Missing confidence_score in developer output")
         elif input_data.get("confidence_score", 0) <= 0:
             validation_errors.append(f"Invalid confidence score: {input_data.get('confidence_score', 0)}")
             valid = False
+            logger.error(f"Invalid confidence score: {input_data.get('confidence_score', 0)}")
+        else:
+            logger.info(f"Found confidence_score: {input_data.get('confidence_score')}")
             
         # Check patch file paths
         if "patched_files" not in input_data:
             validation_errors.append("Missing patched_files in developer output")
             valid = False
+            logger.error("Missing patched_files in developer output")
         elif not input_data.get("patched_files", []):
             validation_errors.append("Empty patched_files list in developer output")
             valid = False
+            logger.error("Empty patched_files list in developer output")
+        else:
+            logger.info(f"Found patched_files: {input_data.get('patched_files')}")
             
         # Log validation results
         if validation_errors:
             result["validation_errors"] = validation_errors
             logger.warning(f"Developer input validation failed: {validation_errors}")
             try:
-                logger.warning(f"Developer input: {json.dumps(input_data, indent=2)}")
-            except:
-                logger.warning("Could not serialize developer input for logging")
+                logger.warning(f"Developer input dump: {json.dumps(input_data, indent=2)}")
+            except Exception as e:
+                logger.warning(f"Could not serialize developer input for logging: {str(e)}")
+                # Try to log keys at least
+                logger.warning(f"Developer input keys: {list(input_data.keys())}")
+        else:
+            logger.info("Developer input validation passed")
         
         return valid
         

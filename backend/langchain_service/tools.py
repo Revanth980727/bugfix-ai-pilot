@@ -1,6 +1,7 @@
 
 import json
 import logging
+import os
 from typing import Dict, List, Any, Optional
 from langchain.agents import Tool
 from ..agent_framework.planner_agent import PlannerAgent
@@ -41,6 +42,9 @@ class AgentTools:
                 f"Analysis completed. Affected files: {result.get('affected_files', [])} Error type: {result.get('error_type', 'Unknown')}"
             )
             
+            # Debug log the result
+            logger.debug(f"Planner result: {json.dumps(result, indent=2)}")
+            
             return json.dumps(result)
         except Exception as e:
             logger.error(f"Error running planner agent: {str(e)}")
@@ -64,6 +68,12 @@ class AgentTools:
             # Run the developer agent
             result = self.developer_agent.process(input_data)
             
+            # Debug: Write developer output to file for inspection
+            debug_dir = "debug_logs"
+            os.makedirs(debug_dir, exist_ok=True)
+            with open(f"{debug_dir}/developer_output_{ticket_id}_{attempt}.json", "w") as f:
+                json.dump(result, f, indent=2)
+            
             # Store result in memory
             confidence = result.get("confidence_score", "Unknown")
             ticket_memory.save_to_memory(
@@ -71,6 +81,9 @@ class AgentTools:
                 "Developer",
                 f"Generated fix for attempt {attempt} with confidence score: {confidence}%"
             )
+            
+            # Log the keys in result for debugging
+            logger.info(f"Developer result keys: {list(result.keys())}")
             
             return json.dumps(result)
         except Exception as e:
@@ -85,6 +98,13 @@ class AgentTools:
             ticket_id = input_data.get("ticket_id")
             
             logger.info(f"Running QA agent for ticket {ticket_id}")
+            logger.info(f"QA input keys: {list(input_data.keys())}")
+            
+            # Debug: Write QA input to file for inspection
+            debug_dir = "debug_logs"
+            os.makedirs(debug_dir, exist_ok=True)
+            with open(f"{debug_dir}/qa_input_{ticket_id}.json", "w") as f:
+                json.dump(input_data, f, indent=2)
             
             # Run the QA agent
             result = self.qa_agent.process(input_data)
@@ -108,6 +128,13 @@ class AgentTools:
             ticket_id = input_data.get("ticket_id")
             
             logger.info(f"Running communicator agent for ticket {ticket_id}")
+            logger.info(f"Communicator input keys: {list(input_data.keys())}")
+            
+            # Debug: Write communicator input to file for inspection
+            debug_dir = "debug_logs"
+            os.makedirs(debug_dir, exist_ok=True)
+            with open(f"{debug_dir}/communicator_input_{ticket_id}.json", "w") as f:
+                json.dump(input_data, f, indent=2)
             
             # Run the communicator agent
             result = self.communicator_agent.process(input_data)
