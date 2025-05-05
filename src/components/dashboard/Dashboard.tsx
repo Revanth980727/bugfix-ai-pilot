@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { TicketForm } from '../tickets/TicketForm';
 import { TicketInfo } from '../tickets/TicketInfo';
@@ -98,11 +97,8 @@ export function Dashboard() {
                 />
                 
                 <DeveloperAgent 
-                  status={developerStatus} 
-                  progress={developerProgress}
-                  attempt={currentAttempt}
-                  maxAttempts={maxAttempts}
-                  diffs={diffs}
+                  onStart={() => console.log('Developer started')}
+                  onComplete={() => console.log('Developer completed')}
                 />
               </div>
               
