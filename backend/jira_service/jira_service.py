@@ -1,3 +1,4 @@
+
 import asyncio
 import logging
 import signal
@@ -283,6 +284,9 @@ class JiraService:
             max_retries = 4
             success = False
             
+            # Store developer results to pass to QA
+            developer_result = None
+            
             for attempt in range(1, max_retries + 1):
                 logger.info(f"Running developer agent for ticket {ticket_id} (attempt {attempt}/{max_retries})")
                 
@@ -315,11 +319,15 @@ class JiraService:
                 # Step 3: Run the QA agent to test the fix
                 logger.info(f"Running QA agent for ticket {ticket_id} (attempt {attempt}/{max_retries})")
                 
-                # FIXED: Pass the developer result to QA input instead of just ticket_id
+                # Create QA input with developer result
                 qa_input = {
                     "ticket_id": ticket_id,
-                    **developer_result  # Include all developer output in QA input
                 }
+                
+                # FIXED: Ensure we pass ALL keys from developer_result to the QA agent
+                if developer_result and isinstance(developer_result, dict):
+                    for key, value in developer_result.items():
+                        qa_input[key] = value
                 
                 # Debug log the QA input
                 logger.info(f"QA input keys: {list(qa_input.keys())}")

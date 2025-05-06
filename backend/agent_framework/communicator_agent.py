@@ -31,6 +31,14 @@ class CommunicatorAgent:
         except (subprocess.SubprocessError, FileNotFoundError) as e:
             logger.warning(f"Git is not available: {str(e)}")
     
+    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Run method compatible with the agent framework
+        This is the main entry point for the agent
+        """
+        logger.info("CommunicatorAgent.run() called")
+        return self.process(input_data)
+    
     def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process incoming data and communicate results"""
         ticket_id = input_data.get("ticket_id", "unknown")
@@ -98,10 +106,6 @@ class CommunicatorAgent:
         
         logger.info(f"Communication completed for ticket {ticket_id}")
         return result
-    
-    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Run method compatible with the agent framework"""
-        return self.process(input_data)
     
     def _create_github_pr(self, ticket_id: str, input_data: Dict[str, Any]) -> Optional[str]:
         """Create a GitHub PR with the fix"""
