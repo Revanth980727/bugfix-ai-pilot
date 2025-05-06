@@ -102,13 +102,37 @@ def run_tests(config: TestConfig) -> List[TestResult]:
         
         if not executable_path:
             logger.error(f"Test command '{config.command}' not found in PATH")
-            results.append(TestResult(
-                name="test_command_verification",
-                status="fail",
-                duration=0,
-                error_message=f"Test command '{config.command}' not found in PATH. Make sure it's installed."
-            ))
-            return results
+            
+            # Try direct Python module approach as fallback
+            try:
+                logger.info("Attempting to run pytest as a Python module...")
+                process = subprocess.run(
+                    [sys.executable, "-m", "pytest", "--version"],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if process.returncode == 0:
+                    logger.info(f"Successfully found pytest as Python module: {process.stdout.strip()}")
+                    executable_path = f"{sys.executable} -m pytest"
+                else:
+                    logger.error(f"Failed to run pytest as Python module: {process.stderr}")
+                    results.append(TestResult(
+                        name="test_command_verification",
+                        status="fail",
+                        duration=0,
+                        error_message=f"Test command '{config.command}' not found in PATH and failed as Python module. Make sure it's installed."
+                    ))
+                    return results
+            except Exception as e:
+                logger.error(f"Error trying Python module approach: {str(e)}")
+                results.append(TestResult(
+                    name="test_command_verification",
+                    status="fail",
+                    duration=0,
+                    error_message=f"Test command '{config.command}' not found in PATH. Make sure it's installed."
+                ))
+                return results
             
         logger.info(f"Test command '{config.command}' found at: {executable_path}")
         
