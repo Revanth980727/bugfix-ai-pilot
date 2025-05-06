@@ -45,7 +45,7 @@ class QAResponse(BaseModel):
     timestamp: str = datetime.now().isoformat()
 
 class TestConfig(BaseModel):
-    command: str = "npm test"
+    command: str = "pytest"  # Default to pytest
     codebase_path: str = "/app/code_repo"
     focused_tests: Optional[List[str]] = None
 
@@ -67,7 +67,28 @@ def run_tests(config: TestConfig) -> List[TestResult]:
     start_time = datetime.now()
     
     try:
+        # Check if test command exists in the environment
+        logger.info(f"Checking if test command '{config.command}' exists")
+        which_process = subprocess.run(
+            ["which", config.command.split()[0]],
+            capture_output=True,
+            text=True
+        )
+        
+        if which_process.returncode != 0:
+            logger.error(f"Test command '{config.command}' not found in PATH: {which_process.stderr}")
+            results.append(TestResult(
+                name="test_command_verification",
+                status="fail",
+                duration=0,
+                error_message=f"Test command '{config.command}' not found in PATH. Make sure it's installed."
+            ))
+            return results
+            
+        logger.info(f"Test command '{config.command}' found at: {which_process.stdout.strip()}")
+        
         # Run the test command and capture output
+        logger.info(f"Running test command: {config.command}")
         process = subprocess.Popen(
             config.command.split(),
             cwd=config.codebase_path,
@@ -129,7 +150,7 @@ async def test_fix(fix: DeveloperResponse):
             
             # Configure test settings
             test_config = TestConfig(
-                command=os.getenv("TEST_COMMAND", "npm test"),
+                command=os.getenv("TEST_COMMAND", "pytest"),
                 codebase_path=temp_codebase
             )
             
@@ -155,4 +176,3 @@ async def test_fix(fix: DeveloperResponse):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("agent:app", host="0.0.0.0", port=8003, reload=True)
-

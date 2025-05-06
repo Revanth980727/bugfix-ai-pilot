@@ -19,7 +19,10 @@ COPY ./utils /app/utils/
 RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
-# Make sure uvicorn is in the PATH
+# Make sure uvicorn and pytest are in the PATH
 ENV PATH="/usr/local/bin:${PATH}"
+
+# Verify pytest installation
+RUN python -c "import pytest; print(f'pytest version: {pytest.__version__}')"
 
 CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8003"]

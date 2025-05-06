@@ -115,6 +115,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TEST_COMMAND=${PROJECT_TEST_COMMAND:-pytest}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONPATH=/app
     env_file:
       - ./.env
     volumes:
