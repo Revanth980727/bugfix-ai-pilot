@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, Literal
 import json
 import tempfile
 import shutil
+import sys
 
 # Configure logging
 logging.basicConfig(
@@ -61,6 +62,33 @@ def apply_diffs(diffs: List[FileDiff], base_path: str) -> None:
         with open(file_path, 'w') as f:
             f.write(diff.diff)
 
+def find_executable(command: str) -> str:
+    """
+    Find the full path to an executable command using PATH environment variable
+    Returns the command name if found, or None if not found
+    """
+    # First check if the command already has a full path
+    if os.path.isfile(command) and os.access(command, os.X_OK):
+        return command
+        
+    # Check if command exists in PATH
+    path = os.environ.get("PATH", "").split(os.pathsep)
+    for directory in path:
+        executable = os.path.join(directory, command)
+        if os.path.isfile(executable) and os.access(executable, os.X_OK):
+            return executable
+            
+    # Special case for pytest which might be available as a Python module
+    if command == "pytest" or command == "python -m pytest":
+        try:
+            subprocess.run([sys.executable, "-m", "pytest", "--version"], 
+                          capture_output=True, check=False)
+            return f"{sys.executable} -m pytest"
+        except subprocess.SubprocessError:
+            pass
+            
+    return None
+
 def run_tests(config: TestConfig) -> List[TestResult]:
     """Run tests and capture results"""
     results = []
@@ -69,14 +97,11 @@ def run_tests(config: TestConfig) -> List[TestResult]:
     try:
         # Check if test command exists in the environment
         logger.info(f"Checking if test command '{config.command}' exists")
-        which_process = subprocess.run(
-            ["which", config.command.split()[0]],
-            capture_output=True,
-            text=True
-        )
+        command_parts = config.command.split()
+        executable_path = find_executable(command_parts[0])
         
-        if which_process.returncode != 0:
-            logger.error(f"Test command '{config.command}' not found in PATH: {which_process.stderr}")
+        if not executable_path:
+            logger.error(f"Test command '{config.command}' not found in PATH")
             results.append(TestResult(
                 name="test_command_verification",
                 status="fail",
@@ -85,12 +110,23 @@ def run_tests(config: TestConfig) -> List[TestResult]:
             ))
             return results
             
-        logger.info(f"Test command '{config.command}' found at: {which_process.stdout.strip()}")
+        logger.info(f"Test command '{config.command}' found at: {executable_path}")
+        
+        # Prepare the full command, replacing the first part with the full path if needed
+        if executable_path != command_parts[0]:
+            if " " in executable_path:  # Handle case like "python -m pytest"
+                exec_parts = executable_path.split()
+                full_command = exec_parts + command_parts[1:]
+            else:
+                full_command = [executable_path] + command_parts[1:]
+        else:
+            full_command = command_parts
+            
+        logger.info(f"Running test command: {' '.join(full_command)}")
         
         # Run the test command and capture output
-        logger.info(f"Running test command: {config.command}")
         process = subprocess.Popen(
-            config.command.split(),
+            full_command,
             cwd=config.codebase_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -101,7 +137,6 @@ def run_tests(config: TestConfig) -> List[TestResult]:
         duration = int((datetime.now() - start_time).total_seconds() * 1000)
         
         # Parse test output (this is a simplified example)
-        # In reality, you'd need to parse the specific test runner's output format
         if process.returncode == 0:
             results.append(TestResult(
                 name="test_suite",
