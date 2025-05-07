@@ -15,14 +15,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ./qa/agent.py /app/
 COPY ./utils /app/utils/
 
-# Ensure the mount point exists with proper permissions
+# Create proper directories with permissions
 RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
-# Make sure uvicorn and pytest are in the PATH
+# Make sure pytest is properly installed and in PATH
+RUN pip install pytest --upgrade
+RUN python -m pytest --version
 ENV PATH="/usr/local/bin:${PATH}"
 
-# Verify pytest installation
-RUN python -c "import pytest; print(f'pytest version: {pytest.__version__}')"
+# Set environment variables
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+ENV TEST_COMMAND="python -m pytest"
 
 CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8003"]

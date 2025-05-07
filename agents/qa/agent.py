@@ -46,7 +46,7 @@ class QAResponse(BaseModel):
     timestamp: str = datetime.now().isoformat()
 
 class TestConfig(BaseModel):
-    command: str = "pytest"  # Default to pytest
+    command: str = "python -m pytest"  # Default to pytest as a Python module
     codebase_path: str = "/app/code_repo"
     focused_tests: Optional[List[str]] = None
 
@@ -62,105 +62,44 @@ def apply_diffs(diffs: List[FileDiff], base_path: str) -> None:
         with open(file_path, 'w') as f:
             f.write(diff.diff)
 
-def find_executable(command: str) -> str:
-    """
-    Find the full path to an executable command using PATH environment variable
-    Returns the command name if found, or None if not found
-    """
-    # First check if the command already has a full path
-    if os.path.isfile(command) and os.access(command, os.X_OK):
-        return command
-        
-    # Check if command exists in PATH
-    path = os.environ.get("PATH", "").split(os.pathsep)
-    for directory in path:
-        executable = os.path.join(directory, command)
-        if os.path.isfile(executable) and os.access(executable, os.X_OK):
-            return executable
-            
-    # Special case for pytest which might be available as a Python module
-    if command == "pytest" or command == "python -m pytest":
-        try:
-            subprocess.run([sys.executable, "-m", "pytest", "--version"], 
-                          capture_output=True, check=False)
-            return f"{sys.executable} -m pytest"
-        except subprocess.SubprocessError:
-            pass
-            
-    return None
-
 def run_tests(config: TestConfig) -> List[TestResult]:
     """Run tests and capture results"""
     results = []
     start_time = datetime.now()
     
     try:
-        # Check if test command exists in the environment
-        logger.info(f"Checking if test command '{config.command}' exists")
-        command_parts = config.command.split()
-        executable_path = find_executable(command_parts[0])
+        # Parse the command into components - handle space-separated commands properly
+        logger.info(f"Preparing to run test command: '{config.command}'")
         
-        if not executable_path:
-            logger.error(f"Test command '{config.command}' not found in PATH")
+        # If command contains 'python -m pytest', handle it as a special case
+        if "python -m pytest" in config.command:
+            logger.info("Detected Python module pytest command")
+            command_parts = [sys.executable, "-m", "pytest"]
             
-            # Try direct Python module approach as fallback
-            try:
-                logger.info("Attempting to run pytest as a Python module...")
-                process = subprocess.run(
-                    [sys.executable, "-m", "pytest", "--version"],
-                    capture_output=True,
-                    text=True
-                )
-                
-                if process.returncode == 0:
-                    logger.info(f"Successfully found pytest as Python module: {process.stdout.strip()}")
-                    executable_path = f"{sys.executable} -m pytest"
-                else:
-                    logger.error(f"Failed to run pytest as Python module: {process.stderr}")
-                    results.append(TestResult(
-                        name="test_command_verification",
-                        status="fail",
-                        duration=0,
-                        error_message=f"Test command '{config.command}' not found in PATH and failed as Python module. Make sure it's installed."
-                    ))
-                    return results
-            except Exception as e:
-                logger.error(f"Error trying Python module approach: {str(e)}")
-                results.append(TestResult(
-                    name="test_command_verification",
-                    status="fail",
-                    duration=0,
-                    error_message=f"Test command '{config.command}' not found in PATH. Make sure it's installed."
-                ))
-                return results
-            
-        logger.info(f"Test command '{config.command}' found at: {executable_path}")
-        
-        # Prepare the full command, replacing the first part with the full path if needed
-        if executable_path != command_parts[0]:
-            if " " in executable_path:  # Handle case like "python -m pytest"
-                exec_parts = executable_path.split()
-                full_command = exec_parts + command_parts[1:]
-            else:
-                full_command = [executable_path] + command_parts[1:]
+            # Add any additional arguments if present
+            extra_args = config.command.replace("python -m pytest", "").strip().split()
+            if extra_args:
+                command_parts.extend(extra_args)
         else:
-            full_command = command_parts
+            # Handle other commands normally
+            command_parts = config.command.split()
             
-        logger.info(f"Running test command: {' '.join(full_command)}")
+        logger.info(f"Running tests with command: {' '.join(command_parts)}")
         
-        # Run the test command and capture output
+        # Run the test command with environment variables properly passed
         process = subprocess.Popen(
-            full_command,
+            command_parts,
             cwd=config.codebase_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            env=os.environ.copy()  # Pass current environment variables
         )
         
         stdout, stderr = process.communicate()
         duration = int((datetime.now() - start_time).total_seconds() * 1000)
         
-        # Parse test output (this is a simplified example)
+        # Parse test output
         if process.returncode == 0:
             results.append(TestResult(
                 name="test_suite",
@@ -202,14 +141,26 @@ async def test_fix(fix: DeveloperResponse):
             # Copy codebase to temporary directory
             codebase_path = os.getenv("CODEBASE_PATH", "/app/code_repo")
             temp_codebase = os.path.join(temp_dir, "code")
-            shutil.copytree(codebase_path, temp_codebase)
+            
+            # Ensure code_repo directory exists
+            if not os.path.exists(codebase_path):
+                logger.warning(f"Codebase path {codebase_path} does not exist, creating it")
+                os.makedirs(codebase_path, exist_ok=True)
+                
+            # Copy the codebase, handling empty directories
+            try:
+                shutil.copytree(codebase_path, temp_codebase)
+            except shutil.Error as e:
+                logger.warning(f"Error during copy: {str(e)}")
+                # Ensure the target directory exists even if copy failed
+                os.makedirs(temp_codebase, exist_ok=True)
             
             # Apply the diffs to the temporary codebase
             apply_diffs(fix.diffs, temp_codebase)
             
-            # Configure test settings
+            # Configure test settings - use environment variable or default to python module approach
             test_config = TestConfig(
-                command=os.getenv("TEST_COMMAND", "pytest"),
+                command=os.getenv("TEST_COMMAND", "python -m pytest"),
                 codebase_path=temp_codebase
             )
             

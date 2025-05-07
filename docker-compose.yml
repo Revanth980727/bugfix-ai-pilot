@@ -115,6 +115,7 @@ services:
       - TEST_COMMAND=${PROJECT_TEST_COMMAND:-python -m pytest}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - CODEBASE_PATH=/app/code_repo
     env_file:
       - ./.env
     volumes:
