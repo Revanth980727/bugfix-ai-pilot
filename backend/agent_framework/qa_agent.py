@@ -77,7 +77,8 @@ class QAAgent(Agent):
             
         # Run tests
         logger.info("Running tests")
-        success, test_output = self._run_tests(input_data.get("test_command", "pytest"))
+        test_command = input_data.get("test_command", "python -m pytest")
+        success, test_output = self._run_test_command(test_command)
         
         # Parse and process test results
         if success:
@@ -120,6 +121,7 @@ class QAAgent(Agent):
         Returns:
             Boolean indicating if input is valid
         """
+        # ... keep existing code (validation logic)
         valid = True
         validation_errors = []
         
@@ -198,6 +200,7 @@ class QAAgent(Agent):
         Returns:
             Boolean indicating if code changes were detected
         """
+        # ... keep existing code (verification logic)
         try:
             # Run git diff to check for changes
             diff_process = subprocess.run(
@@ -224,23 +227,48 @@ class QAAgent(Agent):
             result["code_changes_detected"] = False
             return False
     
-    def _run_tests(self, test_command: str) -> tuple:
+    def _run_test_command(self, test_command: str, timeout: int = 300) -> tuple:
         """
         Run tests using the specified command
         
         Args:
             test_command: Command to run tests
+            timeout: Timeout in seconds
             
         Returns:
             Tuple of (success, output)
         """
         try:
             logger.info(f"Running test command: {test_command}")
+            
+            # Handle different test command formats properly
+            if "python -m pytest" in test_command:
+                # Handle as Python module
+                command_parts = ["python", "-m", "pytest"]
+                
+                # Add any additional arguments
+                extra_args = test_command.replace("python -m pytest", "").strip().split()
+                if extra_args:
+                    command_parts.extend(extra_args)
+            elif test_command.startswith("pytest"):
+                # Convert pytest to python -m pytest for reliability
+                command_parts = ["python", "-m", "pytest"]
+                extra_args = test_command.replace("pytest", "").strip().split()
+                if extra_args:
+                    command_parts.extend(extra_args)
+            else:
+                # For other commands, use regular splitting
+                command_parts = test_command.split()
+                
+            logger.info(f"Executing test command: {' '.join(command_parts)}")
+            
             process = subprocess.run(
-                test_command.split(),
+                command_parts,
                 cwd=os.environ.get("REPO_PATH", "/mnt/codebase"),
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=timeout,
+                env=os.environ.copy()  # Pass environment variables
             )
             
             # Check if tests passed
@@ -249,6 +277,9 @@ class QAAgent(Agent):
             
             return success, process.stdout + process.stderr
             
+        except subprocess.TimeoutExpired as e:
+            logger.error(f"Test command timed out after {timeout} seconds")
+            return False, f"Timeout: Test execution exceeded {timeout} seconds"
         except Exception as e:
             logger.error(f"Error running tests: {str(e)}")
             return False, str(e)

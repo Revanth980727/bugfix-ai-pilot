@@ -28,4 +28,10 @@ ENV PATH="/usr/local/bin:${PATH}"
 ENV PYTHONPATH="/app:${PYTHONPATH}"
 ENV TEST_COMMAND="python -m pytest"
 
+# Print environment info for debugging
+RUN echo "Python version:" && python --version
+RUN echo "Pytest version:" && python -m pytest --version
+RUN echo "PATH:" && echo $PATH
+RUN echo "PYTHONPATH:" && echo $PYTHONPATH
+
 CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8003"]

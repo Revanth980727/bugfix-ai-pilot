@@ -81,8 +81,13 @@ def run_tests(config: TestConfig) -> List[TestResult]:
             if extra_args:
                 command_parts.extend(extra_args)
         else:
-            # Handle other commands normally
+            # Try to split the command intelligently
             command_parts = config.command.split()
+            
+            # If the command starts with 'pytest', replace with 'python -m pytest'
+            if command_parts and command_parts[0] == 'pytest':
+                logger.info("Converting 'pytest' to 'python -m pytest' for reliability")
+                command_parts = [sys.executable, "-m", "pytest"] + command_parts[1:]
             
         logger.info(f"Running tests with command: {' '.join(command_parts)}")
         

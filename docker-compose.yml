@@ -1,3 +1,4 @@
+
 version: '3.9'
 
 services:
@@ -34,6 +35,7 @@ services:
       - COMMUNICATOR_URL=http://communicator:8004
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
     env_file:
       - ./.env
     volumes:
@@ -112,10 +114,11 @@ services:
       - "8003:8003"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - TEST_COMMAND=${PROJECT_TEST_COMMAND:-python -m pytest}
+      - TEST_COMMAND=python -m pytest
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
       - CODEBASE_PATH=/app/code_repo
+      - REPO_PATH=/app/code_repo
     env_file:
       - ./.env
     volumes:
@@ -153,6 +156,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
     env_file:
       - ./.env
     volumes:
@@ -181,10 +185,13 @@ services:
       - JIRA_POLL_INTERVAL=${JIRA_POLL_INTERVAL:-30}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
+      - REPO_PATH=/app/code_repo
     env_file:
       - ./.env
     volumes:
       - ./logs:/app/logs/jira_service
+      - ./code_repo:/app/code_repo
     networks:
       - bugfix_network
     restart: unless-stopped
@@ -201,10 +208,12 @@ services:
       - GITHUB_DEFAULT_BRANCH=${GITHUB_DEFAULT_BRANCH:-main}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
     env_file:
       - ./.env
     volumes:
       - ./logs:/app/logs/github_service
+      - ./code_repo:/app/code_repo
     networks:
       - bugfix_network
     restart: "no"
