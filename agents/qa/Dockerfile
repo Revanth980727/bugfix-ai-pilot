@@ -19,10 +19,11 @@ COPY ./utils /app/utils/
 RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
-# Make sure pytest is properly installed and in PATH
-RUN pip install pytest --upgrade
-RUN python -m pytest --version
-ENV PATH="/usr/local/bin:${PATH}"
+# Explicitly install pytest and add diagnostic output
+RUN pip install pytest --upgrade && \
+    pip list | grep pytest && \
+    which pytest && \
+    python -c "import sys; print(sys.path)"
 
 # Set environment variables
 ENV PYTHONPATH="/app:${PYTHONPATH}"

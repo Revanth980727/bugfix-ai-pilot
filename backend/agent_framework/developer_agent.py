@@ -1,4 +1,3 @@
-
 import os
 import logging
 import json
@@ -88,7 +87,7 @@ class DeveloperAgent(Agent):
                 return result
                 
             # If we got here, mark as success
-            result["success"] = True
+            result["success"] = True  # Set success to True when all steps succeed
             logger.info("Developer agent completed successfully with valid output structure")
             
             # Final logging of the result
@@ -181,6 +180,7 @@ class DeveloperAgent(Agent):
                 """
                 result["confidence_score"] = 95
                 result["commit_message"] = f"Fix {ticket_id}: Correct NetworkX import in GraphRAG.py"
+                result["success"] = True  # Fix success flag inconsistency
                 
                 return True
             else:
@@ -218,6 +218,7 @@ class DeveloperAgent(Agent):
                     """
                     result["confidence_score"] = 50
                     result["commit_message"] = f"Fix {ticket_id}: Generic fix for {file_to_fix}"
+                    result["success"] = True  # Fix success flag inconsistency
                     
                     return True
                     

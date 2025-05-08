@@ -67,6 +67,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
     env_file:
       - ./.env
     volumes:
@@ -92,6 +94,9 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - MAX_RETRIES=${MAX_RETRIES:-4}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
+      - REPO_PATH=/app/code_repo
     env_file:
       - ./.env
     volumes:

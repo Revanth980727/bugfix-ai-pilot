@@ -71,27 +71,29 @@ def run_tests(config: TestConfig) -> List[TestResult]:
         # Parse the command into components - handle space-separated commands properly
         logger.info(f"Preparing to run test command: '{config.command}'")
         
-        # If command contains 'python -m pytest', handle it as a special case
-        if "python -m pytest" in config.command:
-            logger.info("Detected Python module pytest command")
-            command_parts = [sys.executable, "-m", "pytest"]
+        # Get current environment variables for debugging
+        env = os.environ.copy()
+        logger.info(f"Environment variables: PATH={env.get('PATH')}, PYTHONPATH={env.get('PYTHONPATH')}")
+        
+        # Split command safely, always use python -m pytest
+        if "pytest" in config.command:
+            # Standardize on using python -m pytest
+            if config.command.startswith("pytest"):
+                command_parts = [sys.executable, "-m", "pytest"] + config.command.split()[1:]
+            elif "python -m pytest" in config.command:
+                command_parts = [sys.executable, "-m", "pytest"] + config.command.replace("python -m pytest", "").strip().split()
+            else:
+                command_parts = config.command.split()
             
-            # Add any additional arguments if present
-            extra_args = config.command.replace("python -m pytest", "").strip().split()
-            if extra_args:
-                command_parts.extend(extra_args)
+            logger.info(f"Running tests with command: {' '.join(command_parts)}")
         else:
-            # Try to split the command intelligently
+            # For non-pytest commands
             command_parts = config.command.split()
-            
-            # If the command starts with 'pytest', replace with 'python -m pytest'
-            if command_parts and command_parts[0] == 'pytest':
-                logger.info("Converting 'pytest' to 'python -m pytest' for reliability")
-                command_parts = [sys.executable, "-m", "pytest"] + command_parts[1:]
-            
-        logger.info(f"Running tests with command: {' '.join(command_parts)}")
+            logger.info(f"Running non-pytest command: {' '.join(command_parts)}")
         
         # Run the test command with environment variables properly passed
+        logger.info(f"Executing test command: {' '.join(command_parts)}")
+        
         process = subprocess.Popen(
             command_parts,
             cwd=config.codebase_path,
@@ -103,6 +105,13 @@ def run_tests(config: TestConfig) -> List[TestResult]:
         
         stdout, stderr = process.communicate()
         duration = int((datetime.now() - start_time).total_seconds() * 1000)
+        
+        # Log both stdout and stderr for debugging
+        logger.info(f"Command stdout: {stdout}")
+        if stderr:
+            logger.info(f"Command stderr: {stderr}")
+            
+        logger.info(f"Test command exited with code {process.returncode}")
         
         # Parse test output
         if process.returncode == 0:
@@ -118,7 +127,7 @@ def run_tests(config: TestConfig) -> List[TestResult]:
                 status="fail",
                 duration=duration,
                 output=stdout,
-                error_message=stderr
+                error_message=stderr or "Test failed with no error message"
             ))
             
     except Exception as e:
