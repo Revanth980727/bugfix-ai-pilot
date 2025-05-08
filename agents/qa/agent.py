@@ -1,15 +1,14 @@
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
 import logging
 import subprocess
+import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Literal
 import json
 import tempfile
 import shutil
-import sys
 
 # Configure logging
 logging.basicConfig(
@@ -80,8 +79,17 @@ def run_tests(config: TestConfig) -> List[TestResult]:
         except ImportError:
             # If pytest isn't available, run a pip install
             logger.warning("Pytest not found, attempting to install...")
-            subprocess.run([sys.executable, "-m", "pip", "install", "pytest"], check=True)
-            logger.info("Installed pytest")
+            try:
+                subprocess.run([sys.executable, "-m", "pip", "install", "pytest"], check=True)
+                logger.info("Installed pytest")
+            except Exception as e:
+                logger.error(f"Failed to install pytest: {str(e)}")
+                return [TestResult(
+                    name="test_suite",
+                    status="fail",
+                    duration=0,
+                    error_message=f"Failed to install pytest: {str(e)}"
+                )]
         
         # Standardize on using python -m pytest
         command_parts = [sys.executable, "-m", "pytest"]
