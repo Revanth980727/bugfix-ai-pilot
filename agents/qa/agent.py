@@ -68,32 +68,39 @@ def run_tests(config: TestConfig) -> List[TestResult]:
     start_time = datetime.now()
     
     try:
-        # Parse the command into components - handle space-separated commands properly
-        logger.info(f"Preparing to run test command: '{config.command}'")
-        
         # Get current environment variables for debugging
         env = os.environ.copy()
         logger.info(f"Environment variables: PATH={env.get('PATH')}, PYTHONPATH={env.get('PYTHONPATH')}")
         
-        # Split command safely, always use python -m pytest
+        # Check if pytest is available before attempting to run
+        try:
+            # Try to import pytest to make sure it's available
+            import pytest
+            logger.info(f"Found pytest version: {pytest.__version__}")
+        except ImportError:
+            # If pytest isn't available, run a pip install
+            logger.warning("Pytest not found, attempting to install...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "pytest"], check=True)
+            logger.info("Installed pytest")
+        
+        # Standardize on using python -m pytest
+        command_parts = [sys.executable, "-m", "pytest"]
+        
+        # Add any arguments from the config command if they exist
         if "pytest" in config.command:
-            # Standardize on using python -m pytest
-            if config.command.startswith("pytest"):
-                command_parts = [sys.executable, "-m", "pytest"] + config.command.split()[1:]
-            elif "python -m pytest" in config.command:
-                command_parts = [sys.executable, "-m", "pytest"] + config.command.replace("python -m pytest", "").strip().split()
-            else:
-                command_parts = config.command.split()
-            
-            logger.info(f"Running tests with command: {' '.join(command_parts)}")
-        else:
-            # For non-pytest commands
-            command_parts = config.command.split()
-            logger.info(f"Running non-pytest command: {' '.join(command_parts)}")
+            # Extract arguments after "pytest" or "python -m pytest"
+            if "python -m pytest" in config.command:
+                args = config.command.replace("python -m pytest", "").strip().split()
+                if args:
+                    command_parts.extend(args)
+            elif config.command.startswith("pytest"):
+                args = config.command.split()[1:]  # Skip the "pytest" command itself
+                if args:
+                    command_parts.extend(args)
+        
+        logger.info(f"Running tests with command: {' '.join(command_parts)}")
         
         # Run the test command with environment variables properly passed
-        logger.info(f"Executing test command: {' '.join(command_parts)}")
-        
         process = subprocess.Popen(
             command_parts,
             cwd=config.codebase_path,

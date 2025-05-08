@@ -119,11 +119,13 @@ services:
       - "8003:8003"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - TEST_COMMAND=python -m pytest
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
       - CODEBASE_PATH=/app/code_repo
       - REPO_PATH=/app/code_repo
+      - PIP_NO_CACHE_DIR=off
+      - PYTHONDONTWRITEBYTECODE=1
     env_file:
       - ./.env
     volumes:

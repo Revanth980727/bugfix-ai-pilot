@@ -3,6 +3,7 @@ import os
 import logging
 import subprocess
 import json
+import time
 from typing import Dict, Any, Optional, List
 from .agent_base import Agent
 
@@ -77,7 +78,8 @@ class QAAgent(Agent):
             
         # Run tests
         logger.info("Running tests")
-        test_command = input_data.get("test_command", "python -m pytest")
+        test_command = os.environ.get("TEST_COMMAND", "python -m pytest")
+        logger.info(f"Using test command from environment: {test_command}")
         success, test_output = self._run_test_command(test_command)
         
         # Parse and process test results
@@ -121,7 +123,6 @@ class QAAgent(Agent):
         Returns:
             Boolean indicating if input is valid
         """
-        # ... keep existing code (validation logic)
         valid = True
         validation_errors = []
         
@@ -200,7 +201,6 @@ class QAAgent(Agent):
         Returns:
             Boolean indicating if code changes were detected
         """
-        # ... keep existing code (verification logic)
         try:
             # Run git diff to check for changes
             diff_process = subprocess.run(
@@ -241,6 +241,19 @@ class QAAgent(Agent):
         try:
             logger.info(f"Running test command: {test_command}")
             
+            # Check if pytest is available
+            try:
+                import pytest
+                logger.info(f"Found pytest version: {pytest.__version__}")
+            except ImportError:
+                logger.warning("Pytest not found, attempting to install...")
+                try:
+                    subprocess.run([sys.executable, "-m", "pip", "install", "pytest"], check=True)
+                    logger.info("Successfully installed pytest")
+                except Exception as e:
+                    logger.error(f"Failed to install pytest: {str(e)}")
+                    return False, f"Failed to install pytest: {str(e)}"
+            
             # Handle different test command formats properly
             if "python -m pytest" in test_command:
                 # Handle as Python module
@@ -262,18 +275,27 @@ class QAAgent(Agent):
                 
             logger.info(f"Executing test command: {' '.join(command_parts)}")
             
+            # Print environment info for debugging
+            env = os.environ.copy()
+            logger.info(f"Environment variables for test command: PATH={env.get('PATH', '')}, PYTHONPATH={env.get('PYTHONPATH', '')}")
+            
             process = subprocess.run(
                 command_parts,
                 cwd=os.environ.get("REPO_PATH", "/mnt/codebase"),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                env=os.environ.copy()  # Pass environment variables
+                env=env  # Pass environment variables
             )
             
             # Check if tests passed
             success = process.returncode == 0
             logger.info(f"Test command exited with code {process.returncode}")
+            
+            # Log output for debugging
+            logger.info(f"Test stdout: {process.stdout}")
+            if process.stderr:
+                logger.info(f"Test stderr: {process.stderr}")
             
             return success, process.stdout + process.stderr
             
@@ -327,7 +349,7 @@ class QAAgent(Agent):
         
         # Process the output line by line to extract key failure information
         for line in output.split('\n'):
-            if "FAILED" in line or "Error:" in line or "Exception:" in line:
+            if "FAILED" in line or "Error:" in line or "Exception:" in line or "No module named" in line:
                 failure_lines.append(line.strip())
                 
         # If we found specific failure lines, join them

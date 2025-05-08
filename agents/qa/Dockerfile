@@ -19,19 +19,21 @@ COPY ./utils /app/utils/
 RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
-# Explicitly install pytest and add diagnostic output
-RUN pip install pytest --upgrade && \
+# Explicitly install pytest (use pip3 to ensure it installs to the correct Python version)
+RUN pip install pytest==7.4.3 --upgrade && \
     pip list | grep pytest && \
     which pytest && \
-    python -c "import sys; print(sys.path)"
+    python -c "import sys; print(sys.path)" && \
+    python -c "import pytest; print(f'pytest version: {pytest.__version__}')" || echo "Failed to import pytest"
 
 # Set environment variables
 ENV PYTHONPATH="/app:${PYTHONPATH}"
 ENV TEST_COMMAND="python -m pytest"
+ENV PATH="/usr/local/bin:${PATH}"
 
 # Print environment info for debugging
 RUN echo "Python version:" && python --version
-RUN echo "Pytest version:" && python -m pytest --version
+RUN echo "Pytest version:" && python -m pytest --version || echo "Failed to get pytest version"
 RUN echo "PATH:" && echo $PATH
 RUN echo "PYTHONPATH:" && echo $PYTHONPATH
 
