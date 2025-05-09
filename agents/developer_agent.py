@@ -1,7 +1,7 @@
-
 import os
 import time
 import json
+import re
 from typing import Dict, Any, List, Optional
 import openai
 from .utils.logger import Logger
@@ -112,7 +112,76 @@ class DeveloperAgent:
                 "success": False
             }
     
-    # ... keep existing code (generate_fix method and related code)
+    def generate_fix(self, task_plan: Dict[str, Any], attempt: int, previous_attempts: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Generate a fix based on the task plan using the OpenAI API
+        
+        Args:
+            task_plan: Dictionary with task plan from PlannerAgent
+            attempt: Current attempt number
+            previous_attempts: List of previous attempts
+        
+        Returns:
+            Dictionary with patch information
+        """
+        # This method would use the OpenAI API to generate a fix
+        # In a real implementation, this would:
+        # 1. Craft a prompt based on the task plan
+        # 2. Call OpenAI API to generate a fix
+        # 3. Parse the response to extract the patch content
+        # 4. Handle failures and retries
+        
+        # For now, we'll create a mock response
+        self.logger.info("Generating code fix using OpenAI API (mocked)")
+        
+        # In a real system, we would use the OpenAI API here
+        # For now, we'll create a simple patch based on the task plan
+        ticket_id = task_plan.get("ticket_id", "unknown")
+        summary = task_plan.get("summary", "")
+        
+        # Mock file changes
+        file_changes = []
+        for file in task_plan.get("affected_files", []):
+            file_path = file if isinstance(file, str) else file.get("file", "")
+            if not file_path:
+                continue
+                
+            file_changes.append({
+                "file_path": file_path,
+                "diff": f"--- a/{file_path}\n+++ b/{file_path}\n@@ -1,3 +1,6 @@\n+# Fixed bug from ticket {ticket_id}: {summary}\n+\n def example_function():\n-    # Original code with bug\n-    return None\n+    # Fixed implementation\n+    return 'Bug fixed'"
+            })
+                
+        # Mock test generation
+        test_files = {}
+        for file_change in file_changes:
+            file_path = file_change["file_path"]
+            if file_path.endswith(".py"):
+                file_name = os.path.basename(file_path)
+                file_name_without_ext = os.path.splitext(file_name)[0]
+                test_file_name = f"test_{file_name_without_ext}.py"
+                
+                test_files[test_file_name] = f"""
+import pytest
+
+def test_example_function():
+    from {file_name_without_ext} import example_function
+    assert example_function() == 'Bug fixed'
+"""
+        
+        # Apply the changes
+        results = self._apply_patch(file_changes)
+        
+        # Create response
+        patch_data = {
+            "patch_content": "\n".join(fc["diff"] for fc in file_changes),
+            "patched_files": [fc["file_path"] for fc in file_changes],
+            "patched_code": results["patched_code"],
+            "test_code": test_files,  # Add generated tests
+            "commit_message": f"Fix {ticket_id}: {summary[:50]}",
+            "confidence_score": 80,  # Mock confidence score
+        }
+        
+        return patch_data
     
     def _apply_patch(self, file_changes: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Apply patches to the repository files with precise line-by-line changes"""
@@ -593,5 +662,3 @@ class DeveloperAgent:
             clean_lines = [line[min_indent:] if line.strip() else line for line in clean_lines]
             
         return '\n'.join(clean_lines)
-        
-    # ... keep existing code (remaining methods)

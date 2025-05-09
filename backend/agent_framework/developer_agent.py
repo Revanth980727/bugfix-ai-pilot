@@ -3,6 +3,7 @@ import os
 import logging
 import json
 import subprocess
+import re  # Add import for regex operations
 from typing import Dict, Any, List, Optional
 from .agent_base import Agent
 
@@ -176,7 +177,7 @@ class DeveloperAgent(Agent):
                 
                 # Generate tests based on the patched content and bug information
                 test_content = self._create_test_for_file(file_path, file_name_without_ext, 
-                                                          patched_content, bug_summary, error_type)
+                                                         patched_content, bug_summary, error_type)
                 
                 # Add to test_code
                 result["test_code"][test_file_name] = test_content
@@ -203,6 +204,9 @@ class DeveloperAgent(Agent):
         Returns:
             Generated test code as string
         """
+        # Import re module for regex operations
+        import re  # Ensure re is imported
+        
         # Extract functions and classes from the file content
         import_pattern = r'import\s+([a-zA-Z0-9_\.]+)'
         from_import_pattern = r'from\s+([a-zA-Z0-9_\.]+)\s+import\s+([a-zA-Z0-9_\.,\s]+)'
@@ -215,11 +219,11 @@ class DeveloperAgent(Agent):
         
         import_statements = []
         
-        # Extract imports, functions, and classes
+        # Extract imports, functions, and classes using re.search and re.findall
         for line in file_content.splitlines():
             # Check for imports
-            import_match = import_pattern.search(line)
-            from_import_match = from_import_pattern.search(line)
+            import_match = re.search(import_pattern, line)
+            from_import_match = re.search(from_import_pattern, line)
             
             if import_match:
                 import_statements.append(line)
@@ -230,12 +234,12 @@ class DeveloperAgent(Agent):
                 import_matches.extend([item.strip() for item in imported_items])
             
             # Check for function definitions
-            function_match = function_pattern.search(line)
+            function_match = re.search(function_pattern, line)
             if function_match and not line.startswith(' ' * 8):  # Avoid nested functions
                 function_matches.append(function_match.group(1))
                 
             # Check for class definitions
-            class_match = class_pattern.search(line)
+            class_match = re.search(class_pattern, line)
             if class_match:
                 class_matches.append(class_match.group(1))
                 
@@ -401,5 +405,43 @@ def test_basic_functionality():
             logger.error(f"Error generating fix: {str(e)}")
             return False
     
-    # ... keep existing code (validation and patching methods)
-
+    def _validate_output(self, result: Dict[str, Any]) -> bool:
+        """
+        Validate that the output contains all required fields
+        
+        Args:
+            result: Dictionary with generated fix
+            
+        Returns:
+            Boolean indicating if output is valid
+        """
+        required_fields = [
+            "patched_code", "patched_files", "commit_message"
+        ]
+        
+        for field in required_fields:
+            if field not in result or not result[field]:
+                logger.error(f"Missing required field in output: {field}")
+                return False
+                
+        # Validate all patched_files have corresponding patched_code
+        for file_path in result["patched_files"]:
+            if file_path not in result["patched_code"]:
+                logger.error(f"Patched file {file_path} has no corresponding patched_code")
+                return False
+                
+        return True
+        
+    def apply_patch(self, result: Dict[str, Any]) -> bool:
+        """
+        Apply the generated patch to the codebase
+        
+        Args:
+            result: Dictionary with generated fix
+            
+        Returns:
+            Boolean indicating if patch was applied successfully
+        """
+        # In a real implementation, this would apply the patch to the codebase
+        # For now, we'll just return True
+        return True
