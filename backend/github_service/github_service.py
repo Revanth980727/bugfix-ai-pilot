@@ -2,7 +2,7 @@
 import os
 import logging
 import json
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 from .github_client import GitHubClient
 from .patch_validator import PatchValidator
 
@@ -54,13 +54,13 @@ class GitHubService:
             self.logger.error(f"Error creating fix branch for ticket {ticket_id}: {e}")
             return False, branch_name
     
-    def commit_bug_fix(self, branch_name: str, file_changes: List[Dict[str, Any]], 
+    def commit_bug_fix(self, branch_name: Union[Tuple[bool, str], str], file_changes: List[Dict[str, Any]], 
                       ticket_id: str, commit_message: Optional[str] = None) -> bool:
         """
         Commit bug fix changes to a branch
         
         Args:
-            branch_name: Branch to commit to
+            branch_name: Branch to commit to (can be string or tuple from create_fix_branch)
             file_changes: List of file changes (each with filename and content)
             ticket_id: JIRA ticket ID
             commit_message: Optional commit message override
@@ -68,6 +68,11 @@ class GitHubService:
         Returns:
             Success status
         """
+        # Handle the case where branch_name is a tuple from create_fix_branch
+        if isinstance(branch_name, tuple) and len(branch_name) == 2:
+            success, actual_branch_name = branch_name
+            branch_name = actual_branch_name
+            
         if not commit_message:
             commit_message = f"Fix bug for {ticket_id}"
             
@@ -108,13 +113,13 @@ class GitHubService:
             self.logger.error(f"Error committing bug fix: {e}")
             return False
     
-    def create_fix_pr(self, branch_name: str, ticket_id: str, title: Optional[str] = None, 
+    def create_fix_pr(self, branch_name: Union[Tuple[bool, str], str], ticket_id: str, title: Optional[str] = None, 
                      description: Optional[str] = None, base_branch: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Create a pull request for the fix
         
         Args:
-            branch_name: Source branch with fixes
+            branch_name: Source branch with fixes (can be string or tuple from create_fix_branch)
             ticket_id: JIRA ticket ID
             title: PR title (defaults to "Fix for {ticket_id}")
             description: PR description
@@ -123,6 +128,11 @@ class GitHubService:
         Returns:
             Dictionary with PR details including URL and number if successful, None otherwise
         """
+        # Handle the case where branch_name is a tuple from create_fix_branch
+        if isinstance(branch_name, tuple) and len(branch_name) == 2:
+            success, actual_branch_name = branch_name
+            branch_name = actual_branch_name
+            
         if not title:
             title = f"Fix for {ticket_id}"
             
@@ -186,7 +196,7 @@ class GitHubService:
         # For this example, we'll just return None
         return None
     
-    def add_pr_comment(self, pr_identifier: str, comment: str) -> bool:
+    def add_pr_comment(self, pr_identifier: Union[str, int, tuple], comment: str) -> bool:
         """
         Add a comment to a PR
         
@@ -214,18 +224,31 @@ class GitHubService:
             # Handle tuple case - this fixes the error you're seeing
             if isinstance(pr_identifier, tuple):
                 self.logger.warning(f"Received tuple as PR identifier: {pr_identifier}")
-                # Try to extract PR number from the first element if it's a URL
-                if len(pr_identifier) > 0 and isinstance(pr_identifier[0], str):
-                    import re
-                    match = re.search(r'/pull/(\d+)', pr_identifier[0])
-                    if match:
-                        pr_identifier = int(match.group(1))
-                        self.logger.info(f"Extracted PR number {pr_identifier} from tuple")
+                # Properly extract value from tuple
+                if len(pr_identifier) > 0:
+                    # If the first element is a bool (success flag), take the second element 
+                    if len(pr_identifier) > 1 and isinstance(pr_identifier[0], bool):
+                        pr_identifier = pr_identifier[1]
                     else:
-                        self.logger.error(f"Could not extract PR number from tuple: {pr_identifier}")
+                        pr_identifier = pr_identifier[0]
+                    
+                    # Check if extracted value is a string URL
+                    if isinstance(pr_identifier, str):
+                        import re
+                        match = re.search(r'/pull/(\d+)', pr_identifier)
+                        if match:
+                            pr_identifier = int(match.group(1))
+                            self.logger.info(f"Extracted PR number {pr_identifier} from tuple")
+                        else:
+                            self.logger.error(f"Could not extract PR number from tuple: {pr_identifier}")
+                            return False
+                    elif isinstance(pr_identifier, int):
+                        self.logger.info(f"Using PR number {pr_identifier} from tuple")
+                    else:
+                        self.logger.error(f"Invalid tuple PR identifier: {pr_identifier}")
                         return False
                 else:
-                    self.logger.error(f"Invalid tuple PR identifier: {pr_identifier}")
+                    self.logger.error(f"Empty tuple PR identifier: {pr_identifier}")
                     return False
             
             # If it's still not a number at this point, try to extract a PR number as a last resort
