@@ -1,9 +1,8 @@
-
 import os
 import logging
 import subprocess
-import json
 import sys
+import json
 import time
 from typing import Dict, Any, Optional, List
 from .agent_base import Agent
@@ -155,7 +154,7 @@ class QAAgent(Agent):
         except Exception as e:
             logger.error(f"Error writing test files: {str(e)}")
             return []
-        
+    
     def _validate_developer_input(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
         """
         Validate input from developer agent
