@@ -2,6 +2,7 @@
 import os
 import logging
 import json
+import re
 from typing import Dict, Any, List, Optional, Tuple, Union
 from .github_client import GitHubClient
 from .patch_validator import PatchValidator
@@ -158,12 +159,30 @@ class GitHubService:
             if not pr_url:
                 self.logger.error(f"Failed to create PR for ticket {ticket_id}")
                 return None
+            
+            # Check if pr_url is a tuple (this is the issue causing the error)
+            if isinstance(pr_url, tuple):
+                # If it's a tuple from create_pull_request in github_client.py
+                self.logger.info(f"Received PR URL as tuple: {pr_url}")
+                # Extract actual URL from the tuple (first element)
+                actual_url = pr_url[0] if pr_url and len(pr_url) > 0 else None
+                pr_number = pr_url[1] if pr_url and len(pr_url) > 1 else None
                 
-            # Extract PR number from URL
+                # Store the PR mapping if we have a number
+                if pr_number:
+                    self.pr_mappings[ticket_id] = pr_number
+                    self.logger.info(f"Mapped ticket {ticket_id} to PR #{pr_number}")
+                
+                self.logger.info(f"Successfully created PR for ticket {ticket_id}: {actual_url}")
+                return {
+                    "url": actual_url,
+                    "number": pr_number
+                }
+                
+            # If pr_url is a string (normal case), extract PR number from URL
             pr_number = None
             try:
-                import re
-                match = re.search(r'/pull/(\d+)', pr_url)
+                match = re.search(r'/pull/(\d+)', str(pr_url))
                 if match:
                     pr_number = int(match.group(1))
                     # Store the PR mapping

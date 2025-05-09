@@ -3,7 +3,7 @@ import os
 import logging
 import json
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union, Tuple
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -134,8 +134,12 @@ class CommunicatorAgent:
                                         f"This PR fixes the issue described in {ticket_id}"
                                     )
                                     
-                                    if pr_result and "url" in pr_result:
-                                        pr_url = pr_result["url"]
+                                    if pr_result and isinstance(pr_result, dict):
+                                        # Extract PR URL, handling tuple case
+                                        pr_url = pr_result.get("url")
+                                        if isinstance(pr_url, tuple) and len(pr_url) > 0:
+                                            pr_url = pr_url[0]  # Extract the string URL
+                                        
                                         result["pr_url"] = pr_url
                                         result["pr_created"] = True
                                         logger.info(f"Created PR for ticket {ticket_id}: {pr_url}")
@@ -152,6 +156,10 @@ class CommunicatorAgent:
                         pr_url = self._create_github_pr(ticket_id, input_data)
                         
                         if pr_url:
+                            # Handle tuple PR URL case
+                            if isinstance(pr_url, tuple) and len(pr_url) > 0:
+                                pr_url = pr_url[0]  # Extract string URL
+                                
                             result["pr_url"] = pr_url
                             result["pr_created"] = True
                         
@@ -161,7 +169,12 @@ class CommunicatorAgent:
             
             # Update JIRA
             try:
-                self._update_jira_final(ticket_id, test_passed, result.get("pr_url"))
+                # Make sure pr_url is a string if it's a tuple
+                pr_url = result.get("pr_url")
+                if isinstance(pr_url, tuple) and len(pr_url) > 0:
+                    pr_url = pr_url[0]
+                    
+                self._update_jira_final(ticket_id, test_passed, pr_url)
                 result["jira_updated"] = True
             except Exception as e:
                 logger.error(f"Error updating JIRA with final result: {str(e)}")
@@ -173,7 +186,7 @@ class CommunicatorAgent:
         logger.info(f"Communication completed for ticket {ticket_id}")
         return result
     
-    def _create_github_pr(self, ticket_id: str, input_data: Dict[str, Any]) -> Optional[str]:
+    def _create_github_pr(self, ticket_id: str, input_data: Dict[str, Any]) -> Union[str, Tuple[str, int], None]:
         """Create a GitHub PR with the fix"""
         logger.info(f"Creating GitHub PR for ticket {ticket_id}")
         

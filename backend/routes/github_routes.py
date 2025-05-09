@@ -230,10 +230,17 @@ def create_pr():
                 'error': 'Failed to create PR'
             }), 500
         
+        # Handle the case where pr_result['url'] might be a tuple
+        pr_url = pr_result.get('url')
+        if isinstance(pr_url, tuple) and len(pr_url) > 0:
+            pr_url = pr_url[0]  # Extract the URL string from the tuple
+        
+        pr_number = pr_result.get('number')
+        
         return jsonify({
             'success': True,
-            'pr_url': pr_result.get('url'),
-            'pr_number': pr_result.get('number'),
+            'pr_url': pr_url,
+            'pr_number': pr_number,
             'message': f"PR created successfully for ticket {ticket_id}"
         }), 201
     except Exception as e:
@@ -269,6 +276,17 @@ def add_comment():
                 'success': False,
                 'error': 'Missing required parameters (pr_identifier, comment)'
             }), 400
+        
+        # Handle case where pr_identifier might be a tuple
+        if isinstance(pr_identifier, tuple) and len(pr_identifier) > 0:
+            logger.info(f"Received PR identifier as tuple: {pr_identifier}")
+            # If it's a tuple like (URL, number), use the number
+            if len(pr_identifier) > 1 and isinstance(pr_identifier[1], int):
+                pr_identifier = pr_identifier[1]
+                logger.info(f"Using PR number {pr_identifier} from tuple")
+            else:
+                pr_identifier = pr_identifier[0]
+                logger.info(f"Using first element of tuple as PR identifier: {pr_identifier}")
         
         # Add comment to PR
         success = github_service.add_pr_comment(pr_identifier, comment)

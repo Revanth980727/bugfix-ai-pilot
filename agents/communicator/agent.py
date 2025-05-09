@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -5,7 +6,7 @@ import logging
 import importlib.util
 import sys
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union, Tuple
 import httpx
 import asyncio
 import re
@@ -161,7 +162,11 @@ async def deploy_fix(request: DeployRequest):
                 if not pr_result:
                     raise HTTPException(status_code=500, detail="Failed to create or find PR")
                 
+                # Handle case where url might be a tuple
                 pr_url = pr_result.get('url')
+                if isinstance(pr_url, tuple) and len(pr_url) > 0:
+                    pr_url = pr_url[0]  # Get the URL string
+                
                 pr_number = pr_result.get('number')
                 logger.info(f"PR created at: {pr_url} with number {pr_number}")
         else:
@@ -204,6 +209,10 @@ async def deploy_fix(request: DeployRequest):
                 "\n".join([f"- {diff.filename}: {diff.explanation or 'No explanation provided'}" for diff in request.diffs])
             )
             
+            # Handle case where pr_url might be a tuple
+            if isinstance(pr_url, tuple) and len(pr_url) > 0:
+                pr_url = pr_url[0]  # Get the URL string
+                
             # No easy way to get PR number here
             pr_number = None
         

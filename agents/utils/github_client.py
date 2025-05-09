@@ -2,7 +2,7 @@
 import os
 import base64
 import requests
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 from .logger import Logger
 
 class GitHubClient:
@@ -152,6 +152,7 @@ class GitHubClient:
             
             # Skip PR creation when we're only using the default branch
             self.logger.info("Skipping PR creation since we're only using the default branch")
+            # Return just the URL string, not a tuple (this is the fix)
             return f"https://github.com/{self.repo_owner}/{self.repo_name}/tree/{self.default_branch}"
             
         url = f"{self.repo_api_url}/pulls"
