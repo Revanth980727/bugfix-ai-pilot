@@ -18,9 +18,17 @@ interface QAAgentProps {
     duration: number;
   };
   projectType?: string; // Add projectType prop
+  activeOrchestrator?: string | null; // Add orchestrator ID
 }
 
-export function QAAgent({ status, progress, testResults, summary, projectType = 'python' }: QAAgentProps) {
+export function QAAgent({ 
+  status, 
+  progress, 
+  testResults, 
+  summary, 
+  projectType = 'python',
+  activeOrchestrator = null
+}: QAAgentProps) {
   // Determine the appropriate test command based on the project type
   const getTestCommand = () => {
     return projectType.toLowerCase().includes('js') ? 'npm test' : 'python -m pytest';
@@ -36,7 +44,11 @@ export function QAAgent({ status, progress, testResults, summary, projectType = 
       
       {status === 'working' && !testResults && (
         <div className="space-y-2">
-          <p>Running tests to validate the fix using {getTestCommand()}...</p>
+          <p>Running tests to validate the fix using {getTestCommand()}...
+            {activeOrchestrator && (
+              <span className="text-xs text-muted-foreground ml-2">(Orchestrator: {activeOrchestrator})</span>
+            )}
+          </p>
           <div className="h-4 w-full bg-muted overflow-hidden rounded">
             <div 
               className="h-full bg-agent-qa transition-all duration-300" 

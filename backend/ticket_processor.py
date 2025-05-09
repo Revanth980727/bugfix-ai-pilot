@@ -1,8 +1,8 @@
-
 import logging
 import asyncio
 import os
 import json
+import time
 from datetime import datetime
 from typing import Dict, Any, List
 from jira_utils import update_jira_ticket
@@ -37,9 +37,50 @@ RETRY_DELAY_SECONDS = int(os.environ.get('RETRY_DELAY_SECONDS', '5'))
 # Get confidence threshold from environment or default to 60%
 CONFIDENCE_THRESHOLD = int(os.environ.get('CONFIDENCE_THRESHOLD', '60'))
 
+# QA agent lock management with timestamps to detect stale locks
+qa_locks = {}
+QA_LOCK_TIMEOUT = 300  # 5 minutes in seconds
+
+def acquire_qa_lock(ticket_id: str, orchestrator_id: str) -> bool:
+    """Attempt to acquire a lock for running QA tests on a ticket"""
+    current_time = time.time()
+    
+    # Check if there's an existing lock
+    if ticket_id in qa_locks:
+        lock_info = qa_locks[ticket_id]
+        lock_age = current_time - lock_info['timestamp']
+        
+        # If lock is stale or held by same orchestrator, allow it
+        if lock_age > QA_LOCK_TIMEOUT:
+            logger.warning(f"Found stale QA lock for ticket {ticket_id}, replacing it")
+        elif lock_info['orchestrator_id'] == orchestrator_id:
+            logger.info(f"Orchestrator {orchestrator_id} already has QA lock for ticket {ticket_id}")
+            return True
+        else:
+            logger.warning(f"QA tests for ticket {ticket_id} already in progress by orchestrator {lock_info['orchestrator_id']}")
+            return False
+    
+    # Set new lock
+    qa_locks[ticket_id] = {
+        'orchestrator_id': orchestrator_id,
+        'timestamp': current_time
+    }
+    logger.info(f"Acquired QA lock for ticket {ticket_id} by orchestrator {orchestrator_id}")
+    return True
+
+def release_qa_lock(ticket_id: str, orchestrator_id: str) -> bool:
+    """Release a lock if it's held by the specified orchestrator"""
+    if ticket_id in qa_locks and qa_locks[ticket_id]['orchestrator_id'] == orchestrator_id:
+        del qa_locks[ticket_id]
+        logger.info(f"Released QA lock for ticket {ticket_id} by orchestrator {orchestrator_id}")
+        return True
+    return False
+
 async def process_ticket(ticket: Dict[str, Any]):
     """Process a single ticket through the enhanced agent workflow"""
     ticket_id = ticket["ticket_id"]
+    # Generate a unique orchestrator ID for this process
+    orchestrator_id = f"orchestrator-{os.getpid()}-{time.time()}"
     
     try:
         # Setup logging and initialize ticket
@@ -50,13 +91,13 @@ async def process_ticket(ticket: Dict[str, Any]):
         with open(f"{ticket_log_dir}/controller_input.json", 'w') as f:
             json.dump(ticket, f, indent=2)
         
-        logger.info(f"Starting processing for ticket {ticket_id}")
+        logger.info(f"Starting processing for ticket {ticket_id} with orchestrator {orchestrator_id}")
         
         # Update JIRA ticket to "In Progress"
         await update_jira_ticket(
             ticket_id, 
             "In Progress", 
-            "BugFix AI has started working on this ticket."
+            f"BugFix AI has started working on this ticket. (Orchestrator: {orchestrator_id})"
         )
         
         # Step 1: Enhanced Planner Analysis
@@ -230,19 +271,44 @@ async def process_ticket(ticket: Dict[str, Any]):
                 
             update_ticket_status(ticket_id, "processing", {"developer_diffs": developer_response})
             
-            # Call QA
-            logger.info(f"Sending ticket {ticket_id} to QA agent (attempt {current_attempt})")
-            await update_jira_ticket(ticket_id, "", f"QA testing fix (attempt {current_attempt})")
+            # Call QA - first try to acquire a lock
+            logger.info(f"Attempting to run QA tests for ticket {ticket_id} (attempt {current_attempt})")
+            
+            if not acquire_qa_lock(ticket_id, orchestrator_id):
+                logger.warning(f"Another orchestrator is already running QA tests for ticket {ticket_id}, waiting...")
+                # Wait and check again
+                for _ in range(10):  # Try 10 times with 5-second intervals
+                    await asyncio.sleep(5)
+                    if acquire_qa_lock(ticket_id, orchestrator_id):
+                        logger.info(f"Successfully acquired QA lock for ticket {ticket_id} after waiting")
+                        break
+                else:
+                    logger.error(f"Failed to acquire QA lock for ticket {ticket_id} after multiple attempts. Skipping QA.")
+                    # We could either fail the ticket or continue with a synthetic QA failure result
+                    qa_passed = False
+                    qa_response = {
+                        "passed": False,
+                        "error_message": "QA tests could not be run due to orchestrator lock contention",
+                        "failure_summary": "Orchestrator lock contention prevented QA tests from running"
+                    }
+                    continue
+            
+            await update_jira_ticket(ticket_id, "", f"QA testing fix (attempt {current_attempt}, orchestrator: {orchestrator_id})")
             
             qa_input = {
                 "ticket_id": ticket_id,
                 "diffs": developer_response["diffs"],
-                "attempt": current_attempt
+                "attempt": current_attempt,
+                "orchestrator_id": orchestrator_id  # Include orchestrator ID
             }
             log_agent_input(ticket_id, "qa", qa_input)
             
-            qa_response = await call_qa_agent(developer_response)
-            qa_passed = process_qa_results(ticket_id, developer_response, qa_response)
+            try:
+                qa_response = await call_qa_agent(developer_response)
+                qa_passed = process_qa_results(ticket_id, developer_response, qa_response)
+            finally:
+                # Always release the lock when done
+                release_qa_lock(ticket_id, orchestrator_id)
             
             update_ticket_status(ticket_id, "processing", {"qa_results": qa_response})
             
@@ -467,3 +533,6 @@ async def process_ticket(ticket: Dict[str, Any]):
             )
         except Exception as analytics_error:
             logger.error(f"Error logging analytics: {str(analytics_error)}")
+
+        # Make sure to release any locks
+        release_qa_lock(ticket_id, orchestrator_id)

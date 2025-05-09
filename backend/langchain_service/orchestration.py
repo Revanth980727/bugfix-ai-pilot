@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from typing import Dict, Any, List
 
 from langchain.schema import AgentAction, AgentFinish
@@ -15,6 +16,45 @@ from .tools import AgentTools
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("langchain-orchestrator")
+
+# QA agent lock management with timestamps to detect stale locks 
+qa_locks = {}
+QA_LOCK_TIMEOUT = 300  # 5 minutes in seconds
+
+def acquire_qa_lock(ticket_id: str, orchestrator_id: str) -> bool:
+    """Attempt to acquire a lock for running QA tests on a ticket"""
+    current_time = time.time()
+    
+    # Check if there's an existing lock
+    if ticket_id in qa_locks:
+        lock_info = qa_locks[ticket_id]
+        lock_age = current_time - lock_info['timestamp']
+        
+        # If lock is stale or held by same orchestrator, allow it
+        if lock_age > QA_LOCK_TIMEOUT:
+            logger.warning(f"Found stale QA lock for ticket {ticket_id}, replacing it")
+        elif lock_info['orchestrator_id'] == orchestrator_id:
+            logger.info(f"Orchestrator {orchestrator_id} already has QA lock for ticket {ticket_id}")
+            return True
+        else:
+            logger.warning(f"QA tests for ticket {ticket_id} already in progress by orchestrator {lock_info['orchestrator_id']}")
+            return False
+    
+    # Set new lock
+    qa_locks[ticket_id] = {
+        'orchestrator_id': orchestrator_id,
+        'timestamp': current_time
+    }
+    logger.info(f"Acquired QA lock for ticket {ticket_id} by orchestrator {orchestrator_id}")
+    return True
+
+def release_qa_lock(ticket_id: str, orchestrator_id: str) -> bool:
+    """Release a lock if it's held by the specified orchestrator"""
+    if ticket_id in qa_locks and qa_locks[ticket_id]['orchestrator_id'] == orchestrator_id:
+        del qa_locks[ticket_id]
+        logger.info(f"Released QA lock for ticket {ticket_id} by orchestrator {orchestrator_id}")
+        return True
+    return False
 
 class LangChainOrchestrator:
     """Orchestrator that uses LangChain to coordinate the workflow between agents"""
@@ -141,6 +181,10 @@ class LangChainOrchestrator:
     def run_agent_step(self, agent_name: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run a specific agent step in the workflow"""
         try:
+            # Generate a unique orchestrator ID if needed
+            orchestrator_id = input_data.get("orchestrator_id", f"langchain-{id(self)}")
+            ticket_id = input_data.get("ticket_id", "unknown")
+            
             # Find the tool with matching name
             agent_tool = next((tool for tool in self.tools if tool.name == agent_name), None)
             
@@ -155,27 +199,51 @@ class LangChainOrchestrator:
             if "success" in input_data and input_data["success"] is False:
                 logger.warning(f"Previous agent reported failure, but still running {agent_name}")
             
+            # Special handling for QAAgent to implement locking
+            if agent_name == "QAAgent":
+                # Try to acquire a lock for this QA run
+                if not acquire_qa_lock(ticket_id, orchestrator_id):
+                    logger.warning(f"QA tests already in progress for {ticket_id} by another orchestrator")
+                    return {
+                        "error": "Another orchestrator is already running QA tests for this ticket",
+                        "success": False,
+                        "skipped_due_to_lock": True
+                    }
+                
+                try:
+                    # Special handling for QAAgent to correctly structure developer results
+                    if "developer_result" not in input_data and "patched_code" in input_data:
+                        # Move developer output into developer_result field
+                        developer_result = {
+                            key: value for key, value in input_data.items() 
+                            if key in ["patched_code", "patched_files", "confidence_score", "test_code", "success"]
+                        }
+                        # Create new input with developer_result field
+                        qa_input = {
+                            "ticket_id": input_data.get("ticket_id", ""),
+                            "test_command": input_data.get("test_command", os.environ.get("TEST_COMMAND", "python -m pytest")),
+                            "developer_result": developer_result,
+                            "orchestrator_id": orchestrator_id
+                        }
+                        logger.info(f"Restructured QA input to include developer_result: {json.dumps(qa_input)[:200]}...")
+                        input_data = qa_input
+                    
+                    # Execute the tool with the input data
+                    result = agent_tool.func(json.dumps(input_data))
+                    
+                    # Parse the result back to a dictionary
+                    result_dict = json.loads(result)
+                    
+                    return result_dict
+                finally:
+                    # Always release the lock when done
+                    release_qa_lock(ticket_id, orchestrator_id)
+            
             # Special handling for the patch_mode parameter when running DeveloperAgent
             if agent_name == "DeveloperAgent" and "patch_mode" not in input_data:
                 patch_mode = os.environ.get("PATCH_MODE", "line-by-line")
                 input_data["patch_mode"] = patch_mode
                 logger.info(f"Setting patch_mode to {patch_mode} for DeveloperAgent")
-            
-            # Special handling for QAAgent to correctly structure developer results
-            if agent_name == "QAAgent" and "developer_result" not in input_data and "patched_code" in input_data:
-                # Move developer output into developer_result field
-                developer_result = {
-                    key: value for key, value in input_data.items() 
-                    if key in ["patched_code", "patched_files", "confidence_score", "test_code", "success"]
-                }
-                # Create new input with developer_result field
-                qa_input = {
-                    "ticket_id": input_data.get("ticket_id", ""),
-                    "test_command": input_data.get("test_command", os.environ.get("TEST_COMMAND", "python -m pytest")),
-                    "developer_result": developer_result
-                }
-                logger.info(f"Restructured QA input to include developer_result: {json.dumps(qa_input)[:200]}...")
-                input_data = qa_input
             
             # Execute the tool with the input data
             result = agent_tool.func(json.dumps(input_data))
@@ -209,6 +277,12 @@ class LangChainOrchestrator:
             
         except Exception as e:
             logger.error(f"Error running agent {agent_name}: {e}")
+            
+            # Release QA lock if this was a QA agent that failed
+            if agent_name == "QAAgent":
+                release_qa_lock(input_data.get("ticket_id", "unknown"), 
+                               input_data.get("orchestrator_id", f"langchain-{id(self)}"))
+                
             return {"error": str(e), "success": False}
             
     def _validate_developer_output(self, result: Dict[str, Any]) -> bool:

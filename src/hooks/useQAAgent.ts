@@ -13,9 +13,18 @@ export function useQAAgent() {
     failed: number;
     duration: number;
   } | undefined>(undefined);
+  // Track which orchestrator is currently running tests
+  const [activeOrchestrator, setActiveOrchestrator] = useState<string | null>(null);
 
-  const simulateWork = (onComplete: () => void, mockResults: TestResult[], success: boolean = true) => {
+  const simulateWork = (onComplete: () => void, mockResults: TestResult[], success: boolean = true, orchestratorId: string = 'default') => {
+    // If another orchestrator is already running tests, don't start again
+    if (activeOrchestrator && activeOrchestrator !== orchestratorId && status === 'working') {
+      console.log(`QA tests already in progress by orchestrator: ${activeOrchestrator}, skipping request from: ${orchestratorId}`);
+      return;
+    }
+    
     setStatus('working');
+    setActiveOrchestrator(orchestratorId);
     
     const interval = setInterval(() => {
       setProgress(prev => {
@@ -36,6 +45,8 @@ export function useQAAgent() {
             duration: totalTime
           });
           
+          // Clear active orchestrator
+          setActiveOrchestrator(null);
           onComplete();
           return 100;
         }
@@ -44,7 +55,7 @@ export function useQAAgent() {
     }, 100);
   };
 
-  const simulateFailure = (onComplete: () => void) => {
+  const simulateFailure = (onComplete: () => void, orchestratorId: string = 'default') => {
     const failedResults: TestResult[] = [
       {
         name: 'Integration test',
@@ -60,7 +71,7 @@ export function useQAAgent() {
       }
     ];
     
-    simulateWork(onComplete, failedResults, false);
+    simulateWork(onComplete, failedResults, false, orchestratorId);
   };
 
   // Add a method to determine the appropriate test command based on project
@@ -83,6 +94,7 @@ export function useQAAgent() {
     setProgress(0);
     setTestResults(undefined);
     setSummary(undefined);
+    setActiveOrchestrator(null);
   };
 
   return {
@@ -90,6 +102,7 @@ export function useQAAgent() {
     progress,
     testResults,
     summary,
+    activeOrchestrator,
     simulateWork,
     simulateFailure,
     determineTestCommand,
