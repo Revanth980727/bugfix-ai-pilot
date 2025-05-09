@@ -7,16 +7,35 @@ export function useQAAgent() {
   const [status, setStatus] = useState<AgentStatus>('idle');
   const [progress, setProgress] = useState(0);
   const [testResults, setTestResults] = useState<TestResult[] | undefined>(undefined);
+  const [summary, setSummary] = useState<{ 
+    total: number;
+    passed: number;
+    failed: number;
+    duration: number;
+  } | undefined>(undefined);
 
-  const simulateWork = (onComplete: () => void, mockResults: TestResult[]) => {
+  const simulateWork = (onComplete: () => void, mockResults: TestResult[], success: boolean = true) => {
     setStatus('working');
     
     const interval = setInterval(() => {
       setProgress(prev => {
         if (prev >= 100) {
           clearInterval(interval);
-          setStatus('success');
+          setStatus(success ? 'success' : 'error');
           setTestResults(mockResults);
+          
+          // Calculate summary stats
+          const passed = mockResults.filter(r => r.status === 'pass').length;
+          const failed = mockResults.filter(r => r.status === 'fail').length;
+          const totalTime = mockResults.reduce((sum, test) => sum + (test.duration || 0), 0);
+          
+          setSummary({
+            total: mockResults.length,
+            passed,
+            failed,
+            duration: totalTime
+          });
+          
           onComplete();
           return 100;
         }
@@ -26,49 +45,36 @@ export function useQAAgent() {
   };
 
   const simulateFailure = (onComplete: () => void) => {
-    setStatus('working');
+    const failedResults: TestResult[] = [
+      {
+        name: 'Integration test',
+        status: 'fail',
+        duration: 423,
+        errorMessage: 'Expected result to be equal to expected value'
+      },
+      {
+        name: 'Unit test',
+        status: 'fail',
+        duration: 117,
+        errorMessage: 'Cannot read property of undefined'
+      }
+    ];
     
-    const interval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setStatus('error');
-          
-          // Create mock failed tests
-          const failedResults: TestResult[] = [
-            {
-              name: 'Integration test',
-              status: 'fail',
-              duration: 423,
-              errorMessage: 'Expected result to be equal to expected value'
-            },
-            {
-              name: 'Unit test',
-              status: 'fail',
-              duration: 117,
-              errorMessage: 'Cannot read property of undefined'
-            }
-          ];
-          
-          setTestResults(failedResults);
-          onComplete();
-          return 100;
-        }
-        return Math.min(prev + 5, 100);
-      });
-    }, 100);
+    simulateWork(onComplete, failedResults, false);
   };
 
   const reset = () => {
     setStatus('idle');
     setProgress(0);
     setTestResults(undefined);
+    setSummary(undefined);
   };
 
   return {
     status,
     progress,
     testResults,
+    summary,
     simulateWork,
     simulateFailure,
     reset

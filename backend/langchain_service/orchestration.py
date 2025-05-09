@@ -1,4 +1,3 @@
-
 import json
 import logging
 import os
@@ -161,6 +160,22 @@ class LangChainOrchestrator:
                 patch_mode = os.environ.get("PATCH_MODE", "line-by-line")
                 input_data["patch_mode"] = patch_mode
                 logger.info(f"Setting patch_mode to {patch_mode} for DeveloperAgent")
+            
+            # Special handling for QAAgent to correctly structure developer results
+            if agent_name == "QAAgent" and "developer_result" not in input_data and "patched_code" in input_data:
+                # Move developer output into developer_result field
+                developer_result = {
+                    key: value for key, value in input_data.items() 
+                    if key in ["patched_code", "patched_files", "confidence_score", "test_code", "success"]
+                }
+                # Create new input with developer_result field
+                qa_input = {
+                    "ticket_id": input_data.get("ticket_id", ""),
+                    "test_command": input_data.get("test_command", os.environ.get("TEST_COMMAND", "python -m pytest")),
+                    "developer_result": developer_result
+                }
+                logger.info(f"Restructured QA input to include developer_result: {json.dumps(qa_input)[:200]}...")
+                input_data = qa_input
             
             # Execute the tool with the input data
             result = agent_tool.func(json.dumps(input_data))

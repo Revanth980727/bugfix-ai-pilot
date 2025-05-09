@@ -1,4 +1,3 @@
-
 import os
 import logging
 import subprocess
@@ -58,14 +57,17 @@ class QAAgent(Agent):
         except Exception as e:
             logger.error(f"Error saving input for debugging: {str(e)}")
         
+        # Extract the developer result - it could be at the root or nested in developer_result
+        developer_data = input_data.get("developer_result", input_data)
+        
         # Validate developer input
-        if not self._validate_developer_input(input_data, result):
+        if not self._validate_developer_input(developer_data, result):
             result["error_message"] = "Invalid input from developer agent"
             logger.error(f"Developer input validation failed: {result['validation_errors']}")
             return result
             
         # Check if developer agent reported success
-        if not input_data.get("success", False):
+        if not developer_data.get("success", False):
             result["error_message"] = "Developer agent reported failure"
             logger.error("Developer agent reported failure, skipping QA tests")
             return result
@@ -79,15 +81,15 @@ class QAAgent(Agent):
         
         # Write test files if present
         test_files_written = []
-        if "test_code" in input_data and input_data["test_code"]:
+        if "test_code" in developer_data and developer_data["test_code"]:
             logger.info("Found test code in developer output, writing test files")
-            test_files_written = self._write_test_files(input_data["test_code"])
+            test_files_written = self._write_test_files(developer_data["test_code"])
             logger.info(f"Wrote {len(test_files_written)} test files")
             
         # Run tests
         logger.info("Running tests")
-        test_command = os.environ.get("TEST_COMMAND", "python -m pytest")
-        logger.info(f"Using test command from environment: {test_command}")
+        test_command = input_data.get("test_command", os.environ.get("TEST_COMMAND", "python -m pytest"))
+        logger.info(f"Using test command: {test_command}")
         success, test_output = self._run_test_command(test_command)
         
         # Parse and process test results
