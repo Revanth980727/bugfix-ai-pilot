@@ -348,8 +348,18 @@ class Orchestrator:
                 
                 developer_result = await self.run_agent(self.developer_agent, developer_input)
                 
-                if not developer_result or "error" in developer_result:
-                    raise Exception(f"DeveloperAgent failed: {developer_result.get('error', 'Unknown error')}")
+                # Fix: Check developer_result properly, including None check and success flag check
+                if not developer_result:
+                    raise Exception(f"DeveloperAgent failed: No result returned")
+                    
+                if "error" in developer_result and developer_result["error"]:
+                    raise Exception(f"DeveloperAgent failed: {developer_result['error']}")
+                
+                # Get success status and ensure it's properly marked
+                dev_success = developer_result.get("success", False)
+                if not dev_success:
+                    logger.warning(f"DeveloperAgent reported success=False for ticket {ticket_id}")
+                    # We don't raise an exception here, we'll let the QA agent determine if the fix is good
                 
                 # Get confidence score from developer result
                 confidence_score = developer_result.get("confidence_score")
@@ -366,9 +376,11 @@ class Orchestrator:
                 # STEP 3: Run QA agent
                 logger.info(f"Running QAAgent for ticket {ticket_id} (attempt {current_attempt})")
                 
+                # Pass the developer result to QA agent
                 qa_input = {
                     "ticket_id": ticket_id,
                     "test_command": "npm test",  # Default test command, could be customized
+                    "developer_result": developer_result  # Pass the entire result for test execution
                 }
                 
                 with open(f"{log_dir}/qa_input_{current_attempt}.json", 'w') as f:
@@ -660,26 +672,44 @@ class Orchestrator:
             else:
                 # If it's synchronous, just call it directly
                 result = agent.run(input_data)
-            
+                
+            # Fix: Handle None result as a failure case
+            if result is None:
+                logger.error(f"Agent returned None result")
+                return {"error": "Agent returned None", "success": False}
+                
+            # Verify the result is a dictionary
+            if not isinstance(result, dict):
+                logger.error(f"Agent returned non-dictionary result: {type(result)}")
+                return {"error": f"Agent returned {type(result)} instead of dict", "success": False}
+                
+            # Ensure success is in the result dict if not present
+            if "success" not in result:
+                # Default to True if success is not explicitly False or there's no error
+                default_success = not ("error" in result and result["error"])
+                result["success"] = default_success
+                logger.info(f"Added missing success={default_success} to agent result")
+                
             return result
+            
         except Exception as e:
-            logger.error(f"Error running {agent.name if hasattr(agent, 'name') else 'unknown'} agent: {str(e)}")
+            logger.error(f"Error running agent: {str(e)}")
             logger.error(traceback.format_exc())
-            return {"error": str(e)}
+            return {"error": str(e), "success": False}
     
     def _ensure_json_serializable(self, obj):
-        """Recursively ensures that an object is JSON serializable"""
-        if isinstance(obj, dict):
-            return {k: self._ensure_json_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [self._ensure_json_serializable(i) for i in obj]
-        elif hasattr(obj, '__await__'):  # Detect coroutines
-            return f"[Coroutine: {type(obj).__name__}]"
-        elif hasattr(obj, '__dict__'):  # Handle custom objects
-            return str(obj)
-        else:
+        """Ensure an object is JSON serializable by converting problematic types"""
+        # Handle common non-serializable types
+        if obj is None or isinstance(obj, (bool, int, float, str)):
             return obj
-
+        elif isinstance(obj, (list, tuple)):
+            return [self._ensure_json_serializable(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {k: self._ensure_json_serializable(v) for k, v in obj.items()}
+        else:
+            # Convert anything else to string
+            return str(obj)
+            
     def get_status(self) -> Dict[str, Any]:
         """Get current status of the orchestrator"""
         status = {
@@ -697,30 +727,48 @@ class Orchestrator:
             "communicator": self.communicator_agent.status.value
         }
 
-    async def run_forever(self):
-        """Run the orchestrator in an infinite loop, processing tickets"""
-        logger.info("Starting orchestrator polling loop")
+    async def process_tickets(self):
+        """Process all eligible tickets"""
+        try:
+            # Fetch tickets that need processing
+            tickets = await self.fetch_eligible_tickets()
+            
+            if not tickets:
+                logger.info("No eligible tickets found")
+                return
+                
+            logger.info(f"Found {len(tickets)} eligible tickets to process")
+            
+            # Process each ticket
+            for ticket in tickets:
+                await self.process_ticket(ticket)
+                
+        except Exception as e:
+            logger.error(f"Error in process_tickets: {str(e)}")
+            logger.error(traceback.format_exc())
+    
+    async def run(self):
+        """Run the orchestrator in a continuous loop"""
+        logger.info("Starting orchestrator loop")
         
         while True:
             try:
-                # Fetch eligible tickets
-                tickets = await self.fetch_eligible_tickets()
+                await self.process_tickets()
                 
-                if tickets:
-                    logger.info(f"Found {len(tickets)} eligible tickets to process")
-                    
-                    # Process each ticket
-                    for ticket in tickets:
-                        await self.process_ticket(ticket)
-                else:
-                    logger.debug("No eligible tickets found")
-                
-                # Wait for next poll interval
+                # Sleep before next poll
+                logger.info(f"Sleeping for {POLL_INTERVAL_SECONDS} seconds")
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
                 
             except Exception as e:
-                logger.error(f"Error in orchestrator main loop: {str(e)}")
+                logger.error(f"Error in orchestrator loop: {str(e)}")
                 logger.error(traceback.format_exc())
                 
-                # Don't crash, just wait and try again
+                # Sleep before retry even on error
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        
+# Create orchestrator instance for global access
+orchestrator = Orchestrator()
+
+async def start_orchestrator():
+    """Start the orchestrator"""
+    await orchestrator.run()
