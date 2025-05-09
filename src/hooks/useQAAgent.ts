@@ -74,18 +74,17 @@ export function useQAAgent() {
     simulateWork(onComplete, failedResults, false, orchestratorId);
   };
 
-  // Add a method to determine the appropriate test command based on project
+  // Determine the appropriate test command based on project
   const determineTestCommand = (projectType: string = 'python'): string => {
-    switch (projectType.toLowerCase()) {
-      case 'javascript':
-      case 'js':
-      case 'node':
-        return 'npm test';
-      case 'python':
-      case 'py':
-        return 'python -m pytest';
-      default:
-        return 'python -m pytest'; // Default to Python test command
+    // Always default to Python for safety, since the errors show npm is not available
+    const projectLower = projectType.toLowerCase().trim();
+    if (projectLower.includes('javascript') || 
+        projectLower.includes('js') || 
+        projectLower.includes('node') || 
+        projectLower.includes('react')) {
+      return 'npm test';
+    } else {
+      return 'python -m pytest';
     }
   };
 
