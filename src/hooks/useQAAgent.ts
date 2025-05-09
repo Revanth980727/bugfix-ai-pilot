@@ -63,6 +63,21 @@ export function useQAAgent() {
     simulateWork(onComplete, failedResults, false);
   };
 
+  // Add a method to determine the appropriate test command based on project
+  const determineTestCommand = (projectType: string = 'python'): string => {
+    switch (projectType.toLowerCase()) {
+      case 'javascript':
+      case 'js':
+      case 'node':
+        return 'npm test';
+      case 'python':
+      case 'py':
+        return 'python -m pytest';
+      default:
+        return 'python -m pytest'; // Default to Python test command
+    }
+  };
+
   const reset = () => {
     setStatus('idle');
     setProgress(0);
@@ -77,6 +92,7 @@ export function useQAAgent() {
     summary,
     simulateWork,
     simulateFailure,
+    determineTestCommand,
     reset
   };
 }

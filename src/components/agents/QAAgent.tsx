@@ -17,9 +17,15 @@ interface QAAgentProps {
     failed: number;
     duration: number;
   };
+  projectType?: string; // Add projectType prop
 }
 
-export function QAAgent({ status, progress, testResults, summary }: QAAgentProps) {
+export function QAAgent({ status, progress, testResults, summary, projectType = 'python' }: QAAgentProps) {
+  // Determine the appropriate test command based on the project type
+  const getTestCommand = () => {
+    return projectType.toLowerCase().includes('js') ? 'npm test' : 'python -m pytest';
+  };
+
   return (
     <AgentCard title="QA" type="qa" status={status} progress={progress}>
       {status === 'idle' && (
@@ -30,7 +36,7 @@ export function QAAgent({ status, progress, testResults, summary }: QAAgentProps
       
       {status === 'working' && !testResults && (
         <div className="space-y-2">
-          <p>Running tests to validate the fix...</p>
+          <p>Running tests to validate the fix using {getTestCommand()}...</p>
           <div className="h-4 w-full bg-muted overflow-hidden rounded">
             <div 
               className="h-full bg-agent-qa transition-all duration-300" 
