@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -60,6 +61,38 @@ def apply_diffs(diffs: List[FileDiff], base_path: str) -> None:
         # For now, we'll just write the entire file content
         with open(file_path, 'w') as f:
             f.write(diff.diff)
+
+def write_tests(test_code: Dict[str, str], codebase_path: str) -> List[str]:
+    """
+    Write test files to the codebase directory
+    
+    Args:
+        test_code: Dictionary mapping filenames to test content
+        codebase_path: Path to the codebase directory
+        
+    Returns:
+        List of written test files
+    """
+    if not test_code:
+        logger.info("No test code provided")
+        return []
+        
+    written_files = []
+    for filename, content in test_code.items():
+        try:
+            file_path = os.path.join(codebase_path, filename)
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            
+            with open(file_path, 'w') as f:
+                f.write(content)
+                
+            logger.info(f"Successfully wrote test file: {filename}")
+            written_files.append(filename)
+        except Exception as e:
+            logger.error(f"Error writing test file {filename}: {str(e)}")
+            
+    return written_files
 
 def run_tests(config: TestConfig) -> List[TestResult]:
     """Run tests and capture results"""
@@ -161,8 +194,10 @@ async def root():
     return {"message": "QA Agent is running", "status": "healthy"}
 
 @app.post("/test", response_model=QAResponse)
-async def test_fix(fix: DeveloperResponse):
-    logger.info(f"Testing fix for ticket {fix.ticket_id} (attempt {fix.attempt})")
+async def test_fix(fix: Dict[str, Any]):
+    ticket_id = fix.get("ticket_id", "unknown")
+    attempt = fix.get("attempt", 1)
+    logger.info(f"Testing fix for ticket {ticket_id} (attempt {attempt})")
     
     try:
         # Create a temporary directory for testing
@@ -184,8 +219,24 @@ async def test_fix(fix: DeveloperResponse):
                 # Ensure the target directory exists even if copy failed
                 os.makedirs(temp_codebase, exist_ok=True)
             
-            # Apply the diffs to the temporary codebase
-            apply_diffs(fix.diffs, temp_codebase)
+            # Apply the diffs to the temporary codebase if they exist
+            if "diffs" in fix and isinstance(fix["diffs"], list):
+                apply_diffs(fix["diffs"], temp_codebase)
+                logger.info(f"Applied {len(fix['diffs'])} diffs to the codebase")
+            elif "patched_code" in fix and isinstance(fix["patched_code"], dict):
+                # Alternative: Apply patched_code directly
+                for file_path, content in fix["patched_code"].items():
+                    full_path = os.path.join(temp_codebase, file_path)
+                    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                    with open(full_path, 'w') as f:
+                        f.write(content)
+                logger.info(f"Applied {len(fix['patched_code'])} patched files to the codebase")
+            
+            # Write test files if they exist
+            written_test_files = []
+            if "test_code" in fix and isinstance(fix["test_code"], dict):
+                written_test_files = write_tests(fix["test_code"], temp_codebase)
+                logger.info(f"Wrote {len(written_test_files)} test files to the codebase")
             
             # Configure test settings - use environment variable or default to python module approach
             test_config = TestConfig(
@@ -200,16 +251,16 @@ async def test_fix(fix: DeveloperResponse):
             passed = all(result.status == "pass" for result in test_results)
             
             response = QAResponse(
-                ticket_id=fix.ticket_id,
+                ticket_id=ticket_id,
                 passed=passed,
                 test_results=test_results
             )
             
-            logger.info(f"Testing completed for ticket {fix.ticket_id} (attempt {fix.attempt}): {'Passed' if passed else 'Failed'}")
+            logger.info(f"Testing completed for ticket {ticket_id} (attempt {attempt}): {'Passed' if passed else 'Failed'}")
             return response
             
     except Exception as e:
-        logger.error(f"Error testing fix for ticket {fix.ticket_id}: {str(e)}")
+        logger.error(f"Error testing fix for ticket {ticket_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error testing fix: {str(e)}")
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+
 import os
 import logging
 import subprocess
@@ -75,6 +76,13 @@ class QAAgent(Agent):
             result["error_message"] = "No code changes detected"
             logger.error("No code changes detected in the repository")
             return result
+        
+        # Write test files if present
+        test_files_written = []
+        if "test_code" in input_data and input_data["test_code"]:
+            logger.info("Found test code in developer output, writing test files")
+            test_files_written = self._write_test_files(input_data["test_code"])
+            logger.info(f"Wrote {len(test_files_written)} test files")
             
         # Run tests
         logger.info("Running tests")
@@ -111,6 +119,42 @@ class QAAgent(Agent):
         Delegates to run() method.
         """
         return self.run(input_data)
+    
+    def _write_test_files(self, test_code: Dict[str, str]) -> List[str]:
+        """
+        Write test files to the repository
+        
+        Args:
+            test_code: Dictionary mapping file names to test code
+            
+        Returns:
+            List of written test file paths
+        """
+        written_files = []
+        repo_path = os.environ.get("REPO_PATH", "/mnt/codebase")
+        
+        try:
+            for file_name, content in test_code.items():
+                try:
+                    # Create full path
+                    file_path = os.path.join(repo_path, file_name)
+                    
+                    # Create directory if it doesn't exist
+                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                    
+                    # Write test file
+                    with open(file_path, 'w') as f:
+                        f.write(content)
+                        
+                    logger.info(f"Successfully wrote test file: {file_name}")
+                    written_files.append(file_name)
+                except Exception as e:
+                    logger.error(f"Error writing test file {file_name}: {str(e)}")
+            
+            return written_files
+        except Exception as e:
+            logger.error(f"Error writing test files: {str(e)}")
+            return []
         
     def _validate_developer_input(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
         """

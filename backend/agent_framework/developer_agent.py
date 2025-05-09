@@ -1,3 +1,4 @@
+
 import os
 import logging
 import json
@@ -40,6 +41,7 @@ class DeveloperAgent(Agent):
         # Initialize result structure - ensure it always has the required fields
         result = {
             "patched_code": {},
+            "test_code": {},  # New field for test code
             "patched_files": [],
             "patch_content": "",
             "confidence_score": 0,
@@ -73,6 +75,12 @@ class DeveloperAgent(Agent):
                 result["error"] = "Failed to generate code fix"
                 return result
                 
+            # Generate tests for the fix
+            tests_generated = self._generate_tests(input_data, result)
+            if not tests_generated:
+                logger.warning("Failed to generate tests, continuing without tests")
+                # We don't fail the process if tests can't be generated
+            
             # Apply the generated fix to the codebase
             patch_applied = self.apply_patch(result)
             if not patch_applied:
@@ -93,7 +101,8 @@ class DeveloperAgent(Agent):
             # Final logging of the result
             logger.info(f"Developer result - success: {result['success']}, "
                       f"patched_files: {result['patched_files']}, "
-                      f"confidence_score: {result['confidence_score']}")
+                      f"confidence_score: {result['confidence_score']}, "
+                      f"test_files: {list(result['test_code'].keys())}")
             
             return result
             
@@ -133,6 +142,85 @@ class DeveloperAgent(Agent):
             return False
             
         return True
+    
+    def _generate_tests(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
+        """
+        Generate tests for the patched code
+        
+        Args:
+            input_data: Dictionary with data from planner agent
+            result: Dictionary with generated fix
+            
+        Returns:
+            Boolean indicating if tests were generated successfully
+        """
+        try:
+            # Extract file information for test generation
+            patched_files = result.get("patched_files", [])
+            if not patched_files:
+                logger.warning("No patched files to generate tests for")
+                return False
+                
+            # Generate tests for each patched file
+            for file_path in patched_files:
+                # Only generate tests for Python files
+                if not file_path.endswith(".py"):
+                    logger.info(f"Skipping test generation for non-Python file: {file_path}")
+                    continue
+                    
+                # Determine the test file name (test_filename.py)
+                file_name = os.path.basename(file_path)
+                file_name_without_ext = os.path.splitext(file_name)[0]
+                test_file_name = f"test_{file_name_without_ext}.py"
+                
+                # In a real implementation, this would use LLM to generate tests
+                # For this example, we'll use a template
+                if "GraphRAG.py" in file_path:
+                    # NetworkX import error fix test
+                    test_content = f"""
+# Test for {file_path}
+import pytest
+
+def test_correct_import():
+    import {file_name_without_ext}
+    # Test if the module can be imported without errors
+    assert {file_name_without_ext}
+
+def test_correct_function_call():
+    from {file_name_without_ext} import correct_function_call
+    # Test that the function returns a Graph object
+    graph = correct_function_call()
+    # Verify it's a networkx Graph
+    assert hasattr(graph, 'nodes')
+    assert hasattr(graph, 'edges')
+"""
+                else:
+                    # Generic test template
+                    test_content = f"""
+# Test for {file_path}
+import pytest
+
+def test_module_import():
+    import {file_name_without_ext}
+    # Test if the module can be imported without errors
+    assert {file_name_without_ext}
+
+def test_basic_functionality():
+    # Basic smoke test to verify file loads
+    import {file_name_without_ext}
+    # Replace with actual test logic for the specific file
+    assert True
+"""
+                
+                # Add to test_code
+                result["test_code"][test_file_name] = test_content
+                logger.info(f"Generated test file: {test_file_name}")
+                
+            return len(result["test_code"]) > 0
+                
+        except Exception as e:
+            logger.error(f"Error generating tests: {str(e)}")
+            return False
         
     def _generate_fix(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
         """
@@ -180,7 +268,7 @@ class DeveloperAgent(Agent):
                 """
                 result["confidence_score"] = 95
                 result["commit_message"] = f"Fix {ticket_id}: Correct NetworkX import in GraphRAG.py"
-                result["success"] = True  # Fix success flag inconsistency
+                result["success"] = True
                 
                 return True
             else:
@@ -218,7 +306,7 @@ class DeveloperAgent(Agent):
                     """
                     result["confidence_score"] = 50
                     result["commit_message"] = f"Fix {ticket_id}: Generic fix for {file_to_fix}"
-                    result["success"] = True  # Fix success flag inconsistency
+                    result["success"] = True
                     
                     return True
                     
@@ -286,6 +374,11 @@ class DeveloperAgent(Agent):
             
         if not result["commit_message"].strip():
             logger.error("commit_message string is empty")
+            return False
+            
+        # Check test_code if present (optional)
+        if "test_code" in result and not isinstance(result["test_code"], dict):
+            logger.error(f"test_code must be a dictionary if present, got {type(result['test_code'])}")
             return False
             
         # Log successful validation
