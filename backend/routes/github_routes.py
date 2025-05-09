@@ -3,6 +3,7 @@ import os
 import json
 import difflib
 import logging
+import re
 from flask import Blueprint, request, jsonify
 from ..github_utils import get_file_content, generate_diff, commit_using_patch
 from ..github_service.github_service import GitHubService
@@ -13,6 +14,14 @@ logger = logging.getLogger("github-routes")
 
 # Create blueprint for GitHub routes
 github_bp = Blueprint('github', __name__, url_prefix='/api/github')
+
+# Initialize GitHub service
+github_service = None
+try:
+    github_service = GitHubService()
+    logger.info("GitHub service initialized for routes")
+except Exception as e:
+    logger.error(f"Failed to initialize GitHub service: {str(e)}")
 
 @github_bp.route('/config', methods=['GET'])
 def get_github_config():
@@ -174,4 +183,109 @@ def get_file():
         return jsonify({
             'success': False,
             'error': f"Failed to get file content: {str(e)}"
+        }), 500
+
+@github_bp.route('/create-pr', methods=['POST'])
+def create_pr():
+    """Create a pull request for the fix"""
+    try:
+        if not github_service:
+            return jsonify({
+                'success': False,
+                'error': 'GitHub service not initialized'
+            }), 500
+        
+        data = request.json
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        # Extract required data
+        ticket_id = data.get('ticket_id')
+        branch_name = data.get('branch_name')
+        title = data.get('title', f"Fix for {ticket_id}")
+        description = data.get('description', f"This PR fixes the issue described in {ticket_id}")
+        base_branch = data.get('base_branch')
+        
+        if not all([ticket_id, branch_name]):
+            return jsonify({
+                'success': False,
+                'error': 'Missing required parameters (ticket_id, branch_name)'
+            }), 400
+        
+        # Create PR using the GitHub service
+        pr_result = github_service.create_fix_pr(
+            branch_name=branch_name,
+            ticket_id=ticket_id,
+            title=title,
+            description=description,
+            base_branch=base_branch
+        )
+        
+        if not pr_result:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to create PR'
+            }), 500
+        
+        return jsonify({
+            'success': True,
+            'pr_url': pr_result.get('url'),
+            'pr_number': pr_result.get('number'),
+            'message': f"PR created successfully for ticket {ticket_id}"
+        }), 201
+    except Exception as e:
+        logger.error(f"Error creating PR: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f"Failed to create PR: {str(e)}"
+        }), 500
+
+@github_bp.route('/add-comment', methods=['POST'])
+def add_comment():
+    """Add a comment to a PR"""
+    try:
+        if not github_service:
+            return jsonify({
+                'success': False,
+                'error': 'GitHub service not initialized'
+            }), 500
+        
+        data = request.json
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+        
+        # Extract required data
+        pr_identifier = data.get('pr_identifier')
+        comment = data.get('comment')
+        
+        if not all([pr_identifier, comment]):
+            return jsonify({
+                'success': False,
+                'error': 'Missing required parameters (pr_identifier, comment)'
+            }), 400
+        
+        # Add comment to PR
+        success = github_service.add_pr_comment(pr_identifier, comment)
+        
+        if not success:
+            return jsonify({
+                'success': False,
+                'error': f'Failed to add comment to PR {pr_identifier}'
+            }), 500
+        
+        return jsonify({
+            'success': True,
+            'message': f"Comment added to PR {pr_identifier}",
+        }), 200
+    except Exception as e:
+        logger.error(f"Error adding comment: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f"Failed to add comment: {str(e)}"
         }), 500

@@ -1,3 +1,4 @@
+
 import os
 import logging
 import json
@@ -23,6 +24,8 @@ class GitHubService:
         # Store PR mappings for tickets
         self.pr_mappings = {}
         
+    # ... keep existing code (file content retrieval logic, branch creation, other methods)
+    
     def create_fix_branch(self, ticket_id: str, base_branch: Optional[str] = None) -> Tuple[bool, str]:
         """
         Create a branch for fixing a bug
@@ -207,6 +210,23 @@ class GitHubService:
             # Convert to int if it's a string of digits
             if isinstance(pr_identifier, str) and pr_identifier.isdigit():
                 pr_identifier = int(pr_identifier)
+            
+            # Handle tuple case - this fixes the error you're seeing
+            if isinstance(pr_identifier, tuple):
+                self.logger.warning(f"Received tuple as PR identifier: {pr_identifier}")
+                # Try to extract PR number from the first element if it's a URL
+                if len(pr_identifier) > 0 and isinstance(pr_identifier[0], str):
+                    import re
+                    match = re.search(r'/pull/(\d+)', pr_identifier[0])
+                    if match:
+                        pr_identifier = int(match.group(1))
+                        self.logger.info(f"Extracted PR number {pr_identifier} from tuple")
+                    else:
+                        self.logger.error(f"Could not extract PR number from tuple: {pr_identifier}")
+                        return False
+                else:
+                    self.logger.error(f"Invalid tuple PR identifier: {pr_identifier}")
+                    return False
             
             # If it's still not a number at this point, try to extract a PR number as a last resort
             if not isinstance(pr_identifier, int):
