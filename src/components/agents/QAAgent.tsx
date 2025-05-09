@@ -29,10 +29,10 @@ export function QAAgent({
   projectType = 'python',
   activeOrchestrator = null
 }: QAAgentProps) {
-  // Force python test command for this project since npm is not available
+  // Always use pytest for this project
   const getTestCommand = () => {
-    // We're defaulting to Python's pytest since the errors indicate npm is not installed
-    return projectType.toLowerCase().includes('js') ? 'npm test' : 'python -m pytest';
+    // Always return pytest for this project
+    return 'python -m pytest';
   };
 
   return (

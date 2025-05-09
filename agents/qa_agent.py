@@ -1,4 +1,3 @@
-
 import os
 import subprocess
 import json
@@ -19,8 +18,8 @@ class QAAgent:
         # Get repo path from environment
         self.repo_path = os.environ.get("REPO_PATH", "/mnt/codebase")
         
-        # Get test command from environment or use default
-        self.test_command = os.environ.get("TEST_COMMAND", "pytest")
+        # Always use pytest - no npm in these containers
+        self.test_command = "python -m pytest"
         
     def run(self, test_config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -48,8 +47,10 @@ class QAAgent:
         ticket_id = test_config.get("ticket_id", "unknown")
         self.logger.start_task(f"Running tests for ticket {ticket_id}")
         
-        # Override default test command if provided
-        test_command = test_config.get("test_command", self.test_command)
+        # We'll accept a test command but always ensure we're using pytest
+        test_command = "python -m pytest"
+        
+        # We can still use specific configuration options
         timeout = test_config.get("timeout", 120)
         specific_tests = test_config.get("specific_tests", None)
         
@@ -153,46 +154,15 @@ class QAAgent:
         Returns:
             List of command parts to pass to subprocess.run
         """
-        # Split command into parts
-        command_parts = test_command.split()
+        # Always use python -m pytest
+        command_parts = ["python", "-m", "pytest"]
         
-        # Handle common test commands
-        if test_command.startswith("pytest"):
-            command_parts = ["python", "-m", "pytest"]
-            
-            # Add common pytest flags
-            command_parts.extend(["-v", "--no-header"])
-            
-            # Add specific tests if provided
-            if specific_tests:
-                command_parts.extend(specific_tests)
-                
-        elif test_command.startswith("npm test"):
-            command_parts = ["npm", "test"]
-            
-            # Add specific tests if provided
-            if specific_tests:
-                command_parts.append("--")
-                command_parts.extend(specific_tests)
-                
-        elif test_command.startswith("python -m unittest"):
-            command_parts = ["python", "-m", "unittest"]
-            
-            # Add specific tests if provided
-            if specific_tests:
-                command_parts.extend(specific_tests)
-                
-        elif test_command.startswith("yarn test"):
-            command_parts = ["yarn", "test"]
-            
-            # Add specific tests if provided
-            if specific_tests:
-                command_parts.extend(specific_tests)
-                
-        else:
-            # For other commands, just use as is and append specific tests
-            if specific_tests:
-                command_parts.extend(specific_tests)
+        # Add common pytest flags
+        command_parts.extend(["-v", "--no-header"])
+        
+        # Add specific tests if provided
+        if specific_tests:
+            command_parts.extend(specific_tests)
                 
         return command_parts
         

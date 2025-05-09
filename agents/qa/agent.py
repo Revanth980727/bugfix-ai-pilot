@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -124,20 +123,15 @@ def run_tests(config: TestConfig) -> List[TestResult]:
                     error_message=f"Failed to install pytest: {str(e)}"
                 )]
         
-        # Standardize on using python -m pytest
+        # Always use python -m pytest - we're in a Python container
         command_parts = [sys.executable, "-m", "pytest"]
         
-        # Add any arguments from the config command if they exist
-        if "pytest" in config.command:
-            # Extract arguments after "pytest" or "python -m pytest"
-            if "python -m pytest" in config.command:
-                args = config.command.replace("python -m pytest", "").strip().split()
-                if args:
-                    command_parts.extend(args)
-            elif config.command.startswith("pytest"):
-                args = config.command.split()[1:]  # Skip the "pytest" command itself
-                if args:
-                    command_parts.extend(args)
+        # Add any test-specific arguments if they exist in the command
+        if config.command != "python -m pytest" and " " in config.command:
+            # Extract any arguments after the base command
+            args = config.command.split(" ", 2)[2:]  # This will give us arguments after "python -m pytest"
+            if args:
+                command_parts.extend(args)
         
         logger.info(f"Running tests with command: {' '.join(command_parts)}")
         

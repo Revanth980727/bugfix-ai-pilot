@@ -88,7 +88,8 @@ class QAAgent(Agent):
             
         # Run tests
         logger.info("Running tests")
-        test_command = input_data.get("test_command", os.environ.get("TEST_COMMAND", "python -m pytest"))
+        # IMPORTANT: Always use pytest in the backend containers - never npm
+        test_command = "python -m pytest"
         logger.info(f"Using test command: {test_command}")
         success, test_output = self._run_test_command(test_command)
         
@@ -300,25 +301,15 @@ class QAAgent(Agent):
                     logger.error(f"Failed to install pytest: {str(e)}")
                     return False, f"Failed to install pytest: {str(e)}"
             
-            # Handle different test command formats properly
-            if "python -m pytest" in test_command:
-                # Handle as Python module
-                command_parts = ["python", "-m", "pytest"]
-                
-                # Add any additional arguments
+            # ALWAYS use python -m pytest in the backend container
+            command_parts = ["python", "-m", "pytest"]
+            
+            # Add any additional arguments if specified in the test command
+            if "python -m pytest" in test_command and test_command != "python -m pytest":
                 extra_args = test_command.replace("python -m pytest", "").strip().split()
                 if extra_args:
                     command_parts.extend(extra_args)
-            elif test_command.startswith("pytest"):
-                # Convert pytest to python -m pytest for reliability
-                command_parts = ["python", "-m", "pytest"]
-                extra_args = test_command.replace("pytest", "").strip().split()
-                if extra_args:
-                    command_parts.extend(extra_args)
-            else:
-                # For other commands, use regular splitting
-                command_parts = test_command.split()
-                
+                    
             logger.info(f"Executing test command: {' '.join(command_parts)}")
             
             # Print environment info for debugging
