@@ -1,9 +1,9 @@
-
 import os
 import json
 import difflib
 import logging
 import re
+import time
 from flask import Blueprint, request, jsonify
 from ..github_utils import get_file_content, generate_diff, commit_using_patch
 from ..github_service.github_service import GitHubService
@@ -129,6 +129,9 @@ def commit_changes():
             file_paths.append(change.get('filename'))
             modified_contents.append(change.get('content'))
             
+        # Add timestamp to ensure changes are detected
+        commit_message = f"{commit_message} - {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        
         # Commit the changes using the patch method
         result = commit_using_patch(repo_name, branch, file_paths, modified_contents, commit_message)
         
@@ -190,6 +193,7 @@ def create_pr():
     """Create a pull request for the fix"""
     try:
         if not github_service:
+            logger.error("GitHub service not initialized")
             return jsonify({
                 'success': False,
                 'error': 'GitHub service not initialized'
@@ -215,6 +219,8 @@ def create_pr():
                 'error': 'Missing required parameters (ticket_id, branch_name)'
             }), 400
         
+        logger.info(f"Creating PR for branch {branch_name}, ticket {ticket_id}")
+        
         # Create PR using the GitHub service
         pr_result = github_service.create_fix_pr(
             branch_name=branch_name,
@@ -225,17 +231,17 @@ def create_pr():
         )
         
         if not pr_result:
+            logger.error(f"Failed to create PR for ticket {ticket_id}")
             return jsonify({
                 'success': False,
                 'error': 'Failed to create PR'
             }), 500
         
-        # Handle the case where pr_result['url'] might be a tuple
+        # Get PR URL and number from the result
         pr_url = pr_result.get('url')
-        if isinstance(pr_url, tuple) and len(pr_url) > 0:
-            pr_url = pr_url[0]  # Extract the URL string from the tuple
-        
         pr_number = pr_result.get('number')
+        
+        logger.info(f"Successfully created PR #{pr_number} at {pr_url} for ticket {ticket_id}")
         
         return jsonify({
             'success': True,

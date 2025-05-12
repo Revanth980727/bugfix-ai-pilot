@@ -22,22 +22,7 @@ class CommunicatorAgent:
         # Check for git installation
         self._check_git_available()
     
-    def _check_git_available(self):
-        """Check if git is available in the system"""
-        try:
-            import subprocess
-            subprocess.run(["git", "--version"], capture_output=True, check=True)
-            logger.info("Git is available")
-        except (subprocess.SubprocessError, FileNotFoundError) as e:
-            logger.warning(f"Git is not available: {str(e)}")
-    
-    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Run method compatible with the agent framework
-        This is the main entry point for the agent
-        """
-        logger.info("CommunicatorAgent.run() called")
-        return self.process(input_data)
+    # ... keep existing code (_check_git_available, run methods)
     
     def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process incoming data and communicate results"""
@@ -119,6 +104,9 @@ class CommunicatorAgent:
                             
                             # Commit the changes
                             if file_changes:
+                                # Add timestamp to ensure changes are seen as unique
+                                commit_message = f"{commit_message} - {int(time.time())}"
+                                
                                 commit_success = github_service.commit_bug_fix(
                                     branch_name, file_changes, ticket_id, commit_message
                                 )
@@ -135,14 +123,15 @@ class CommunicatorAgent:
                                     )
                                     
                                     if pr_result and isinstance(pr_result, dict):
-                                        # Extract PR URL, handling tuple case
+                                        # Extract PR URL, properly handling all cases
                                         pr_url = pr_result.get("url")
-                                        if isinstance(pr_url, tuple) and len(pr_url) > 0:
-                                            pr_url = pr_url[0]  # Extract the string URL
+                                        pr_number = pr_result.get("number")
                                         
+                                        # Record PR information in result
                                         result["pr_url"] = pr_url
+                                        result["pr_number"] = pr_number
                                         result["pr_created"] = True
-                                        logger.info(f"Created PR for ticket {ticket_id}: {pr_url}")
+                                        logger.info(f"Created PR #{pr_number} for ticket {ticket_id}: {pr_url}")
                                     else:
                                         logger.error(f"Failed to create PR for ticket {ticket_id}")
                                 else:
@@ -155,12 +144,17 @@ class CommunicatorAgent:
                         logger.error(f"Failed to import GitHubService: {str(e)}")
                         pr_url = self._create_github_pr(ticket_id, input_data)
                         
+                        # Handle the PR URL properly for all cases
                         if pr_url:
-                            # Handle tuple PR URL case
-                            if isinstance(pr_url, tuple) and len(pr_url) > 0:
-                                pr_url = pr_url[0]  # Extract string URL
+                            # Record PR information
+                            if isinstance(pr_url, tuple) and len(pr_url) > 1:
+                                # If it's a tuple of (url, number)
+                                result["pr_url"] = pr_url[0]
+                                result["pr_number"] = pr_url[1]
+                            else:
+                                # If it's just a string URL
+                                result["pr_url"] = pr_url
                                 
-                            result["pr_url"] = pr_url
                             result["pr_created"] = True
                         
                 except Exception as e:
@@ -224,20 +218,24 @@ class CommunicatorAgent:
                 patch_data = input_data.get("patch_data", {})
                 patched_files = patch_data.get("patched_files", [])
                 
+                # Create timestamp for unique changes
+                timestamp = int(time.time())
+                
                 for file_path in patched_files:
                     # In a real implementation, get the content and write it
                     file_full_path = os.path.join(temp_dir, file_path)
                     os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
                     
                     with open(file_full_path, 'w') as f:
-                        f.write(f"// Fixed content for {file_path}")
+                        f.write(f"// Fixed content for {file_path}\n// Timestamp: {timestamp}\n")
                     
                     # Add the file
                     add_cmd = ["git", "add", file_path]
                     subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
                 
                 # Commit the changes
-                commit_cmd = ["git", "commit", "-m", f"Fix for {ticket_id}"]
+                commit_msg = f"Fix for {ticket_id} - {timestamp}"
+                commit_cmd = ["git", "commit", "-m", commit_msg]
                 subprocess.run(commit_cmd, check=True, capture_output=True, cwd=temp_dir)
                 
                 # Push the changes
@@ -247,13 +245,14 @@ class CommunicatorAgent:
                 # Create a PR via GitHub CLI or API
                 logger.info(f"Would create PR for {branch_name}")
                 
-                # Return a simulated PR URL
+                # Return a simulated PR URL with number
                 repo_owner = os.environ.get("GITHUB_REPO_OWNER", "example")
                 repo_name = os.environ.get("GITHUB_REPO_NAME", "repo")
                 pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/123"
+                pr_number = 123
                 
-                logger.info(f"PR created: {pr_url}")
-                return pr_url
+                logger.info(f"PR created: {pr_url} (#{pr_number})")
+                return pr_url, pr_number
                 
         except Exception as e:
             logger.error(f"Error creating PR using git commands: {str(e)}")
@@ -262,37 +261,8 @@ class CommunicatorAgent:
             repo_owner = os.environ.get("GITHUB_REPO_OWNER", "example")
             repo_name = os.environ.get("GITHUB_REPO_NAME", "repo")
             pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/123"
-            logger.info(f"Simulated PR creation: {pr_url}")
-            return pr_url
+            pr_number = 123
+            logger.info(f"Simulated PR creation: {pr_url} (#{pr_number})")
+            return pr_url, pr_number
     
-    def _update_jira_early_escalation(self, ticket_id: str, input_data: Dict[str, Any]) -> None:
-        """Update JIRA with early escalation information"""
-        logger.info(f"Updating JIRA with early escalation for ticket {ticket_id}")
-        # Simplified implementation for demo purposes
-        escalation_reason = input_data.get("escalation_reason", "Unknown reason")
-        attempt = input_data.get("attempt", 0)
-        max_retries = input_data.get("max_retries", 0)
-        logger.info(f"Escalation reason: {escalation_reason}")
-        logger.info(f"Attempt: {attempt}/{max_retries}")
-    
-    def _update_jira_progress(self, ticket_id: str, input_data: Dict[str, Any]) -> None:
-        """Update JIRA with progress information"""
-        logger.info(f"Updating JIRA with progress for ticket {ticket_id}")
-        # Simplified implementation for demo purposes
-        success = input_data.get("success", False)
-        attempt = input_data.get("attempt", 0)
-        max_retries = input_data.get("max_retries", 0)
-        failure_summary = input_data.get("failure_summary", "")
-        logger.info(f"Success: {success}")
-        logger.info(f"Attempt: {attempt}/{max_retries}")
-        if not success and failure_summary:
-            logger.info(f"Failure summary: {failure_summary}")
-    
-    def _update_jira_final(self, ticket_id: str, test_passed: bool, pr_url: Optional[str] = None) -> None:
-        """Update JIRA with final result"""
-        logger.info(f"Updating JIRA with final result for ticket {ticket_id}")
-        # Simplified implementation for demo purposes
-        if test_passed:
-            logger.info(f"Tests passed, PR created: {pr_url}")
-        else:
-            logger.info("Tests failed, escalating to human")
+    # ... keep existing code (_update_jira_* methods)

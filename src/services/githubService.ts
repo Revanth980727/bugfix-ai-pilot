@@ -237,8 +237,14 @@ export const getPRNumberForTicket = (ticketId: string): number | undefined => {
  * @param prIdentifier - Can be a number, string number, URL, or other identifier
  * @returns A PR number as an integer, or null if not extractable
  */
-export const extractPRNumber = (prIdentifier: string | number): number | null => {
-  console.log(`Attempting to extract PR number from: ${prIdentifier}`);
+export const extractPRNumber = (prIdentifier: string | number | [string, number]): number | null => {
+  console.log(`Attempting to extract PR number from: ${JSON.stringify(prIdentifier)}`);
+  
+  // Handle tuple case [url, number]
+  if (Array.isArray(prIdentifier) && prIdentifier.length >= 2) {
+    console.log(`Extracted PR number from tuple: ${prIdentifier[1]}`);
+    return typeof prIdentifier[1] === 'number' ? prIdentifier[1] : null;
+  }
   
   // If already a number, return it
   if (typeof prIdentifier === 'number') {
@@ -246,7 +252,7 @@ export const extractPRNumber = (prIdentifier: string | number): number | null =>
   }
   
   // If string is just a number, convert it
-  if (/^\d+$/.test(prIdentifier)) {
+  if (typeof prIdentifier === 'string' && /^\d+$/.test(prIdentifier)) {
     return parseInt(prIdentifier, 10);
   }
   
@@ -258,14 +264,15 @@ export const extractPRNumber = (prIdentifier: string | number): number | null =>
   
   // Try to extract PR number from a GitHub URL
   // Format: https://github.com/owner/repo/pull/123
-  const urlMatch = /\/pull\/(\d+)/.exec(prIdentifier);
-  if (urlMatch && urlMatch[1]) {
-    return parseInt(urlMatch[1], 10);
+  if (typeof prIdentifier === 'string') {
+    const urlMatch = /\/pull\/(\d+)/.exec(prIdentifier);
+    if (urlMatch && urlMatch[1]) {
+      return parseInt(urlMatch[1], 10);
+    }
   }
   
   // IMPORTANT: Do NOT extract numbers from JIRA ticket IDs
-  // Previously, we would extract digits from SCRUM-2 to get PR #2, which is incorrect
-  if (/^[A-Z]+-\d+$/.test(prIdentifier)) {
+  if (typeof prIdentifier === 'string' && /^[A-Z]+-\d+$/.test(prIdentifier)) {
     console.log(`Not extracting PR number from JIRA ticket ID: ${prIdentifier}`);
     return null;
   }
@@ -280,7 +287,10 @@ export const extractPRNumber = (prIdentifier: string | number): number | null =>
  * @param comment - Comment content
  * @returns Success status
  */
-export const addPRComment = async (prIdentifier: string | number, comment: string): Promise<boolean> => {
+export const addPRComment = async (
+  prIdentifier: string | number | [string, number], 
+  comment: string
+): Promise<boolean> => {
   // Extract numeric PR number if needed
   const prNumber = extractPRNumber(prIdentifier);
   
