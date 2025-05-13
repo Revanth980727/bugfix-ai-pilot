@@ -19,7 +19,24 @@ class CommunicatorAgent:
         self.github_token = os.environ.get("GITHUB_TOKEN", "")
         self.jira_token = os.environ.get("JIRA_TOKEN", "")
         self.repo_url = os.environ.get("REPO_URL", "")
-        self.github_branch = os.environ.get("GITHUB_BRANCH", "main")
+        
+        # Get the branch name from environment - exact case sensitivity required
+        # Check for GITHUB_BRANCH first (preferred)
+        self.github_branch = os.environ.get("GITHUB_BRANCH", None)
+        
+        # If not found, check for alternative names as fallback
+        if self.github_branch is None:
+            for env_var in ["GITHUB_DEFAULT_BRANCH", "DEFAULT_BRANCH", "GIT_BRANCH"]:
+                if os.environ.get(env_var):
+                    self.github_branch = os.environ.get(env_var)
+                    logger.warning(f"GITHUB_BRANCH not found, using {env_var} instead: {self.github_branch}")
+                    break
+        
+        # If still not found, raise an error
+        if self.github_branch is None:
+            error_msg = "GITHUB_BRANCH environment variable is not set. Please set it in .env file."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
         
         logger.info(f"Using GitHub branch from environment: {self.github_branch}")
         
@@ -117,9 +134,9 @@ class CommunicatorAgent:
                         github_service = GitHubService()
                         logger.info("Successfully imported GitHubService")
                         
-                        # Use existing branch instead of creating a new one
+                        # Use branch from environment - this is critical
                         branch_name = self.github_branch
-                        logger.info(f"Using existing branch: {branch_name}")
+                        logger.info(f"Using branch from environment: {branch_name}")
                         
                         # Get file changes from input data
                         file_changes = input_data.get("file_changes", [])
@@ -265,10 +282,9 @@ class CommunicatorAgent:
                     subprocess.run(checkout_branch_cmd, check=True, capture_output=True, cwd=temp_dir)
                     logger.info(f"Successfully checked out branch {branch_name}")
                 except subprocess.CalledProcessError:
-                    # If the branch doesn't exist, create it
-                    logger.info(f"Branch {branch_name} doesn't exist, creating it")
-                    create_branch_cmd = ["git", "checkout", "-b", branch_name]
-                    subprocess.run(create_branch_cmd, check=True, capture_output=True, cwd=temp_dir)
+                    # If the branch doesn't exist, log error and abort
+                    logger.error(f"Branch {branch_name} doesn't exist! This is a fatal error.")
+                    return None
                 
                 # Apply changes
                 patch_data = input_data.get("patch_data", {})
