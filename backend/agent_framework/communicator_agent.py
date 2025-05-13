@@ -19,6 +19,9 @@ class CommunicatorAgent:
         self.github_token = os.environ.get("GITHUB_TOKEN", "")
         self.jira_token = os.environ.get("JIRA_TOKEN", "")
         self.repo_url = os.environ.get("REPO_URL", "")
+        self.github_branch = os.environ.get("GITHUB_BRANCH", "main")
+        
+        logger.info(f"Using GitHub branch from environment: {self.github_branch}")
         
         # Check for git installation
         self._check_git_available()
@@ -60,8 +63,6 @@ class CommunicatorAgent:
         
         # Call the existing process method that contains the actual implementation
         return self.process(input_data)
-    
-    # ... keep existing code (process methods)
     
     def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process incoming data and communicate results"""
@@ -116,79 +117,76 @@ class CommunicatorAgent:
                         github_service = GitHubService()
                         logger.info("Successfully imported GitHubService")
                         
-                        # Create a branch for the fix
-                        branch_created, branch_name = github_service.create_fix_branch(ticket_id)
+                        # Use existing branch instead of creating a new one
+                        branch_name = self.github_branch
+                        logger.info(f"Using existing branch: {branch_name}")
                         
-                        if branch_created:
-                            logger.info(f"Created branch {branch_name} for ticket {ticket_id}")
+                        # Get file changes from input data
+                        file_changes = input_data.get("file_changes", [])
+                        file_contents = []
+                        file_paths = []
+                        
+                        if not file_changes:
+                            file_changes = []
                             
-                            # Get file changes from input data
-                            file_changes = input_data.get("file_changes", [])
-                            file_contents = []
-                            file_paths = []
+                            # Try to extract file changes from patch data
+                            patch_data = input_data.get("patch_data", {})
+                            patched_files = patch_data.get("patched_files", [])
+                            patch_content = patch_data.get("patch_content", "")
                             
-                            if not file_changes:
-                                file_changes = []
+                            for file_path in patched_files:
+                                file_paths.append(file_path)
+                                # For patched files without explicit content, we'll pass None and let
+                                # the commit_patch method handle it
+                                file_contents.append(None)
+                        else:
+                            # Extract paths and contents from file_changes
+                            for change in file_changes:
+                                if change.get("filename") and change.get("content"):
+                                    file_paths.append(change.get("filename"))
+                                    file_contents.append(change.get("content"))
+                        
+                        # Commit message
+                        commit_message = input_data.get("commit_message", f"Fix for {ticket_id}")
+                        
+                        # Commit the changes
+                        if file_paths:
+                            # Add timestamp to ensure changes are seen as unique
+                            commit_message = f"{commit_message} - {int(time.time())}"
+                            logger.info(f"Committing changes to branch {branch_name} with message: {commit_message}")
+                            
+                            # Updated to pass both file paths and contents
+                            commit_success = github_service.commit_bug_fix(
+                                branch_name, file_paths, file_contents, ticket_id, commit_message
+                            )
+                            
+                            if commit_success:
+                                logger.info(f"Successfully committed changes for {ticket_id} to branch {branch_name}")
                                 
-                                # Try to extract file changes from patch data
-                                patch_data = input_data.get("patch_data", {})
-                                patched_files = patch_data.get("patched_files", [])
-                                patch_content = patch_data.get("patch_content", "")
-                                
-                                for file_path in patched_files:
-                                    file_paths.append(file_path)
-                                    # For patched files without explicit content, we'll pass None and let
-                                    # the commit_patch method handle it
-                                    file_contents.append(None)
-                            else:
-                                # Extract paths and contents from file_changes
-                                for change in file_changes:
-                                    if change.get("filename") and change.get("content"):
-                                        file_paths.append(change.get("filename"))
-                                        file_contents.append(change.get("content"))
-                            
-                            # Commit message
-                            commit_message = input_data.get("commit_message", f"Fix for {ticket_id}")
-                            
-                            # Commit the changes
-                            if file_paths:
-                                # Add timestamp to ensure changes are seen as unique
-                                commit_message = f"{commit_message} - {int(time.time())}"
-                                
-                                # Updated to pass both file paths and contents
-                                commit_success = github_service.commit_bug_fix(
-                                    branch_name, file_paths, file_contents, ticket_id, commit_message
+                                # Create a PR
+                                pr_result = github_service.create_fix_pr(
+                                    branch_name, 
+                                    ticket_id,
+                                    f"Fix for {ticket_id}",
+                                    f"This PR fixes the issue described in {ticket_id}"
                                 )
                                 
-                                if commit_success:
-                                    logger.info(f"Successfully committed changes for {ticket_id}")
+                                if pr_result and isinstance(pr_result, dict):
+                                    # Extract PR URL, properly handling all cases
+                                    pr_url = pr_result.get("url")
+                                    pr_number = pr_result.get("number")
                                     
-                                    # Create a PR
-                                    pr_result = github_service.create_fix_pr(
-                                        branch_name, 
-                                        ticket_id,
-                                        f"Fix for {ticket_id}",
-                                        f"This PR fixes the issue described in {ticket_id}"
-                                    )
-                                    
-                                    if pr_result and isinstance(pr_result, dict):
-                                        # Extract PR URL, properly handling all cases
-                                        pr_url = pr_result.get("url")
-                                        pr_number = pr_result.get("number")
-                                        
-                                        # Record PR information in result
-                                        result["pr_url"] = pr_url
-                                        result["pr_number"] = pr_number
-                                        result["pr_created"] = True
-                                        logger.info(f"Created PR #{pr_number} for ticket {ticket_id}: {pr_url}")
-                                    else:
-                                        logger.error(f"Failed to create PR for ticket {ticket_id}")
+                                    # Record PR information in result
+                                    result["pr_url"] = pr_url
+                                    result["pr_number"] = pr_number
+                                    result["pr_created"] = True
+                                    logger.info(f"Created PR #{pr_number} for ticket {ticket_id}: {pr_url}")
                                 else:
-                                    logger.error(f"Failed to commit changes for ticket {ticket_id}")
+                                    logger.error(f"Failed to create PR for ticket {ticket_id}")
                             else:
-                                logger.warning(f"No file changes found for ticket {ticket_id}")
+                                logger.error(f"Failed to commit changes for ticket {ticket_id}")
                         else:
-                            logger.error(f"Failed to create branch for ticket {ticket_id}")
+                            logger.warning(f"No file changes found for ticket {ticket_id}")
                     except ImportError as e:
                         logger.error(f"Failed to import GitHubService: {str(e)}")
                         pr_url = self._create_github_pr(ticket_id, input_data)
@@ -257,11 +255,20 @@ class CommunicatorAgent:
                 clone_cmd = ["git", "clone", repo_url, temp_dir]
                 subprocess.run(clone_cmd, check=True, capture_output=True)
                 
-                # Create a new branch
-                branch_name = f"fix/{ticket_id.lower()}"
-                logger.info(f"Creating branch {branch_name}")
-                create_branch_cmd = ["git", "checkout", "-b", branch_name]
-                subprocess.run(create_branch_cmd, check=True, capture_output=True, cwd=temp_dir)
+                # Use the branch from environment instead of creating a new one
+                branch_name = self.github_branch
+                logger.info(f"Checking out branch {branch_name}")
+                checkout_branch_cmd = ["git", "checkout", branch_name]
+                
+                try:
+                    # Try to checkout the branch
+                    subprocess.run(checkout_branch_cmd, check=True, capture_output=True, cwd=temp_dir)
+                    logger.info(f"Successfully checked out branch {branch_name}")
+                except subprocess.CalledProcessError:
+                    # If the branch doesn't exist, create it
+                    logger.info(f"Branch {branch_name} doesn't exist, creating it")
+                    create_branch_cmd = ["git", "checkout", "-b", branch_name]
+                    subprocess.run(create_branch_cmd, check=True, capture_output=True, cwd=temp_dir)
                 
                 # Apply changes
                 patch_data = input_data.get("patch_data", {})
@@ -273,6 +280,7 @@ class CommunicatorAgent:
                 
                 # First try to use file_changes if available (which include content)
                 if file_changes:
+                    logger.info(f"Applying {len(file_changes)} file changes")
                     for change in file_changes:
                         if change.get("filename") and change.get("content"):
                             file_path = change.get("filename")
@@ -282,6 +290,7 @@ class CommunicatorAgent:
                             file_full_path = os.path.join(temp_dir, file_path)
                             os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
                             
+                            logger.info(f"Writing content to {file_path}")
                             with open(file_full_path, 'w') as f:
                                 f.write(content)
                             
@@ -290,11 +299,13 @@ class CommunicatorAgent:
                             subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
                 elif patched_files:
                     # Fallback to patch_data if file_changes not available
+                    logger.info(f"Applying changes to {len(patched_files)} patched files")
                     for file_path in patched_files:
                         # Write placeholder content if we don't have the actual content
                         file_full_path = os.path.join(temp_dir, file_path)
                         os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
                         
+                        logger.info(f"Writing placeholder content to {file_path}")
                         with open(file_full_path, 'w') as f:
                             f.write(f"// Fixed content for {file_path}\n// Timestamp: {timestamp}\n")
                         
@@ -304,15 +315,21 @@ class CommunicatorAgent:
                 
                 # Commit the changes
                 commit_msg = f"Fix for {ticket_id} - {timestamp}"
+                logger.info(f"Committing changes with message: {commit_msg}")
                 commit_cmd = ["git", "commit", "-m", commit_msg]
                 subprocess.run(commit_cmd, check=True, capture_output=True, cwd=temp_dir)
                 
                 # Push the changes
+                logger.info(f"Pushing branch {branch_name}")
                 push_cmd = ["git", "push", "origin", branch_name]
-                subprocess.run(push_cmd, check=True, capture_output=True, cwd=temp_dir)
+                push_result = subprocess.run(push_cmd, check=True, capture_output=True, cwd=temp_dir)
+                logger.info(f"Push result: {push_result.stdout.decode()}")
                 
                 # Create a PR via GitHub CLI or API
-                logger.info(f"Would create PR for {branch_name}")
+                logger.info(f"Creating PR for branch {branch_name}")
+                
+                # Get the base branch from environment or use default
+                base_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
                 
                 # Return a simulated PR URL with number
                 repo_owner = os.environ.get("GITHUB_REPO_OWNER", "example")
