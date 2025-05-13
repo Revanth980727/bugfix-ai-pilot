@@ -152,7 +152,7 @@ export function CommunicatorAgent({
           </div>
           
           {/* File checksums collapsible section */}
-          {patchValidationResults.fileChecksums && modifiedFileCount > 0 && (
+          {patchValidationResults?.fileChecksums && modifiedFileCount > 0 && (
             <Collapsible className="mt-2 space-y-1">
               <CollapsibleTrigger className="flex w-full items-center justify-between rounded-sm py-1 text-xs font-medium hover:bg-muted/50">
                 <div className="flex items-center">
@@ -166,7 +166,9 @@ export function CommunicatorAgent({
                   {Object.entries(patchValidationResults.fileChecksums).slice(0, 5).map(([file, checksum]) => (
                     <div key={file} className="flex items-center justify-between text-xs">
                       <span className="font-mono">{file}</span>
-                      <span className="text-muted-foreground text-[10px]">{checksum.substring(0, 8)}</span>
+                      <span className="text-muted-foreground text-[10px]">
+                        {typeof checksum === 'string' ? checksum.substring(0, 8) : ''}
+                      </span>
                     </div>
                   ))}
                   {modifiedFileCount > 5 && (
@@ -337,7 +339,9 @@ export function CommunicatorAgent({
                           {Object.entries(update.metadata.fileChecksums).map(([file, checksum]) => (
                             <div key={file} className="flex justify-between">
                               <span className="font-mono">{file}</span>
-                              <span className="text-muted-foreground">{checksum.substring(0, 8)}</span>
+                              <span className="text-muted-foreground">
+                                {typeof checksum === 'string' ? checksum.substring(0, 8) : ''}
+                              </span>
                             </div>
                           ))}
                         </CollapsibleContent>
