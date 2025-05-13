@@ -172,6 +172,13 @@ class CommunicatorAgent:
                             commit_message = f"{commit_message} - {int(time.time())}"
                             logger.info(f"Committing changes to branch {branch_name} with message: {commit_message}")
                             
+                            # Log the files being modified
+                            for i, file_path in enumerate(file_paths):
+                                content = file_contents[i]
+                                content_preview = content[:100] + "..." if content and len(content) > 100 else "No content available"
+                                logger.info(f"File {i+1}/{len(file_paths)}: {file_path}")
+                                logger.info(f"Content preview: {content_preview}")
+                            
                             # Updated to pass both file paths and contents
                             commit_success = github_service.commit_bug_fix(
                                 branch_name, file_paths, file_contents, ticket_id, commit_message
@@ -270,7 +277,8 @@ class CommunicatorAgent:
                 # Clone the repository
                 logger.info(f"Cloning repository to {temp_dir}")
                 clone_cmd = ["git", "clone", repo_url, temp_dir]
-                subprocess.run(clone_cmd, check=True, capture_output=True)
+                clone_result = subprocess.run(clone_cmd, check=True, capture_output=True)
+                logger.info(f"Clone result: {clone_result.stdout.decode()}")
                 
                 # Use the branch from environment instead of creating a new one
                 branch_name = self.github_branch
@@ -279,11 +287,13 @@ class CommunicatorAgent:
                 
                 try:
                     # Try to checkout the branch
-                    subprocess.run(checkout_branch_cmd, check=True, capture_output=True, cwd=temp_dir)
+                    checkout_result = subprocess.run(checkout_branch_cmd, check=True, capture_output=True, cwd=temp_dir)
+                    logger.info(f"Checkout result: {checkout_result.stdout.decode()}")
                     logger.info(f"Successfully checked out branch {branch_name}")
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as e:
                     # If the branch doesn't exist, log error and abort
                     logger.error(f"Branch {branch_name} doesn't exist! This is a fatal error.")
+                    logger.error(f"Error: {e.stderr.decode()}")
                     return None
                 
                 # Apply changes
@@ -307,33 +317,78 @@ class CommunicatorAgent:
                             os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
                             
                             logger.info(f"Writing content to {file_path}")
+                            logger.info(f"Content preview: {content[:100]}..." if content and len(content) > 100 else "No content available")
+                            
                             with open(file_full_path, 'w') as f:
                                 f.write(content)
                             
                             # Add the file
                             add_cmd = ["git", "add", file_path]
-                            subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
+                            add_result = subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
+                            logger.info(f"Git add result: {add_result.stdout.decode() or 'No output'}")
                 elif patched_files:
                     # Fallback to patch_data if file_changes not available
                     logger.info(f"Applying changes to {len(patched_files)} patched files")
                     for file_path in patched_files:
-                        # Write placeholder content if we don't have the actual content
+                        # Try to read the original file first
                         file_full_path = os.path.join(temp_dir, file_path)
-                        os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
                         
-                        logger.info(f"Writing placeholder content to {file_path}")
-                        with open(file_full_path, 'w') as f:
-                            f.write(f"// Fixed content for {file_path}\n// Timestamp: {timestamp}\n")
+                        if os.path.exists(file_full_path):
+                            # Read existing content
+                            try:
+                                with open(file_full_path, 'r') as f:
+                                    original_content = f.read()
+                                logger.info(f"Read existing file: {file_path} ({len(original_content)} bytes)")
+                                
+                                # Modify content with some simple change
+                                new_content = original_content + f"\n// Modified for ticket {ticket_id} at {timestamp}\n"
+                                
+                                with open(file_full_path, 'w') as f:
+                                    f.write(new_content)
+                                    
+                                logger.info(f"Updated file: {file_path} ({len(new_content)} bytes)")
+                            except Exception as e:
+                                logger.error(f"Error reading/writing file {file_path}: {str(e)}")
+                                # Create a new file as fallback
+                                os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
+                                with open(file_full_path, 'w') as f:
+                                    new_content = f"// New content for {file_path}\n// Created for ticket {ticket_id} at {timestamp}\n"
+                                    f.write(new_content)
+                                logger.info(f"Created new file as fallback: {file_path}")
+                        else:
+                            # File doesn't exist, create it
+                            os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
+                            with open(file_full_path, 'w') as f:
+                                new_content = f"// New content for {file_path}\n// Created for ticket {ticket_id} at {timestamp}\n"
+                                f.write(new_content)
+                            logger.info(f"Created new file: {file_path}")
                         
                         # Add the file
                         add_cmd = ["git", "add", file_path]
-                        subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
+                        add_result = subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
+                        logger.info(f"Git add result for {file_path}: {add_result.stdout.decode() or 'No output'}")
+                
+                # Check git status to verify changes
+                status_cmd = ["git", "status"]
+                status_result = subprocess.run(status_cmd, check=True, capture_output=True, text=True, cwd=temp_dir)
+                logger.info(f"Git status before commit:\n{status_result.stdout}")
                 
                 # Commit the changes
                 commit_msg = f"Fix for {ticket_id} - {timestamp}"
                 logger.info(f"Committing changes with message: {commit_msg}")
                 commit_cmd = ["git", "commit", "-m", commit_msg]
-                subprocess.run(commit_cmd, check=True, capture_output=True, cwd=temp_dir)
+                
+                try:
+                    commit_result = subprocess.run(commit_cmd, check=True, capture_output=True, text=True, cwd=temp_dir)
+                    logger.info(f"Commit result: {commit_result.stdout}")
+                except subprocess.CalledProcessError as e:
+                    if "nothing to commit" in e.stderr:
+                        logger.warning("No changes to commit. Either the files are unchanged or weren't properly added.")
+                        logger.warning(e.stderr)
+                        return None
+                    else:
+                        logger.error(f"Error during commit: {e.stderr}")
+                        raise
                 
                 # Push the changes
                 logger.info(f"Pushing branch {branch_name}")
