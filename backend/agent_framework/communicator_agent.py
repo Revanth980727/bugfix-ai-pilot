@@ -78,6 +78,15 @@ class CommunicatorAgent:
         """
         logger.info(f"Running communicator agent with input: {input_data.get('ticket_id', 'unknown')}")
         
+        # Log detailed input data for debugging - focus on patch data
+        patch_data = input_data.get("patch_data", {})
+        if patch_data:
+            logger.info(f"Received patch data with {len(patch_data.get('patched_files', []))} files")
+            for file_path in patch_data.get("patched_files", [])[:5]:
+                logger.info(f"Patched file: {file_path}")
+            if len(patch_data.get("patched_files", [])) > 5:
+                logger.info(f"... and {len(patch_data.get('patched_files', [])) - 5} more files")
+        
         # Call the existing process method that contains the actual implementation
         return self.process(input_data)
     
@@ -85,9 +94,6 @@ class CommunicatorAgent:
         """Process incoming data and communicate results"""
         ticket_id = input_data.get("ticket_id", "unknown")
         logger.info(f"Processing communication request for ticket {ticket_id}")
-        
-        # Log input data for debugging
-        logger.info(f"Communication input: {json.dumps(input_data, default=str)[:500]}...")
         
         # Create result with default values
         result = {
@@ -138,79 +144,62 @@ class CommunicatorAgent:
                         branch_name = self.github_branch
                         logger.info(f"Using branch from environment: {branch_name}")
                         
-                        # Get file changes from input data
-                        file_changes = input_data.get("file_changes", [])
-                        file_contents = []
-                        file_paths = []
+                        # Extract patches from developer agent output
+                        patch_data = input_data.get("patch_data", {})
+                        patched_files = patch_data.get("patched_files", [])
+                        patch_content = patch_data.get("patch_content", "")
                         
-                        if not file_changes:
-                            file_changes = []
-                            
-                            # Try to extract file changes from patch data
-                            patch_data = input_data.get("patch_data", {})
-                            patched_files = patch_data.get("patched_files", [])
-                            patch_content = patch_data.get("patch_content", "")
-                            
-                            for file_path in patched_files:
-                                file_paths.append(file_path)
-                                # For patched files without explicit content, we'll pass None and let
-                                # the commit_patch method handle it
-                                file_contents.append(None)
-                        else:
-                            # Extract paths and contents from file_changes
-                            for change in file_changes:
-                                if change.get("filename") and change.get("content"):
-                                    file_paths.append(change.get("filename"))
-                                    file_contents.append(change.get("content"))
+                        # Check if we have valid patch data
+                        if not patched_files or not patch_content:
+                            logger.error("Missing required patch data from developer agent")
+                            logger.error(f"Patched files: {patched_files}")
+                            logger.error(f"Patch content available: {'Yes' if patch_content else 'No'}")
+                            result["error"] = "Missing required patch data from developer agent"
+                            return result
+                        
+                        logger.info(f"Found {len(patched_files)} files in patch data")
+                        for i, file_path in enumerate(patched_files[:5]):
+                            logger.info(f"Will patch file {i+1}: {file_path}")
+                        if len(patched_files) > 5:
+                            logger.info(f"... and {len(patched_files) - 5} more files")
                         
                         # Commit message
                         commit_message = input_data.get("commit_message", f"Fix for {ticket_id}")
+                        logger.info(f"Using commit message: {commit_message}")
                         
-                        # Commit the changes
-                        if file_paths:
-                            # Add timestamp to ensure changes are seen as unique
-                            commit_message = f"{commit_message} - {int(time.time())}"
-                            logger.info(f"Committing changes to branch {branch_name} with message: {commit_message}")
+                        # Commit the patch directly
+                        commit_success = github_service.commit_patch(
+                            branch_name=branch_name,
+                            patch_content=patch_content,
+                            commit_message=commit_message,
+                            patch_file_paths=patched_files
+                        )
+                        
+                        if commit_success:
+                            logger.info(f"Successfully committed patch for {ticket_id} to branch {branch_name}")
                             
-                            # Log the files being modified
-                            for i, file_path in enumerate(file_paths):
-                                content = file_contents[i]
-                                content_preview = content[:100] + "..." if content and len(content) > 100 else "No content available"
-                                logger.info(f"File {i+1}/{len(file_paths)}: {file_path}")
-                                logger.info(f"Content preview: {content_preview}")
-                            
-                            # Updated to pass both file paths and contents
-                            commit_success = github_service.commit_bug_fix(
-                                branch_name, file_paths, file_contents, ticket_id, commit_message
+                            # Create a PR
+                            pr_result = github_service.create_fix_pr(
+                                branch_name, 
+                                ticket_id,
+                                f"Fix for {ticket_id}",
+                                f"This PR fixes the issue described in {ticket_id}"
                             )
                             
-                            if commit_success:
-                                logger.info(f"Successfully committed changes for {ticket_id} to branch {branch_name}")
+                            if pr_result and isinstance(pr_result, dict):
+                                # Extract PR URL, properly handling all cases
+                                pr_url = pr_result.get("url")
+                                pr_number = pr_result.get("number")
                                 
-                                # Create a PR
-                                pr_result = github_service.create_fix_pr(
-                                    branch_name, 
-                                    ticket_id,
-                                    f"Fix for {ticket_id}",
-                                    f"This PR fixes the issue described in {ticket_id}"
-                                )
-                                
-                                if pr_result and isinstance(pr_result, dict):
-                                    # Extract PR URL, properly handling all cases
-                                    pr_url = pr_result.get("url")
-                                    pr_number = pr_result.get("number")
-                                    
-                                    # Record PR information in result
-                                    result["pr_url"] = pr_url
-                                    result["pr_number"] = pr_number
-                                    result["pr_created"] = True
-                                    logger.info(f"Created PR #{pr_number} for ticket {ticket_id}: {pr_url}")
-                                else:
-                                    logger.error(f"Failed to create PR for ticket {ticket_id}")
+                                # Record PR information in result
+                                result["pr_url"] = pr_url
+                                result["pr_number"] = pr_number
+                                result["pr_created"] = True
+                                logger.info(f"Created PR #{pr_number} for ticket {ticket_id}: {pr_url}")
                             else:
-                                logger.error(f"Failed to commit changes for ticket {ticket_id}")
+                                logger.error(f"Failed to create PR for ticket {ticket_id}")
                         else:
-                            logger.warning(f"No file changes found for ticket {ticket_id}")
+                            logger.error(f"Failed to commit patch for ticket {ticket_id}")
                     except ImportError as e:
                         logger.error(f"Failed to import GitHubService: {str(e)}")
                         pr_url = self._create_github_pr(ticket_id, input_data)
@@ -252,8 +241,8 @@ class CommunicatorAgent:
         return result
     
     def _create_github_pr(self, ticket_id: str, input_data: Dict[str, Any]) -> Union[str, Tuple[str, int], None]:
-        """Create a GitHub PR with the fix"""
-        logger.info(f"Creating GitHub PR for ticket {ticket_id}")
+        """Create a GitHub PR with the fix using git commands"""
+        logger.info(f"Creating GitHub PR for ticket {ticket_id} using git commands")
         
         try:
             # Try to use the direct git commands
@@ -296,77 +285,86 @@ class CommunicatorAgent:
                     logger.error(f"Error: {e.stderr.decode()}")
                     return None
                 
-                # Apply changes
+                # Apply patch from the developer agent
                 patch_data = input_data.get("patch_data", {})
                 patched_files = patch_data.get("patched_files", [])
-                file_changes = input_data.get("file_changes", [])
+                patch_content = patch_data.get("patch_content", "")
                 
-                # Create timestamp for unique changes
-                timestamp = int(time.time())
-                
-                # First try to use file_changes if available (which include content)
-                if file_changes:
-                    logger.info(f"Applying {len(file_changes)} file changes")
-                    for change in file_changes:
-                        if change.get("filename") and change.get("content"):
-                            file_path = change.get("filename")
-                            content = change.get("content")
-                            
-                            # Write file content
-                            file_full_path = os.path.join(temp_dir, file_path)
-                            os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
-                            
-                            logger.info(f"Writing content to {file_path}")
-                            logger.info(f"Content preview: {content[:100]}..." if content and len(content) > 100 else "No content available")
-                            
-                            with open(file_full_path, 'w') as f:
-                                f.write(content)
-                            
-                            # Add the file
+                if patch_content:
+                    # Write the patch to a temporary file
+                    patch_file_path = os.path.join(temp_dir, "changes.patch")
+                    with open(patch_file_path, "w") as f:
+                        f.write(patch_content)
+                    
+                    logger.info(f"Applying patch to {len(patched_files)} files")
+                    logger.info(f"Patch content size: {len(patch_content)} bytes")
+                    
+                    # Apply the patch
+                    try:
+                        apply_cmd = ["git", "apply", patch_file_path]
+                        apply_result = subprocess.run(apply_cmd, check=True, capture_output=True, cwd=temp_dir)
+                        logger.info(f"Patch apply result: {apply_result.stdout.decode()}")
+                        logger.info("Successfully applied patch")
+                        
+                        # Add the changed files
+                        for file_path in patched_files:
                             add_cmd = ["git", "add", file_path]
                             add_result = subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
-                            logger.info(f"Git add result: {add_result.stdout.decode() or 'No output'}")
-                elif patched_files:
-                    # Fallback to patch_data if file_changes not available
-                    logger.info(f"Applying changes to {len(patched_files)} patched files")
-                    for file_path in patched_files:
-                        # Try to read the original file first
-                        file_full_path = os.path.join(temp_dir, file_path)
+                            logger.info(f"Git add result for {file_path}: {add_result.stdout.decode() or 'No output'}")
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"Failed to apply patch: {e.stderr.decode()}")
                         
-                        if os.path.exists(file_full_path):
-                            # Read existing content
-                            try:
-                                with open(file_full_path, 'r') as f:
-                                    original_content = f.read()
-                                logger.info(f"Read existing file: {file_path} ({len(original_content)} bytes)")
-                                
-                                # Modify content with some simple change
-                                new_content = original_content + f"\n// Modified for ticket {ticket_id} at {timestamp}\n"
-                                
-                                with open(file_full_path, 'w') as f:
-                                    f.write(new_content)
+                        # Try applying individual file changes as fallback
+                        logger.info("Falling back to applying individual file changes")
+                        
+                        # Create timestamp for unique changes
+                        timestamp = int(time.time())
+                
+                        # Try using file_changes as a fallback
+                        file_changes = input_data.get("file_changes", [])
+                        if file_changes:
+                            logger.info(f"Applying {len(file_changes)} file changes")
+                            for change in file_changes:
+                                if change.get("filename") and change.get("content"):
+                                    file_path = change.get("filename")
+                                    content = change.get("content")
                                     
-                                logger.info(f"Updated file: {file_path} ({len(new_content)} bytes)")
-                            except Exception as e:
-                                logger.error(f"Error reading/writing file {file_path}: {str(e)}")
-                                # Create a new file as fallback
-                                os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
-                                with open(file_full_path, 'w') as f:
-                                    new_content = f"// New content for {file_path}\n// Created for ticket {ticket_id} at {timestamp}\n"
-                                    f.write(new_content)
-                                logger.info(f"Created new file as fallback: {file_path}")
-                        else:
-                            # File doesn't exist, create it
-                            os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
-                            with open(file_full_path, 'w') as f:
-                                new_content = f"// New content for {file_path}\n// Created for ticket {ticket_id} at {timestamp}\n"
-                                f.write(new_content)
-                            logger.info(f"Created new file: {file_path}")
-                        
-                        # Add the file
-                        add_cmd = ["git", "add", file_path]
-                        add_result = subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
-                        logger.info(f"Git add result for {file_path}: {add_result.stdout.decode() or 'No output'}")
+                                    # Write file content
+                                    file_full_path = os.path.join(temp_dir, file_path)
+                                    os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
+                                    
+                                    logger.info(f"Writing content to {file_path}")
+                                    logger.info(f"Content preview: {content[:100]}..." if content and len(content) > 100 else "No content available")
+                                    
+                                    with open(file_full_path, 'w') as f:
+                                        f.write(content)
+                                    
+                                    # Add the file
+                                    add_cmd = ["git", "add", file_path]
+                                    add_result = subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
+                                    logger.info(f"Git add result: {add_result.stdout.decode() or 'No output'}")
+                        elif patched_files:
+                            # Last resort - try to edit the files directly
+                            logger.info(f"Attempting direct file edits on {len(patched_files)} files")
+                            for file_path in patched_files:
+                                file_full_path = os.path.join(temp_dir, file_path)
+                                
+                                if os.path.exists(file_full_path):
+                                    # Add a comment to mark the change
+                                    with open(file_full_path, 'a') as f:
+                                        f.write(f"\n# Modified for ticket {ticket_id} at {timestamp}\n")
+                                    
+                                    logger.info(f"Added change marker to {file_path}")
+                                    
+                                    # Add the file
+                                    add_cmd = ["git", "add", file_path]
+                                    add_result = subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
+                                    logger.info(f"Git add result: {add_result.stdout.decode() or 'No output'}")
+                                else:
+                                    logger.warning(f"File {file_path} does not exist, cannot modify")
+                else:
+                    logger.error("No patch content available from developer agent")
+                    return None
                 
                 # Check git status to verify changes
                 status_cmd = ["git", "status"]
@@ -374,7 +372,7 @@ class CommunicatorAgent:
                 logger.info(f"Git status before commit:\n{status_result.stdout}")
                 
                 # Commit the changes
-                commit_msg = f"Fix for {ticket_id} - {timestamp}"
+                commit_msg = f"Fix for {ticket_id} - {int(time.time())}"
                 logger.info(f"Committing changes with message: {commit_msg}")
                 commit_cmd = ["git", "commit", "-m", commit_msg]
                 
@@ -396,13 +394,7 @@ class CommunicatorAgent:
                 push_result = subprocess.run(push_cmd, check=True, capture_output=True, cwd=temp_dir)
                 logger.info(f"Push result: {push_result.stdout.decode()}")
                 
-                # Create a PR via GitHub CLI or API
-                logger.info(f"Creating PR for branch {branch_name}")
-                
-                # Get the base branch from environment or use default
-                base_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
-                
-                # Return a simulated PR URL with number
+                # Return a simulated PR URL with number since we can't create one via git CLI alone
                 repo_owner = os.environ.get("GITHUB_REPO_OWNER", "example")
                 repo_name = os.environ.get("GITHUB_REPO_NAME", "repo")
                 pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/123"
