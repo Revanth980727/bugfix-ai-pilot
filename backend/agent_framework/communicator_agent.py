@@ -3,6 +3,7 @@ import os
 import logging
 import json
 import time
+import subprocess
 from typing import Dict, Any, Optional, Union, Tuple
 
 # Configure logging
@@ -22,7 +23,29 @@ class CommunicatorAgent:
         # Check for git installation
         self._check_git_available()
     
-    # ... keep existing code (_check_git_available, run methods)
+    def _check_git_available(self):
+        """Check if git is available in the system path"""
+        try:
+            # Run 'git --version' to check if git is installed
+            result = subprocess.run(
+                ["git", "--version"], 
+                capture_output=True, 
+                text=True, 
+                check=False
+            )
+            
+            if result.returncode == 0:
+                git_version = result.stdout.strip()
+                logger.info(f"Git is available: {git_version}")
+            else:
+                logger.warning("Git command failed. Git may not be installed properly.")
+                logger.warning(f"Error: {result.stderr.strip()}")
+        except FileNotFoundError:
+            logger.warning("Git command not found. Git is not installed or not in the system path.")
+        except Exception as e:
+            logger.warning(f"Error checking git availability: {str(e)}")
+    
+    # ... keep existing code (run methods)
     
     def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process incoming data and communicate results"""
@@ -265,4 +288,20 @@ class CommunicatorAgent:
             logger.info(f"Simulated PR creation: {pr_url} (#{pr_number})")
             return pr_url, pr_number
     
-    # ... keep existing code (_update_jira_* methods)
+    def _update_jira_early_escalation(self, ticket_id: str, input_data: Dict[str, Any]):
+        """Update JIRA with early escalation information"""
+        logger.info(f"Would update JIRA ticket {ticket_id} with early escalation")
+        # In a real implementation, this would use JIRA API to update the ticket
+        
+    def _update_jira_progress(self, ticket_id: str, input_data: Dict[str, Any]):
+        """Update JIRA with progress information"""
+        logger.info(f"Would update JIRA ticket {ticket_id} with progress")
+        # In a real implementation, this would use JIRA API to update the ticket
+        
+    def _update_jira_final(self, ticket_id: str, success: bool, pr_url: Optional[str] = None):
+        """Update JIRA with final result"""
+        status = "Done" if success else "Failed"
+        logger.info(f"Would update JIRA ticket {ticket_id} to {status}")
+        if pr_url:
+            logger.info(f"Would add PR link to JIRA: {pr_url}")
+        # In a real implementation, this would use JIRA API to update the ticket
