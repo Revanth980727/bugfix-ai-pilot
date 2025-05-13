@@ -322,7 +322,7 @@ class GitHubClient:
             self.logger.error(f"Failed to check file {file_path}: {response.status_code}, {response.text}")
             return False
 
-    def commit_patch(self, branch_name: str, patch_content: str, commit_message: str, patch_file_paths: List[str] = None) -> bool:
+    def commit_patch(self, branch_name: str, patch_content: str, commit_message: str, patch_file_paths: List[str] = None, file_contents: List[str] = None) -> bool:
         """
         Apply a patch and commit changes
         
@@ -331,6 +331,7 @@ class GitHubClient:
             patch_content: Patch content to apply
             commit_message: Commit message
             patch_file_paths: List of file paths affected by the patch
+            file_contents: List of file contents (parallel to patch_file_paths)
             
         Returns:
             Success status (True/False)
@@ -347,21 +348,34 @@ class GitHubClient:
         
         # Make actual changes to files if patch_file_paths is provided
         if patch_file_paths and len(patch_file_paths) > 0:
-            for file_path in patch_file_paths:
-                # For demonstration, we'll create/update each file with some placeholder content
-                content = f"// Updated by patch: {commit_message}\n// File: {file_path}\n// Timestamp: {import time; time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            import time
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            
+            for i, file_path in enumerate(patch_file_paths):
+                # Determine content to commit - use provided content if available
+                content = None
                 
-                # Try to get existing content first
-                existing_content = self.get_file_content(file_path, branch_name)
-                if existing_content:
-                    content += f"\n// Original content length: {len(existing_content)} bytes\n"
-                    content += existing_content
+                # If file_contents list is provided and has a matching entry, use that
+                if file_contents and i < len(file_contents) and file_contents[i]:
+                    self.logger.info(f"Using provided content for {file_path}")
+                    content = file_contents[i]
+                else:
+                    # Try to get existing content first
+                    existing_content = self.get_file_content(file_path, branch_name)
+                    
+                    if existing_content:
+                        # Add timestamp header to show this is modified
+                        content = f"// Updated by patch: {commit_message}\n// File: {file_path}\n// Timestamp: {timestamp}\n\n{existing_content}"
+                    else:
+                        # Create new file with placeholder content
+                        content = f"// Created by patch: {commit_message}\n// File: {file_path}\n// Timestamp: {timestamp}\n\n// New file content"
                 
-                # Commit the file
-                result = self.commit_file(file_path, content, commit_message, branch_name)
-                if not result:
-                    self.logger.error(f"Failed to commit changes for file {file_path}")
-                    return False
+                # Commit the file with the determined content
+                if content:
+                    result = self.commit_file(file_path, content, commit_message, branch_name)
+                    if not result:
+                        self.logger.error(f"Failed to commit changes for file {file_path}")
+                        return False
         
         # All files committed successfully
         self.logger.info(f"Applied patch to {len(patch_file_paths) if patch_file_paths else 0} files in branch {branch_name}")

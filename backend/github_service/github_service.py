@@ -52,14 +52,15 @@ class GitHubService:
             self.logger.error(f"Error creating fix branch for ticket {ticket_id}: {e}")
             return False, branch_name
     
-    def commit_bug_fix(self, branch_name: Union[Tuple[bool, str], str], file_changes: List[Dict[str, Any]], 
-                      ticket_id: str, commit_message: Optional[str] = None) -> bool:
+    def commit_bug_fix(self, branch_name: Union[Tuple[bool, str], str], file_paths: List[str], 
+                      file_contents: List[str], ticket_id: str, commit_message: Optional[str] = None) -> bool:
         """
         Commit bug fix changes to a branch
         
         Args:
             branch_name: Branch to commit to (can be string or tuple from create_fix_branch)
-            file_changes: List of file changes (each with filename and content)
+            file_paths: List of file paths to update
+            file_contents: List of file contents (parallel to file_paths)
             ticket_id: JIRA ticket ID
             commit_message: Optional commit message override
             
@@ -76,24 +77,22 @@ class GitHubService:
             
         # Log received data
         self.logger.info(f"Committing bug fix for ticket {ticket_id} to branch {branch_name}")
-        self.logger.info(f"Number of file changes: {len(file_changes) if file_changes else 0}")
+        self.logger.info(f"Number of files to update: {len(file_paths) if file_paths else 0}")
             
         try:
-            # Validate file changes input
-            if not file_changes or not isinstance(file_changes, list):
-                self.logger.error(f"Invalid file_changes: {file_changes}")
-                return False
-                
-            # Track files for patch
-            file_paths = [change.get("filename") for change in file_changes if change.get("filename")]
-            file_contents = [change.get("content") for change in file_changes if change.get("content")]
-            
+            # Validate input
             if not file_paths:
-                self.logger.error("No valid file paths in file_changes")
+                self.logger.error("No file paths provided")
                 return False
                 
-            # Apply the patch directly - modified to ensure changes are committed
-            result = self.client.commit_patch(branch_name, "", commit_message, file_paths)
+            # Apply the patch directly with file contents
+            result = self.client.commit_patch(
+                branch_name=branch_name,
+                patch_content="",  # Not used when we have file_contents
+                commit_message=commit_message,
+                patch_file_paths=file_paths,
+                file_contents=file_contents
+            )
             
             if result:
                 self.logger.info(f"Successfully committed fix for {ticket_id} to branch {branch_name}")

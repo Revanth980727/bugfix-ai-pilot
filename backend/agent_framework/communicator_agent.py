@@ -108,6 +108,9 @@ class CommunicatorAgent:
                             
                             # Get file changes from input data
                             file_changes = input_data.get("file_changes", [])
+                            file_contents = []
+                            file_paths = []
+                            
                             if not file_changes:
                                 file_changes = []
                                 
@@ -117,21 +120,28 @@ class CommunicatorAgent:
                                 patch_content = patch_data.get("patch_content", "")
                                 
                                 for file_path in patched_files:
-                                    file_changes.append({
-                                        "filename": file_path,
-                                        "content": f"Patch for {file_path}"
-                                    })
+                                    file_paths.append(file_path)
+                                    # For patched files without explicit content, we'll pass None and let
+                                    # the commit_patch method handle it
+                                    file_contents.append(None)
+                            else:
+                                # Extract paths and contents from file_changes
+                                for change in file_changes:
+                                    if change.get("filename") and change.get("content"):
+                                        file_paths.append(change.get("filename"))
+                                        file_contents.append(change.get("content"))
                             
                             # Commit message
                             commit_message = input_data.get("commit_message", f"Fix for {ticket_id}")
                             
                             # Commit the changes
-                            if file_changes:
+                            if file_paths:
                                 # Add timestamp to ensure changes are seen as unique
                                 commit_message = f"{commit_message} - {int(time.time())}"
                                 
+                                # Updated to pass both file paths and contents
                                 commit_success = github_service.commit_bug_fix(
-                                    branch_name, file_changes, ticket_id, commit_message
+                                    branch_name, file_paths, file_contents, ticket_id, commit_message
                                 )
                                 
                                 if commit_success:
@@ -240,21 +250,41 @@ class CommunicatorAgent:
                 # Apply changes
                 patch_data = input_data.get("patch_data", {})
                 patched_files = patch_data.get("patched_files", [])
+                file_changes = input_data.get("file_changes", [])
                 
                 # Create timestamp for unique changes
                 timestamp = int(time.time())
                 
-                for file_path in patched_files:
-                    # In a real implementation, get the content and write it
-                    file_full_path = os.path.join(temp_dir, file_path)
-                    os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
-                    
-                    with open(file_full_path, 'w') as f:
-                        f.write(f"// Fixed content for {file_path}\n// Timestamp: {timestamp}\n")
-                    
-                    # Add the file
-                    add_cmd = ["git", "add", file_path]
-                    subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
+                # First try to use file_changes if available (which include content)
+                if file_changes:
+                    for change in file_changes:
+                        if change.get("filename") and change.get("content"):
+                            file_path = change.get("filename")
+                            content = change.get("content")
+                            
+                            # Write file content
+                            file_full_path = os.path.join(temp_dir, file_path)
+                            os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
+                            
+                            with open(file_full_path, 'w') as f:
+                                f.write(content)
+                            
+                            # Add the file
+                            add_cmd = ["git", "add", file_path]
+                            subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
+                elif patched_files:
+                    # Fallback to patch_data if file_changes not available
+                    for file_path in patched_files:
+                        # Write placeholder content if we don't have the actual content
+                        file_full_path = os.path.join(temp_dir, file_path)
+                        os.makedirs(os.path.dirname(file_full_path), exist_ok=True)
+                        
+                        with open(file_full_path, 'w') as f:
+                            f.write(f"// Fixed content for {file_path}\n// Timestamp: {timestamp}\n")
+                        
+                        # Add the file
+                        add_cmd = ["git", "add", file_path]
+                        subprocess.run(add_cmd, check=True, capture_output=True, cwd=temp_dir)
                 
                 # Commit the changes
                 commit_msg = f"Fix for {ticket_id} - {timestamp}"
