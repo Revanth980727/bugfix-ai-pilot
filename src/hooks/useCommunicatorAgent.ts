@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 import { Update } from '../types/ticket';
 import { AgentStatus } from './useDashboardState';
@@ -31,6 +30,7 @@ export function useCommunicatorAgent() {
     rejectionReason?: string;
     validationMetrics?: ValidationMetrics;
     validationScore?: number;
+    fileChecksums?: Record<string, string>; // New field to store file checksums
   } | undefined>(undefined);
 
   const simulateWork = (
@@ -49,6 +49,7 @@ export function useCommunicatorAgent() {
         rejectionReason?: string;
         validationMetrics?: ValidationMetrics;
         validationScore?: number;
+        fileChecksums?: Record<string, string>; // New field to store file checksums
       };
     }
   ) => {
@@ -110,10 +111,34 @@ export function useCommunicatorAgent() {
           : `❌ Patch validation failed: ${patchValidation.rejectionReason} ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`,
         type: 'system',
         confidenceScore: confidence,
-        metadata: patchValidation
+        metadata: {
+          ...patchValidation,
+          // If we have file checksums, include a truncated version for the update
+          fileChecksums: patchValidation.fileChecksums 
+            ? Object.fromEntries(
+                Object.entries(patchValidation.fileChecksums)
+                  .slice(0, 3) // Only show first 3 file checksums in the update
+              ) 
+            : undefined
+        }
       };
       
       mockUpdates = [validationUpdate, ...mockUpdates];
+      
+      // If we have file checksums, add a detailed separate update
+      if (patchValidation.fileChecksums && Object.keys(patchValidation.fileChecksums).length > 3) {
+        const fileListUpdate: Update = {
+          timestamp: new Date().toISOString(),
+          message: `📋 Modified ${Object.keys(patchValidation.fileChecksums).length} files with patch`,
+          type: 'system',
+          metadata: {
+            fileList: Object.keys(patchValidation.fileChecksums).slice(0, 10), // Show up to 10 filenames
+            totalFiles: Object.keys(patchValidation.fileChecksums).length
+          }
+        };
+        
+        mockUpdates = [fileListUpdate, ...mockUpdates];
+      }
     }
     
     // Add escalation update if applicable
