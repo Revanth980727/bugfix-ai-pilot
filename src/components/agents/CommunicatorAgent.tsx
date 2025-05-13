@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -43,6 +44,16 @@ interface CommunicatorAgentProps {
   };
 }
 
+// Define interface for metadata types to help with TypeScript checking
+interface FileListMetadata {
+  fileList: string[];
+  totalFiles: number;
+}
+
+interface FileChecksumsMetadata {
+  fileChecksums: Record<string, string>;
+}
+
 export function CommunicatorAgent({ 
   status, 
   progress, 
@@ -57,6 +68,24 @@ export function CommunicatorAgent({
   patchValidationResults
 }: CommunicatorAgentProps) {
   const { toast } = useToast();
+  
+  // Helper function to check if metadata has fileList property
+  const hasFileList = (metadata: any): metadata is FileListMetadata => {
+    return metadata && 
+           typeof metadata === 'object' && 
+           'fileList' in metadata && 
+           Array.isArray(metadata.fileList) &&
+           'totalFiles' in metadata &&
+           typeof metadata.totalFiles === 'number';
+  };
+  
+  // Helper function to check if metadata has fileChecksums property
+  const hasFileChecksums = (metadata: any): metadata is FileChecksumsMetadata => {
+    return metadata && 
+           typeof metadata === 'object' && 
+           'fileChecksums' in metadata &&
+           typeof metadata.fileChecksums === 'object';
+  };
   
   const handleButtonClick = (url: string, type: string) => {
     if (url) {
@@ -286,7 +315,7 @@ export function CommunicatorAgent({
               }
               
               // Special handling for file list update
-              const showFileList = isFileListMessage && update.metadata?.fileList;
+              const showFileList = isFileListMessage && update.metadata && hasFileList(update.metadata);
                                          
               return (
                 <div key={index} className="flex gap-2 mb-2 text-sm">
@@ -330,7 +359,7 @@ export function CommunicatorAgent({
                     )}
                     
                     {/* File checksums collapsible for validation updates */}
-                    {isValidationMessage && update.metadata?.fileChecksums && (
+                    {isValidationMessage && update.metadata && hasFileChecksums(update.metadata) && (
                       <Collapsible className="mt-1">
                         <CollapsibleTrigger className="flex items-center text-xs text-muted-foreground hover:text-foreground">
                           <span>File details</span>
