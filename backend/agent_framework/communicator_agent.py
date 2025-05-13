@@ -45,7 +45,23 @@ class CommunicatorAgent:
         except Exception as e:
             logger.warning(f"Error checking git availability: {str(e)}")
     
-    # ... keep existing code (run methods)
+    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Run the communicator agent with the provided input data.
+        This method is called from jira_service.py.
+        
+        Args:
+            input_data: Dictionary with input data from previous agents
+            
+        Returns:
+            Dictionary with results of the communication tasks
+        """
+        logger.info(f"Running communicator agent with input: {input_data.get('ticket_id', 'unknown')}")
+        
+        # Call the existing process method that contains the actual implementation
+        return self.process(input_data)
+    
+    # ... keep existing code (process methods)
     
     def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process incoming data and communicate results"""
