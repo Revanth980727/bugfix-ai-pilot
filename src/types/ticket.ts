@@ -69,12 +69,17 @@ export interface TestResult {
 
 export type UpdateType = 'jira' | 'github' | 'system';
 
-// Updated metadata type for the Update interface
+// Metadata type definition for Update interface
 export interface UpdateMetadata {
   fileList?: string[];
   totalFiles?: number;
   fileChecksums?: Record<string, string>;
-  validationDetails?: any;
+  validationDetails?: {
+    totalPatches?: number;
+    validPatches?: number;
+    rejectedPatches?: number;
+    rejectionReasons?: Record<string, number>;
+  };
   [key: string]: any; // Allow for other properties
 }
 
@@ -83,7 +88,7 @@ export interface Update {
   message: string;
   type: UpdateType;
   confidenceScore?: number;
-  metadata?: UpdateMetadata; // Updated to use the new metadata type
+  metadata?: UpdateMetadata; // Update metadata with explicit type
   github_source?: {
     repo_owner?: string;
     repo_name?: string;

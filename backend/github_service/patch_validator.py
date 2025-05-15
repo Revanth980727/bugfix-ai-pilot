@@ -1,274 +1,268 @@
 
-import os
 import re
+import os
 import logging
-from typing import Dict, List, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Union
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("patch-validator")
 
 class PatchValidator:
-    """Validator for LLM-generated code patches"""
+    """
+    Validates LLM-generated patches for common issues:
+    - Invalid file paths
+    - Malformed diff syntax
+    - Placeholder text or TODO comments
+    - Non-existent files
+    - Syntax errors
+    """
     
-    def __init__(self, github_client=None):
-        """Initialize with optional GitHub client"""
-        self.logger = logging.getLogger("patch-validator")
+    def __init__(self):
+        """Initialize the patch validator"""
+        self.github_client = None
+        
+        # Common placeholder patterns in file paths
+        self.path_placeholder_patterns = [
+            r'/path/to/',
+            r'example\.com',
+            r'placeholder',
+            r'/your/',
+            r'/absolute/path',
+            r'/home/user/',
+            r'/usr/local/path',
+            r'/tmp/\w+',
+        ]
+        
+        # Common placeholder patterns in code
+        self.code_placeholder_patterns = [
+            r'# TODO:.*implement',
+            r'//.*TODO:',
+            r'\/\*.*TODO:.*\*\/',
+            r'your_\w+',
+            r'YOUR_\w+',
+            r'<your_\w+>',
+            r'PLACEHOLDER',
+            r'INSERT_\w+_HERE',
+            r'to be implemented',
+            r'will be implemented',
+            r'replace with',
+            r'Replace with',
+        ]
+        
+        # Invalid file path patterns
+        self.invalid_path_patterns = [
+            r'^C:\\',  # Windows paths
+            r'^\/dev\/',
+            r'^\/proc\/',
+            r'^\/sys\/',
+            r'\.\./',  # parent directory traversal
+        ]
+    
+    def set_github_client(self, github_client: Any) -> None:
+        """
+        Set the GitHub client for file existence validation
+        
+        Args:
+            github_client: A GitHub service client that implements check_file_exists
+        """
         self.github_client = github_client
-    
-    def set_github_client(self, github_client):
-        """Set the GitHub client instance"""
-        self.github_client = github_client
-    
+        
     def validate_patch(self, patch: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate a code patch
+        Validate a patch for common issues
         
         Args:
-            patch: Patch dictionary with file_path and diff
+            patch: A dictionary containing file_path and diff
             
         Returns:
-            Validation result with details
+            Dictionary with validation results:
+            {
+                "valid": bool,
+                "rejection_reason": Optional[str],
+                "confidence_penalty": Optional[int]
+            }
         """
-        if not patch:
-            return self._failed_result("Empty patch")
-        
-        if "file_path" not in patch or "diff" not in patch:
-            return self._failed_result("Patch missing required fields")
-        
-        file_path = patch["file_path"]
-        diff = patch["diff"]
-        
-        # Track validation metrics
-        metrics = {
-            "total_checks": 3,  # File exists, diff syntax, placeholder detection
-            "passed_checks": 0,
-            "failures": []
-        }
-        
-        # Check 1: File path exists in repository
-        if not self._is_valid_file_path(file_path):
-            metrics["failures"].append("file_path_invalid")
-            self.logger.warning(f"Invalid file path: {file_path}")
-        else:
-            metrics["passed_checks"] += 1
-        
-        # Check 2: Diff has valid syntax
-        if not self._is_valid_diff_syntax(diff):
-            metrics["failures"].append("diff_syntax_invalid")
-            self.logger.warning(f"Invalid diff syntax in {file_path}")
-        else:
-            metrics["passed_checks"] += 1
+        if not patch or not isinstance(patch, dict):
+            return {
+                "valid": False,
+                "rejection_reason": "Invalid patch format",
+                "confidence_penalty": 30
+            }
             
-        # Check 3: No placeholder paths or TODOs in patch
+        file_path = patch.get("file_path", "")
+        diff = patch.get("diff", "")
+        
+        if not file_path or not isinstance(file_path, str):
+            return {
+                "valid": False, 
+                "rejection_reason": "Missing or invalid file path",
+                "confidence_penalty": 25
+            }
+            
+        if not diff or not isinstance(diff, str):
+            return {
+                "valid": False,
+                "rejection_reason": "Missing or invalid diff",
+                "confidence_penalty": 25
+            }
+            
+        # Check if file path is valid
+        if not self._is_valid_file_path(file_path):
+            return {
+                "valid": False,
+                "rejection_reason": f"Invalid file path: {file_path}",
+                "confidence_penalty": 30
+            }
+            
+        # Check if diff has valid syntax
+        if not self._is_valid_diff_syntax(diff):
+            return {
+                "valid": False,
+                "rejection_reason": "Invalid diff syntax",
+                "confidence_penalty": 35
+            }
+            
+        # Check for placeholders
         placeholders = self._check_for_placeholders(file_path, diff)
         if placeholders:
-            metrics["failures"].append("contains_placeholders")
-            self.logger.warning(f"Placeholders found in {file_path}: {placeholders}")
-        else:
-            metrics["passed_checks"] += 1
-        
-        # Calculate validation score
-        validation_score = (metrics["passed_checks"] / metrics["total_checks"]) * 100
-        
-        # Create result object
-        if metrics["failures"]:
-            result = {
+            placeholder_types = ', '.join(placeholders)
+            return {
                 "valid": False,
-                "confidence_penalty": 30 if len(metrics["failures"]) >= 2 else 20,
-                "rejection_reason": ", ".join(metrics["failures"]),
-                "validation_score": validation_score,
-                "validation_metrics": {
-                    "total_checks": metrics["total_checks"],
-                    "passed_checks": metrics["passed_checks"],
-                    "failed_checks": len(metrics["failures"]),
-                    "failures": metrics["failures"]
-                }
+                "rejection_reason": f"Contains placeholders: {placeholder_types}",
+                "confidence_penalty": 40
             }
-        else:
-            result = {
-                "valid": True,
-                "confidence_boost": 10,  # Boost confidence for fully valid patches
-                "validation_score": 100.0,
-                "validation_metrics": {
-                    "total_checks": metrics["total_checks"],
-                    "passed_checks": metrics["passed_checks"],
-                    "failed_checks": 0,
-                    "failures": []
+            
+        # Check if file exists when modifying rather than creating
+        if self.github_client and not diff.startswith("+++"):  # Not a new file
+            file_exists = self.github_client.check_file_exists(file_path)
+            if not file_exists:
+                return {
+                    "valid": False,
+                    "rejection_reason": f"File does not exist: {file_path}",
+                    "confidence_penalty": 35
                 }
-            }
-        
-        return result
-    
+                
+        # All checks passed
+        return {
+            "valid": True,
+            "confidence_boost": 10
+        }
+            
     def _is_valid_file_path(self, file_path: str) -> bool:
         """
-        Check if a file path exists in the repository
+        Check if a file path is valid
         
         Args:
-            file_path: Path to check
+            file_path: Path to validate
             
         Returns:
-            True if valid, False otherwise
+            Boolean indicating if the path is valid
         """
-        # If no GitHub client is set, do basic path validation
-        if not self.github_client:
-            # Basic checks - no absolute paths, no suspicious patterns
-            if file_path.startswith("/") or file_path.startswith("\\"):
+        # Empty path is invalid
+        if not file_path:
+            return False
+            
+        # Check for invalid path patterns
+        for pattern in self.invalid_path_patterns:
+            if re.search(pattern, file_path):
+                logger.info(f"Invalid path pattern found in {file_path}: {pattern}")
                 return False
-            if "example" in file_path.lower() or "sample" in file_path.lower():
-                return False
-            return True
         
-        # If GitHub client is available, check if file exists in repo
+        # Basic path validation
         try:
-            # Use GitHub client to check file existence
-            exists = self.github_client.check_file_exists(file_path)
-            return exists
+            # Remove leading slash if present
+            normalized_path = file_path.lstrip('/')
+            
+            # Check if path contains invalid characters
+            invalid_chars = ['<', '>', ':', '"', '|', '?', '*']
+            if any(c in normalized_path for c in invalid_chars):
+                logger.info(f"Invalid characters in path: {file_path}")
+                return False
+                
+            # Valid path extensions for code files
+            valid_extensions = [
+                '.py', '.js', '.ts', '.tsx', '.jsx', '.html', '.css', '.scss',
+                '.java', '.c', '.cpp', '.h', '.hpp', '.cs', '.go', '.rb',
+                '.php', '.sh', '.bat', '.ps1', '.md', '.txt', '.json', '.yml',
+                '.yaml', '.toml', '.ini', '.cfg', '.conf', '.xml', '.svg'
+            ]
+            
+            # Check if path has a valid extension
+            has_valid_extension = False
+            for ext in valid_extensions:
+                if file_path.endswith(ext):
+                    has_valid_extension = True
+                    break
+                    
+            if not has_valid_extension:
+                logger.info(f"Invalid file extension in path: {file_path}")
+                return False
+            
+            return True
+            
         except Exception as e:
-            self.logger.error(f"Error checking file path {file_path}: {str(e)}")
+            logger.error(f"Error validating path {file_path}: {str(e)}")
             return False
     
     def _is_valid_diff_syntax(self, diff: str) -> bool:
         """
-        Check if a diff has valid syntax
+        Check if the diff has valid syntax
         
         Args:
-            diff: Diff string to check
+            diff: Diff content to validate
             
         Returns:
-            True if valid, False otherwise
+            Boolean indicating if the diff syntax is valid
         """
-        if not diff or not isinstance(diff, str):
+        # Empty diff is invalid
+        if not diff:
             return False
-        
-        # Check for common diff formats (unified diff)
-        if "@@ " in diff and " @@" in diff:
-            # Contains diff headers
-            return True
             
-        # Check for simple add/remove lines format
-        has_add = bool(re.search(r'^\+(?!\+\+)', diff, re.MULTILINE))
-        has_remove = bool(re.search(r'^-(?!--)', diff, re.MULTILINE))
-        has_context = bool(re.search(r'^ [^ ]', diff, re.MULTILINE))
-        
-        # Valid diff should have add, remove, or both with context
-        return (has_add or has_remove) and has_context
+        try:
+            # Check for common diff patterns
+            has_diff_header = bool(re.search(r'^(\+\+\+|\-\-\-|@@)', diff, re.MULTILINE))
+            
+            # If it has proper diff headers, it's likely a valid diff
+            if has_diff_header:
+                return True
+                
+            # If it doesn't have diff headers, it might be raw file content
+            # In that case, accept it if it's not too short
+            if len(diff) > 10:  # Arbitrary threshold to avoid empty/trivial content
+                return True
+                
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error validating diff syntax: {str(e)}")
+            return False
     
     def _check_for_placeholders(self, file_path: str, diff: str) -> List[str]:
         """
-        Check for placeholder text in file path or diff
+        Check for common placeholder patterns in the path and diff
         
         Args:
-            file_path: File path to check
-            diff: Diff content to check
+            file_path: Path to check for placeholders
+            diff: Diff content to check for placeholders
             
         Returns:
-            List of placeholder patterns found
+            List of placeholder types found, empty if none
         """
-        placeholders = []
+        found_placeholders = []
         
-        # Check file path for placeholders
-        path_patterns = [
-            r'/path/to/',
-            r'example\.py',
-            r'your_',
-            r'my_',
-            r'placeholder',
-            r'sample',
-            r'/tmp/',
-            r'foo\.py',
-            r'bar\.py'
-        ]
-        
-        for pattern in path_patterns:
+        # Check path for placeholders
+        for pattern in self.path_placeholder_patterns:
             if re.search(pattern, file_path, re.IGNORECASE):
-                placeholders.append(f"path_placeholder:{pattern}")
-        
+                found_placeholders.append(f"path_placeholder:{pattern}")
+                
         # Check diff for placeholders
-        diff_patterns = [
-            r'# TODO',
-            r'# FIXME',
-            r'# NOTE',
-            r'your_function',
-            r'your_variable',
-            r'your_class',
-            r'insert your',
-            r'replace this',
-            r'xyz\.py',
-            r'example\.com'
-        ]
-        
-        for pattern in diff_patterns:
+        for pattern in self.code_placeholder_patterns:
             if re.search(pattern, diff, re.IGNORECASE):
-                placeholders.append(f"diff_placeholder:{pattern}")
-        
-        return placeholders
-    
-    def _failed_result(self, reason: str) -> Dict[str, Any]:
-        """
-        Create a failed validation result
-        
-        Args:
-            reason: Reason for failure
+                found_placeholders.append(f"code_placeholder:{pattern}")
+                
+        # Check for TODO comments
+        if re.search(r'TODO', diff):
+            found_placeholders.append("todo_comment")
             
-        Returns:
-            Validation result dictionary
-        """
-        return {
-            "valid": False,
-            "confidence_penalty": 50,
-            "rejection_reason": reason,
-            "validation_score": 0.0,
-            "validation_metrics": {
-                "total_checks": 3,
-                "passed_checks": 0,
-                "failed_checks": 3,
-                "failures": [reason]
-            }
-        }
-
-    def validate_patches(self, patches: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Validate multiple patches and return aggregated results
-        
-        Args:
-            patches: List of patch dictionaries with file_path and diff
-            
-        Returns:
-            Validation result with details
-        """
-        if not patches:
-            return self._failed_result("No patches provided")
-        
-        total_patches = len(patches)
-        valid_patches = 0
-        rejections = {}
-        all_metrics = []
-        
-        for patch in patches:
-            result = self.validate_patch(patch)
-            all_metrics.append(result["validation_metrics"])
-            
-            if result["valid"]:
-                valid_patches += 1
-            else:
-                rejection_reason = result["rejection_reason"]
-                rejections[rejection_reason] = rejections.get(rejection_reason, 0) + 1
-        
-        # Calculate aggregate validation score
-        avg_score = sum(m["passed_checks"] for m in all_metrics) / sum(m["total_checks"] for m in all_metrics) * 100
-        
-        validation_result = {
-            "valid": valid_patches == total_patches,
-            "validation_score": avg_score,
-            "validation_metrics": {
-                "total_patches": total_patches,
-                "valid_patches": valid_patches,
-                "rejected_patches": total_patches - valid_patches,
-                "rejection_reasons": rejections
-            }
-        }
-        
-        # Add confidence adjustment
-        if validation_result["valid"]:
-            validation_result["confidence_boost"] = 10
-        else:
-            validation_result["confidence_penalty"] = 20 + (10 * (total_patches - valid_patches))
-            
-        return validation_result
+        return found_placeholders
