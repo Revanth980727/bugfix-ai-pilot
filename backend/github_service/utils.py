@@ -1,0 +1,197 @@
+
+import os
+import logging
+import hashlib
+from typing import Dict, Optional, Any, Tuple, List
+
+# Configure logger
+logger = logging.getLogger("github-utils")
+
+class GitHubError:
+    """Structured error object for GitHub operations"""
+    
+    # Error codes for different failure scenarios
+    ERR_PATCH_FAILED = "PATCH_FAILED"
+    ERR_COMMIT_EMPTY = "COMMIT_EMPTY"
+    ERR_VALIDATION_FAILED = "VALIDATION_FAILED"
+    ERR_FILE_NOT_FOUND = "FILE_NOT_FOUND"
+    ERR_TEST_MODE = "TEST_MODE_REQUIRED"
+    ERR_PERMISSION_DENIED = "PERMISSION_DENIED"
+    
+    def __init__(self, code: str, message: str, file_path: Optional[str] = None, 
+                 suggested_action: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
+        self.code = code
+        self.message = message
+        self.file_path = file_path
+        self.suggested_action = suggested_action
+        self.metadata = metadata or {}
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert error to dictionary for API responses"""
+        result = {
+            'code': self.code,
+            'message': self.message
+        }
+        
+        if self.file_path:
+            result['file_path'] = self.file_path
+        
+        if self.suggested_action:
+            result['suggested_action'] = self.suggested_action
+            
+        if self.metadata:
+            result['metadata'] = self.metadata
+            
+        return result
+    
+    def __str__(self) -> str:
+        parts = [f"[{self.code}] {self.message}"]
+        
+        if self.file_path:
+            parts.append(f"File: {self.file_path}")
+            
+        if self.suggested_action:
+            parts.append(f"Suggestion: {self.suggested_action}")
+            
+        return " - ".join(parts)
+
+
+def is_test_mode() -> bool:
+    """Centralized function to check if system is running in test mode"""
+    environment = os.environ.get("ENVIRONMENT", "development")
+    test_mode = os.environ.get("GITHUB_TEST_MODE", "false").lower() == "true"
+    
+    # In development, test mode defaults to True if not specified
+    if environment == "development" and "GITHUB_TEST_MODE" not in os.environ:
+        return True
+        
+    return test_mode
+
+
+def is_production() -> bool:
+    """Check if system is running in production environment"""
+    return os.environ.get("ENVIRONMENT", "development") == "production"
+
+
+def should_allow_test_files() -> bool:
+    """Determine if test files should be allowed based on environment and test mode"""
+    # In production, only allow test files if test mode is explicitly enabled
+    if is_production():
+        return is_test_mode()
+    
+    # In non-production environments, allow test files by default
+    return True
+
+
+def calculate_file_checksum(content: str) -> str:
+    """Calculate MD5 checksum for a file content string"""
+    if not isinstance(content, str):
+        # Try to convert content to string if possible
+        try:
+            if isinstance(content, dict):
+                import json
+                content = json.dumps(content, sort_keys=True)
+            else:
+                content = str(content)
+        except Exception as e:
+            logger.error(f"Failed to convert content for checksum: {e}")
+            return "invalid-content"
+            
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+
+def is_test_file(file_path: str) -> bool:
+    """Check if a file path is a test file"""
+    return file_path.endswith('test.md') or '/test/' in file_path
+
+
+def validate_file_changes(before_content: str, after_content: str) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Validate file changes by comparing before and after content
+    
+    Args:
+        before_content: Original file content
+        after_content: Modified file content
+        
+    Returns:
+        Tuple of (is_valid, validation_metadata)
+    """
+    # Calculate checksums
+    before_checksum = calculate_file_checksum(before_content)
+    after_checksum = calculate_file_checksum(after_content)
+    
+    # Check if content actually changed
+    content_changed = before_checksum != after_checksum
+    
+    # Check if new content is valid (not empty if original wasn't empty)
+    new_content_valid = True
+    if before_content and not after_content.strip():
+        new_content_valid = False
+    
+    # Count line changes
+    before_lines = before_content.splitlines()
+    after_lines = after_content.splitlines()
+    lines_added = len(after_lines) - len(before_lines)
+    
+    # Create validation metadata
+    validation_metadata = {
+        "beforeChecksum": before_checksum,
+        "afterChecksum": after_checksum,
+        "contentChanged": content_changed,
+        "contentValid": new_content_valid,
+        "beforeLines": len(before_lines),
+        "afterLines": len(after_lines),
+        "lineChange": lines_added
+    }
+    
+    # Changes are valid if content changed and is valid
+    is_valid = content_changed and new_content_valid
+    
+    return is_valid, validation_metadata
+
+
+def prepare_response_metadata(file_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Prepare standardized metadata for API responses
+    
+    Args:
+        file_results: List of file operation results
+        
+    Returns:
+        Structured metadata dictionary
+    """
+    valid_files = [result for result in file_results if result.get("success", False)]
+    
+    metadata = {
+        "fileList": [result.get("file_path") for result in valid_files],
+        "totalFiles": len(file_results),
+        "validFiles": len(valid_files),
+        "fileChecksums": {},
+        "fileValidation": {},
+        "validationDetails": {
+            "totalPatches": len(file_results),
+            "validPatches": len(valid_files),
+            "rejectedPatches": len(file_results) - len(valid_files),
+            "rejectionReasons": {}
+        }
+    }
+    
+    # Extract checksums and validation details
+    for result in file_results:
+        file_path = result.get("file_path")
+        if file_path:
+            if "checksum" in result:
+                metadata["fileChecksums"][file_path] = result["checksum"]
+            
+            if "validation" in result:
+                metadata["fileValidation"][file_path] = result["validation"]
+                
+            # Track rejection reasons
+            if not result.get("success", False) and "error" in result:
+                error = result["error"]
+                reason = error.get("code", "UNKNOWN") if isinstance(error, dict) else "UNKNOWN"
+                if reason not in metadata["validationDetails"]["rejectionReasons"]:
+                    metadata["validationDetails"]["rejectionReasons"][reason] = 0
+                metadata["validationDetails"]["rejectionReasons"][reason] += 1
+    
+    return metadata

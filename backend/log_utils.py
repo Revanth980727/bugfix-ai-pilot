@@ -11,11 +11,12 @@ class GitHubOperationError(Exception):
     """Custom exception for GitHub operation errors with metadata"""
     
     def __init__(self, message: str, operation: str, metadata: Optional[Dict[str, Any]] = None, 
-                 original_exception: Optional[Exception] = None):
+                 original_exception: Optional[Exception] = None, error_code: str = "GITHUB_ERROR"):
         self.message = message
         self.operation = operation
         self.metadata = metadata or {}
         self.original_exception = original_exception
+        self.error_code = error_code
         
         # Construct a detailed message
         detailed_message = f"GitHub {operation} error: {message}"
@@ -55,7 +56,8 @@ def get_error_metadata(exception: Exception) -> Dict[str, Any]:
     if isinstance(exception, GitHubOperationError):
         metadata.update({
             'operation': exception.operation,
-            'metadata': exception.metadata
+            'metadata': exception.metadata,
+            'errorCode': exception.error_code
         })
         
         # Include original exception details if available
@@ -80,7 +82,9 @@ def format_validation_result(result: Dict[str, Any]) -> Dict[str, Any]:
             'rejectedPatches': 0,
             'rejectionReasons': {}
         }),
-        'changesVerified': result.get('changesVerified', False)
+        'changesVerified': result.get('changesVerified', False),
+        'fileChecksums': result.get('fileChecksums', {}),
+        'fileValidation': result.get('fileValidation', {})
     }
 
 
@@ -110,3 +114,36 @@ def log_diff_summary(logger: logging.Logger, filename: str, diff_content: str,
         'changedHunks': changed_hunks,
         'diffSize': len(diff_content)
     }
+
+
+def create_structured_error(error_code: str, message: str, file_path: Optional[str] = None, 
+                           suggested_action: Optional[str] = None, 
+                           metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Create a structured error object for consistent error reporting
+    
+    Args:
+        error_code: Error code from GitHubError constants
+        message: Error message
+        file_path: Path to the file that caused the error (if applicable)
+        suggested_action: Suggested remedy for the user
+        metadata: Additional error metadata
+        
+    Returns:
+        Structured error dictionary
+    """
+    error = {
+        'code': error_code,
+        'message': message
+    }
+    
+    if file_path:
+        error['file_path'] = file_path
+        
+    if suggested_action:
+        error['suggested_action'] = suggested_action
+        
+    if metadata:
+        error['metadata'] = metadata
+        
+    return error
