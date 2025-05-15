@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -44,14 +43,12 @@ interface CommunicatorAgentProps {
   };
 }
 
-// Define interface for metadata types to help with TypeScript checking
-interface FileListMetadata {
-  fileList: string[];
-  totalFiles: number;
-}
-
-interface FileChecksumsMetadata {
-  fileChecksums: Record<string, string>;
+// Define proper type for metadata
+interface CommunicatorMetadata {
+  fileList?: string[];
+  totalFiles?: number;
+  fileChecksums?: Record<string, string>;
+  validationDetails?: ValidationMetrics;
 }
 
 export function CommunicatorAgent({ 
@@ -68,24 +65,6 @@ export function CommunicatorAgent({
   patchValidationResults
 }: CommunicatorAgentProps) {
   const { toast } = useToast();
-  
-  // Helper function to check if metadata has fileList property
-  const hasFileList = (metadata: any): metadata is FileListMetadata => {
-    return metadata && 
-           typeof metadata === 'object' && 
-           'fileList' in metadata && 
-           Array.isArray(metadata.fileList) &&
-           'totalFiles' in metadata &&
-           typeof metadata.totalFiles === 'number';
-  };
-  
-  // Helper function to check if metadata has fileChecksums property
-  const hasFileChecksums = (metadata: any): metadata is FileChecksumsMetadata => {
-    return metadata && 
-           typeof metadata === 'object' && 
-           'fileChecksums' in metadata &&
-           typeof metadata.fileChecksums === 'object';
-  };
   
   const handleButtonClick = (url: string, type: string) => {
     if (url) {
@@ -314,8 +293,16 @@ export function CommunicatorAgent({
                 textStyle = "text-blue-600 dark:text-blue-400";
               }
               
+              // Safely cast metadata to the proper type
+              const metadata = update.metadata as CommunicatorMetadata | undefined;
+              
               // Special handling for file list update
-              const showFileList = isFileListMessage && update.metadata && hasFileList(update.metadata);
+              const showFileList = isFileListMessage && 
+                                  typeof metadata === 'object' && 
+                                  metadata !== null && 
+                                  'fileList' in metadata && 
+                                  Array.isArray(metadata.fileList) &&
+                                  'totalFiles' in metadata;
                                          
               return (
                 <div key={index} className="flex gap-2 mb-2 text-sm">
@@ -340,18 +327,18 @@ export function CommunicatorAgent({
                     </div>
                     
                     {/* File list collapsible for file modifications */}
-                    {showFileList && (
+                    {showFileList && metadata?.fileList && metadata?.totalFiles && (
                       <Collapsible className="mt-1">
                         <CollapsibleTrigger className="flex items-center text-xs text-muted-foreground hover:text-foreground">
                           <span>Show files</span>
                         </CollapsibleTrigger>
                         <CollapsibleContent className="pl-2 border-l border-muted mt-1 text-xs">
-                          {update.metadata.fileList.map((file: string, i: number) => (
+                          {metadata.fileList.map((file: string, i: number) => (
                             <div key={i} className="font-mono">{file}</div>
                           ))}
-                          {update.metadata.totalFiles > update.metadata.fileList.length && (
+                          {metadata.totalFiles > metadata.fileList.length && (
                             <div className="text-muted-foreground">
-                              ...and {update.metadata.totalFiles - update.metadata.fileList.length} more
+                              ...and {metadata.totalFiles - metadata.fileList.length} more
                             </div>
                           )}
                         </CollapsibleContent>
@@ -359,13 +346,17 @@ export function CommunicatorAgent({
                     )}
                     
                     {/* File checksums collapsible for validation updates */}
-                    {isValidationMessage && update.metadata && hasFileChecksums(update.metadata) && (
+                    {isValidationMessage && 
+                     typeof metadata === 'object' && 
+                     metadata !== null && 
+                     'fileChecksums' in metadata && 
+                     metadata.fileChecksums && (
                       <Collapsible className="mt-1">
                         <CollapsibleTrigger className="flex items-center text-xs text-muted-foreground hover:text-foreground">
                           <span>File details</span>
                         </CollapsibleTrigger>
                         <CollapsibleContent className="pl-2 border-l border-muted mt-1 text-xs">
-                          {Object.entries(update.metadata.fileChecksums).map(([file, checksum]) => (
+                          {Object.entries(metadata.fileChecksums).map(([file, checksum]) => (
                             <div key={file} className="flex justify-between">
                               <span className="font-mono">{file}</span>
                               <span className="text-muted-foreground">
