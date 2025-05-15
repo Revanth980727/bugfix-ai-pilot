@@ -94,6 +94,15 @@ class GitHubService:
                 self.logger.error("No file paths provided")
                 return False
             
+            # Validate file_contents - ensure it contains strings only
+            for i, content in enumerate(file_contents):
+                if isinstance(content, dict):
+                    self.logger.warning(f"Converting dict content to JSON string for file {file_paths[i]}")
+                    file_contents[i] = json.dumps(content, indent=2)
+                elif not isinstance(content, str):
+                    self.logger.error(f"Invalid content type for file {file_paths[i]}: {type(content)}")
+                    return False
+            
             # Filter out any test files in production unless test_mode is enabled
             original_count = len(file_paths)
             if self.is_production and not self.test_mode:
@@ -113,8 +122,15 @@ class GitHubService:
             
             changes_applied = False
             for i, (file_path, content) in enumerate(zip(file_paths, file_contents)):
+                # Skip invalid paths entirely
+                if not isinstance(file_path, str) or not file_path.strip():
+                    self.logger.error(f"Invalid file path at index {i}: {file_path}")
+                    continue
+                    
                 # Check if content is a diff/patch
-                is_diff = content.startswith('---') or content.startswith('diff --git')
+                is_diff = isinstance(content, str) and (content.startswith('---') or content.startswith('diff --git'))
+                
+                self.logger.info(f"Processing file {file_path} (is_diff={is_diff})")
                 
                 if is_diff:
                     self.logger.info(f"Applying patch to {file_path} using diff application")
@@ -129,6 +145,16 @@ class GitHubService:
                         
                     # Fallback to direct file update only if allowed
                     self.logger.warning(f"Using fallback method for {file_path} - full content replacement")
+                    
+                    # Ensure content is a string before committing
+                    if not isinstance(content, str):
+                        if isinstance(content, dict):
+                            content = json.dumps(content, indent=2)
+                            self.logger.warning(f"Converting dict to JSON string for {file_path}")
+                        else:
+                            self.logger.error(f"Cannot commit non-string content for {file_path}: {type(content)}")
+                            continue
+                            
                     success = self.client.commit_file(branch_name, file_path, content, commit_message)
                 
                 if success:
@@ -171,6 +197,11 @@ class GitHubService:
             Success status
         """
         try:
+            # Validate inputs
+            if not isinstance(patch_content, str):
+                self.logger.error(f"Invalid patch content type: {type(patch_content)}")
+                return False
+                
             # Get the current file content
             current_content = self.client.get_file_content(file_path, branch_name)
             if current_content is None:
@@ -269,6 +300,19 @@ class GitHubService:
                             # Read the updated file content
                             with open(os.path.join(temp_dir, file_path), 'r') as f:
                                 patched_content = f.read()
+                                
+                            # Verify changes were made by running diff
+                            diff_result = subprocess.run(
+                                ['git', 'diff', '--exit-code'],
+                                cwd=temp_dir,
+                                capture_output=True,
+                                text=True
+                            )
+                            
+                            # If no changes were detected, log and return false
+                            if diff_result.returncode == 0:
+                                self.logger.warning(f"No changes detected after applying patch with --ignore-whitespace to {file_path}")
+                                return False
                                 
                             return self.client.commit_file(branch_name, file_path, patched_content, f"Apply patch to {file_path}")
                         except subprocess.CalledProcessError as e:
