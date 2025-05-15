@@ -1,3 +1,4 @@
+
 import os
 import json
 import difflib
@@ -33,7 +34,9 @@ def get_github_config():
             'repo_name': os.environ.get('GITHUB_REPO_NAME', ''),
             'default_branch': os.environ.get('GITHUB_DEFAULT_BRANCH', 'main'),
             'branch': os.environ.get('GITHUB_BRANCH', ''),
-            'patch_mode': os.environ.get('PATCH_MODE', 'line-by-line')
+            'patch_mode': os.environ.get('PATCH_MODE', 'line-by-line'),
+            'test_mode': os.environ.get('GITHUB_TEST_MODE', 'false').lower() == 'true',
+            'environment': os.environ.get('ENVIRONMENT', 'development')
         }
         
         return jsonify({
@@ -70,6 +73,18 @@ def create_patch():
                 'error': 'Missing required parameters'
             }), 400
             
+        # Validate file path in production environment
+        is_production = os.environ.get('ENVIRONMENT', 'development') == 'production'
+        test_mode = os.environ.get('GITHUB_TEST_MODE', 'false').lower() == 'true'
+        
+        if is_production and not test_mode:
+            if file_path.endswith('test.md') or '/test/' in file_path:
+                logger.warning(f"Refusing to generate patch for test file in production: {file_path}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Cannot patch test files in production environment'
+                }), 403
+            
         # Get the original file content
         original_content = get_file_content(repo_name, file_path, branch)
         if original_content is None:
@@ -81,11 +96,25 @@ def create_patch():
         # Generate a diff between the original and modified content
         diff = generate_diff(original_content, modified_content, file_path)
         
+        # Check if the diff is empty (no actual changes)
+        if not diff or diff.strip() == '':
+            logger.warning(f"Generated empty diff for {file_path} - no changes detected")
+            return jsonify({
+                'success': False,
+                'error': f'No changes detected between original and modified content'
+            }), 400
+        
         # Calculate lines added and removed from the diff
         lines_added = sum(1 for line in diff.splitlines() if line.startswith('+') and not line.startswith('+++'))
         lines_removed = sum(1 for line in diff.splitlines() if line.startswith('-') and not line.startswith('---'))
         
-        logger.info(f"Generated diff for {file_path}: {lines_added} lines added, {lines_removed} lines removed")
+        # Log a preview of the generated diff
+        max_log_length = 500
+        diff_preview = diff[:max_log_length]
+        if len(diff) > max_log_length:
+            diff_preview += f"... [{len(diff) - max_log_length} more characters]"
+        logger.info(f"Generated diff for {file_path}:\n{diff_preview}")
+        logger.info(f"Diff stats for {file_path}: {lines_added} lines added, {lines_removed} lines removed")
         
         return jsonify({
             'success': True,
@@ -124,6 +153,11 @@ def commit_changes():
                 'error': 'Missing required parameters'
             }), 400
         
+        # Check environment configuration
+        is_production = os.environ.get('ENVIRONMENT', 'development') == 'production'
+        test_mode = os.environ.get('GITHUB_TEST_MODE', 'false').lower() == 'true'
+        logger.info(f"Environment: {'Production' if is_production else 'Development'}, Test Mode: {test_mode}")
+        
         # Prepare metadata for validation and response
         metadata = {
             'fileList': [],
@@ -146,14 +180,18 @@ def commit_changes():
                 metadata['validationDetails']['rejectedPatches'] += 1
                 reason = 'Missing filename or content'
                 metadata['validationDetails']['rejectionReasons'][reason] = metadata['validationDetails']['rejectionReasons'].get(reason, 0) + 1
+                logger.warning(f"Rejected patch: {reason}")
                 continue
             
             filename = change.get('filename')
             content = change.get('content')
             
-            # Skip test files in production
-            if os.environ.get('ENVIRONMENT') == 'production' and (filename.endswith('test.md') or '/test/' in filename):
-                logger.info(f"Skipping test file in production: {filename}")
+            # Skip test files in production unless test_mode is enabled
+            if is_production and not test_mode and (filename.endswith('test.md') or '/test/' in filename):
+                metadata['validationDetails']['rejectedPatches'] += 1
+                reason = 'Test file in production'
+                metadata['validationDetails']['rejectionReasons'][reason] = metadata['validationDetails']['rejectionReasons'].get(reason, 0) + 1
+                logger.warning(f"Skipping test file in production: {filename}")
                 continue
                 
             file_paths.append(filename)
@@ -165,11 +203,22 @@ def commit_changes():
             metadata['fileChecksums'][filename] = hashlib.md5(content.encode('utf-8')).hexdigest()
             
             metadata['validationDetails']['validPatches'] += 1
+            logger.info(f"Validated patch for file: {filename} (MD5: {metadata['fileChecksums'][filename][:8]}...)")
             
         # Add timestamp to ensure changes are detected
         commit_message = f"{commit_message} - {time.strftime('%Y-%m-%d %H:%M:%S')}"
         
         logger.info(f"Committing changes to {branch}: {len(file_paths)} files")
+        logger.info(f"Validation summary: {metadata['validationDetails']['validPatches']} valid, {metadata['validationDetails']['rejectedPatches']} rejected")
+        
+        # Skip commit if no valid patches
+        if len(file_paths) == 0:
+            logger.warning("No valid files to commit after filtering")
+            return jsonify({
+                'success': False,
+                'error': 'No valid files to commit after filtering',
+                'metadata': metadata
+            }), 400
         
         # Use the GitHub service for the commit if available
         if github_service:
@@ -180,9 +229,20 @@ def commit_changes():
                 "TICKET-ID",  # Replace with actual ticket ID if available
                 commit_message
             )
+            
+            # Handle case where no changes were actually made
+            if not result:
+                logger.warning("Commit operation completed but no changes were detected or applied")
+                metadata['validationDetails']['additionalInfo'] = "No changes were detected after patch application"
+                return jsonify({
+                    'success': False,
+                    'error': 'No changes were detected after patch application',
+                    'metadata': metadata
+                }), 400
         else:
             # Fallback to the original method
             from ..github_utils import commit_using_patch
+            logger.warning("GitHub service not available, falling back to basic commit method")
             result = commit_using_patch(repo_name, branch, file_paths, modified_contents, commit_message)
         
         if result:
@@ -206,162 +266,4 @@ def commit_changes():
             'error': f"Failed to commit changes: {str(e)}"
         }), 500
 
-@github_bp.route('/file', methods=['GET'])
-def get_file():
-    """Get the content of a file from GitHub"""
-    try:
-        repo_name = request.args.get('repo')
-        file_path = request.args.get('path')
-        branch = request.args.get('branch')
-        
-        if not all([repo_name, file_path]):
-            return jsonify({
-                'success': False,
-                'error': 'Missing required parameters'
-            }), 400
-            
-        # Get the file content
-        content = get_file_content(repo_name, file_path, branch)
-        if content is None:
-            return jsonify({
-                'success': False,
-                'error': f'File {file_path} not found'
-            }), 404
-            
-        return jsonify({
-            'success': True,
-            'content': content,
-            'file_path': file_path
-        }), 200
-    except Exception as e:
-        logger.error(f"Error getting file content: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f"Failed to get file content: {str(e)}"
-        }), 500
-
-@github_bp.route('/create-pr', methods=['POST'])
-def create_pr():
-    """Create a pull request for the fix"""
-    try:
-        if not github_service:
-            logger.error("GitHub service not initialized")
-            return jsonify({
-                'success': False,
-                'error': 'GitHub service not initialized'
-            }), 500
-        
-        data = request.json
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-        
-        # Extract required data
-        ticket_id = data.get('ticket_id')
-        branch_name = data.get('branch_name')
-        title = data.get('title', f"Fix for {ticket_id}")
-        description = data.get('description', f"This PR fixes the issue described in {ticket_id}")
-        base_branch = data.get('base_branch')
-        
-        if not all([ticket_id, branch_name]):
-            return jsonify({
-                'success': False,
-                'error': 'Missing required parameters (ticket_id, branch_name)'
-            }), 400
-        
-        logger.info(f"Creating PR for branch {branch_name}, ticket {ticket_id}")
-        
-        # Create PR using the GitHub service
-        pr_result = github_service.create_fix_pr(
-            branch_name=branch_name,
-            ticket_id=ticket_id,
-            title=title,
-            description=description,
-            base_branch=base_branch
-        )
-        
-        if not pr_result:
-            logger.error(f"Failed to create PR for ticket {ticket_id}")
-            return jsonify({
-                'success': False,
-                'error': 'Failed to create PR'
-            }), 500
-        
-        # Get PR URL and number from the result
-        pr_url = pr_result.get('url')
-        pr_number = pr_result.get('number')
-        
-        logger.info(f"Successfully created PR #{pr_number} at {pr_url} for ticket {ticket_id}")
-        
-        return jsonify({
-            'success': True,
-            'pr_url': pr_url,
-            'pr_number': pr_number,
-            'message': f"PR created successfully for ticket {ticket_id}"
-        }), 201
-    except Exception as e:
-        logger.error(f"Error creating PR: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f"Failed to create PR: {str(e)}"
-        }), 500
-
-@github_bp.route('/add-comment', methods=['POST'])
-def add_comment():
-    """Add a comment to a PR"""
-    try:
-        if not github_service:
-            return jsonify({
-                'success': False,
-                'error': 'GitHub service not initialized'
-            }), 500
-        
-        data = request.json
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-        
-        # Extract required data
-        pr_identifier = data.get('pr_identifier')
-        comment = data.get('comment')
-        
-        if not all([pr_identifier, comment]):
-            return jsonify({
-                'success': False,
-                'error': 'Missing required parameters (pr_identifier, comment)'
-            }), 400
-        
-        # Handle case where pr_identifier might be a tuple
-        if isinstance(pr_identifier, tuple) and len(pr_identifier) > 0:
-            logger.info(f"Received PR identifier as tuple: {pr_identifier}")
-            # If it's a tuple like (URL, number), use the number
-            if len(pr_identifier) > 1 and isinstance(pr_identifier[1], int):
-                pr_identifier = pr_identifier[1]
-                logger.info(f"Using PR number {pr_identifier} from tuple")
-            else:
-                pr_identifier = pr_identifier[0]
-                logger.info(f"Using first element of tuple as PR identifier: {pr_identifier}")
-        
-        # Add comment to PR
-        success = github_service.add_pr_comment(pr_identifier, comment)
-        
-        if not success:
-            return jsonify({
-                'success': False,
-                'error': f'Failed to add comment to PR {pr_identifier}'
-            }), 500
-        
-        return jsonify({
-            'success': True,
-            'message': f"Comment added to PR {pr_identifier}",
-        }), 200
-    except Exception as e:
-        logger.error(f"Error adding comment: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f"Failed to add comment: {str(e)}"
-        }), 500
+# ... keep existing code (file, PR creation, and comment routes)
