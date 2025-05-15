@@ -200,7 +200,14 @@ def commit_changes():
             
             # Add file checksum for validation
             import hashlib
-            metadata['fileChecksums'][filename] = hashlib.md5(content.encode('utf-8')).hexdigest()
+            if isinstance(content, str):
+                content_bytes = content.encode('utf-8')
+            elif isinstance(content, dict):
+                content_bytes = json.dumps(content).encode('utf-8')
+            else:
+                content_bytes = str(content).encode('utf-8')
+                
+            metadata['fileChecksums'][filename] = hashlib.md5(content_bytes).hexdigest()
             
             metadata['validationDetails']['validPatches'] += 1
             logger.info(f"Validated patch for file: {filename} (MD5: {metadata['fileChecksums'][filename][:8]}...)")
@@ -263,7 +270,11 @@ def commit_changes():
         logger.error(f"Error committing changes: {str(e)}")
         return jsonify({
             'success': False,
-            'error': f"Failed to commit changes: {str(e)}"
+            'error': f"Failed to commit changes: {str(e)}",
+            'metadata': {
+                'error': str(e),
+                'errorType': type(e).__name__
+            }
         }), 500
 
 # ... keep existing code (file, PR creation, and comment routes)

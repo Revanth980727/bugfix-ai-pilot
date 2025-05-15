@@ -1,152 +1,112 @@
 
-import os
-import json
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional
+import json
 import traceback
+from typing import Dict, Any, Optional, List, Tuple, Union
 
-# Configure the default logger
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configure module logger
+logger = logging.getLogger("log-utils")
 
-# Create a logger factory
-class LoggerFactory:
-    def __init__(self):
-        self.loggers = {}
-        
-    def get_logger(self, name: str) -> logging.Logger:
-        """Get or create a logger with the specified name"""
-        if name not in self.loggers:
-            logger = logging.getLogger(name)
-            self.loggers[name] = logger
-        return self.loggers[name]
-
-# Create a singleton instance
-logger = LoggerFactory()
-
-def setup_ticket_logging(ticket_id: str) -> str:
-    """Setup logging directory for a ticket and return the path"""
-    ticket_log_dir = f"logs/{ticket_id}"
-    os.makedirs(ticket_log_dir, exist_ok=True)
+class GitHubOperationError(Exception):
+    """Custom exception for GitHub operation errors with metadata"""
     
-    # Create structured log file for the ticket
-    structured_log_path = f"{ticket_log_dir}/ticket_log.jsonl"
-    if not os.path.exists(structured_log_path):
-        with open(structured_log_path, 'w') as f:
-            f.write("")
+    def __init__(self, message: str, operation: str, metadata: Optional[Dict[str, Any]] = None, 
+                 original_exception: Optional[Exception] = None):
+        self.message = message
+        self.operation = operation
+        self.metadata = metadata or {}
+        self.original_exception = original_exception
+        
+        # Construct a detailed message
+        detailed_message = f"GitHub {operation} error: {message}"
+        if original_exception:
+            detailed_message += f" (Original error: {str(original_exception)})"
             
-    return ticket_log_dir
+        super().__init__(detailed_message)
 
-def log_action(ticket_id: str, agent: str, action: str, output: Optional[Dict[str, Any]] = None, 
-               error: Optional[str] = None, level: str = "INFO") -> None:
-    """Log an action with structured data"""
-    log_entry = {
-        "timestamp": datetime.now().isoformat(),
-        "ticket_id": ticket_id,
-        "agent": agent,
-        "action": action,
-        "level": level.upper(),
-        "output": output
+
+def log_operation_attempt(logger: logging.Logger, operation: str, details: Dict[str, Any]) -> None:
+    """Log the start of a GitHub operation with details"""
+    logger.info(f"GitHub operation started: {operation}")
+    logger.info(f"Operation details: {json.dumps(details, default=str)}")
+
+
+def log_operation_result(logger: logging.Logger, operation: str, success: bool, 
+                         details: Optional[Dict[str, Any]] = None) -> None:
+    """Log the result of a GitHub operation"""
+    if success:
+        logger.info(f"GitHub operation succeeded: {operation}")
+    else:
+        logger.error(f"GitHub operation failed: {operation}")
+        
+    if details:
+        logger.info(f"Result details: {json.dumps(details, default=str)}")
+
+
+def get_error_metadata(exception: Exception) -> Dict[str, Any]:
+    """Extract metadata from an exception"""
+    metadata = {
+        'errorType': type(exception).__name__,
+        'message': str(exception),
+        'traceback': traceback.format_exc()
     }
     
-    if error:
-        log_entry["error"] = error
-        log_entry["stacktrace"] = traceback.format_exc()
+    # If it's our custom exception, include its metadata
+    if isinstance(exception, GitHubOperationError):
+        metadata.update({
+            'operation': exception.operation,
+            'metadata': exception.metadata
+        })
+        
+        # Include original exception details if available
+        if exception.original_exception:
+            metadata['originalError'] = {
+                'errorType': type(exception.original_exception).__name__,
+                'message': str(exception.original_exception)
+            }
     
-    ticket_log_dir = f"logs/{ticket_id}"
-    os.makedirs(ticket_log_dir, exist_ok=True)
-    
-    with open(f"{ticket_log_dir}/ticket_log.jsonl", 'a') as f:
-        f.write(json.dumps(log_entry) + "\n")
+    return metadata
 
-def log_agent_input(ticket_id: str, agent: str, data: Dict[str, Any]) -> None:
-    """Log input data sent to an agent"""
-    log_action(ticket_id, agent, "input", data)
-    ticket_log_dir = f"logs/{ticket_id}"
-    os.makedirs(ticket_log_dir, exist_ok=True)
-    
-    with open(f"{ticket_log_dir}/{agent}_input.json", 'w') as f:
-        json.dump(data, f, indent=2)
 
-def log_agent_output(ticket_id: str, agent: str, data: Dict[str, Any]) -> None:
-    """Log output received from an agent"""
-    log_action(ticket_id, agent, "output", data)
-    ticket_log_dir = f"logs/{ticket_id}"
-    os.makedirs(ticket_log_dir, exist_ok=True)
-    
-    with open(f"{ticket_log_dir}/{agent}_output.json", 'w') as f:
-        json.dump(data, f, indent=2)
-
-def log_error(ticket_id: str, agent: str, error_message: str, details: Optional[Dict[str, Any]] = None) -> None:
-    """Log an error for a specific agent"""
-    log_action(ticket_id, agent, "error", details, error_message, "ERROR")
-    error_log = {
-        "timestamp": datetime.now().isoformat(),
-        "message": error_message,
-        "details": details
+def format_validation_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Format validation result for consistent display and logging"""
+    return {
+        'fileList': result.get('fileList', []),
+        'totalFiles': result.get('totalFiles', 0),
+        'validFiles': len(result.get('fileList', [])),
+        'validationDetails': result.get('validationDetails', {
+            'totalPatches': 0,
+            'validPatches': 0,
+            'rejectedPatches': 0,
+            'rejectionReasons': {}
+        }),
+        'changesVerified': result.get('changesVerified', False)
     }
+
+
+def log_diff_summary(logger: logging.Logger, filename: str, diff_content: str,
+                   max_preview_length: int = 500) -> Dict[str, Any]:
+    """Log a summary of diff content and return statistics"""
+    lines = diff_content.splitlines()
     
-    ticket_log_dir = f"logs/{ticket_id}"
-    os.makedirs(ticket_log_dir, exist_ok=True)
+    # Calculate basic stats
+    lines_added = sum(1 for line in lines if line.startswith('+') and not line.startswith('+++'))
+    lines_removed = sum(1 for line in lines if line.startswith('-') and not line.startswith('---'))
+    changed_hunks = sum(1 for line in lines if line.startswith('@@'))
     
-    with open(f"{ticket_log_dir}/{agent}_errors.json", 'a') as f:
-        f.write(json.dumps(error_log) + "\n")
+    # Create a preview of the diff
+    diff_preview = diff_content[:max_preview_length]
+    if len(diff_content) > max_preview_length:
+        diff_preview += f"... [{len(diff_content) - max_preview_length} more characters]"
         
-def log_github_operation(ticket_id: str, operation: str, details: Dict[str, Any], success: bool = True) -> None:
-    """Log a GitHub operation like PR creation, commit, etc."""
-    status = "success" if success else "failure"
-    log_entry = {
-        "timestamp": datetime.now().isoformat(),
-        "ticket_id": ticket_id,
-        "operation": operation,
-        "status": status,
-        "details": details
+    # Log the summary
+    logger.info(f"Diff summary for {filename}: {lines_added} lines added, {lines_removed} lines removed, {changed_hunks} hunks")
+    logger.info(f"Diff preview for {filename}:\n{diff_preview}")
+    
+    return {
+        'filename': filename,
+        'linesAdded': lines_added,
+        'linesRemoved': lines_removed,
+        'changedHunks': changed_hunks,
+        'diffSize': len(diff_content)
     }
-    
-    ticket_log_dir = f"logs/{ticket_id}"
-    os.makedirs(ticket_log_dir, exist_ok=True)
-    
-    with open(f"{ticket_log_dir}/github_operations.jsonl", 'a') as f:
-        f.write(json.dumps(log_entry) + "\n")
-
-def get_operation_logs(ticket_id: str, operation_type: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Get operation logs for a specific ticket"""
-    ticket_log_dir = f"logs/{ticket_id}"
-    log_file = f"{ticket_log_dir}/github_operations.jsonl"
-    
-    if not os.path.exists(log_file):
-        return []
-        
-    logs = []
-    with open(log_file, 'r') as f:
-        for line in f:
-            try:
-                log_entry = json.loads(line.strip())
-                if operation_type is None or log_entry.get("operation") == operation_type:
-                    logs.append(log_entry)
-            except:
-                continue
-                
-    return logs
-
-def log_diff(ticket_id: str, filename: str, diff: str, lines_added: int, lines_removed: int) -> None:
-    """Log a diff for debugging purposes"""
-    log_file = f"logs/{ticket_id}/diffs/{filename.replace('/', '_')}.diff"
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    
-    with open(log_file, 'w') as f:
-        f.write(f"# Diff for {filename}\n")
-        f.write(f"# Lines added: {lines_added}, Lines removed: {lines_removed}\n")
-        f.write(f"# Generated: {datetime.now().isoformat()}\n\n")
-        f.write(diff)
-        
-    # Also log basic info to the main log
-    log_action(ticket_id, "diff_generator", "generate_diff", {
-        "filename": filename,
-        "lines_added": lines_added,
-        "lines_removed": lines_removed,
-        "diff_length": len(diff)
-    })

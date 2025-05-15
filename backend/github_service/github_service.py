@@ -95,13 +95,19 @@ class GitHubService:
                 return False
             
             # Validate file_contents - ensure it contains strings only
+            safe_content_list = []
             for i, content in enumerate(file_contents):
                 if isinstance(content, dict):
                     self.logger.warning(f"Converting dict content to JSON string for file {file_paths[i]}")
-                    file_contents[i] = json.dumps(content, indent=2)
+                    safe_content_list.append(json.dumps(content, indent=2))
                 elif not isinstance(content, str):
                     self.logger.error(f"Invalid content type for file {file_paths[i]}: {type(content)}")
-                    return False
+                    safe_content_list.append(str(content))  # Best effort conversion
+                else:
+                    safe_content_list.append(content)
+            
+            # Replace original list with type-safe content
+            file_contents = safe_content_list
             
             # Filter out any test files in production unless test_mode is enabled
             original_count = len(file_paths)
@@ -121,10 +127,25 @@ class GitHubService:
                     file_contents = filtered_contents
             
             changes_applied = False
+            metadata = {
+                'fileList': [],
+                'totalFiles': len(file_paths),
+                'fileChecksums': {},
+                'validationDetails': {
+                    'totalPatches': len(file_paths),
+                    'validPatches': 0,
+                    'rejectedPatches': 0,
+                    'rejectionReasons': {}
+                }
+            }
+            
             for i, (file_path, content) in enumerate(zip(file_paths, file_contents)):
                 # Skip invalid paths entirely
                 if not isinstance(file_path, str) or not file_path.strip():
                     self.logger.error(f"Invalid file path at index {i}: {file_path}")
+                    metadata['validationDetails']['rejectedPatches'] += 1
+                    reason = 'Invalid file path'
+                    metadata['validationDetails']['rejectionReasons'][reason] = metadata['validationDetails']['rejectionReasons'].get(reason, 0) + 1
                     continue
                     
                 # Check if content is a diff/patch
@@ -141,6 +162,9 @@ class GitHubService:
                     # Check if we should allow full file replacement
                     if self.is_production and not self.test_mode:
                         self.logger.warning(f"Refusing to replace entire file {file_path} in production (not a diff)")
+                        metadata['validationDetails']['rejectedPatches'] += 1
+                        reason = 'Non-diff content in production'
+                        metadata['validationDetails']['rejectionReasons'][reason] = metadata['validationDetails']['rejectionReasons'].get(reason, 0) + 1
                         continue
                         
                     # Fallback to direct file update only if allowed
@@ -152,16 +176,33 @@ class GitHubService:
                             content = json.dumps(content, indent=2)
                             self.logger.warning(f"Converting dict to JSON string for {file_path}")
                         else:
-                            self.logger.error(f"Cannot commit non-string content for {file_path}: {type(content)}")
-                            continue
+                            try:
+                                content = str(content)
+                                self.logger.warning(f"Converting {type(content)} to string for {file_path}")
+                            except Exception as e:
+                                self.logger.error(f"Cannot convert content to string for {file_path}: {e}")
+                                metadata['validationDetails']['rejectedPatches'] += 1
+                                reason = 'Content conversion failure'
+                                metadata['validationDetails']['rejectionReasons'][reason] = metadata['validationDetails']['rejectionReasons'].get(reason, 0) + 1
+                                continue
                             
                     success = self.client.commit_file(branch_name, file_path, content, commit_message)
                 
                 if success:
                     changes_applied = True
                     self.logger.info(f"Successfully updated file {file_path}")
+                    metadata['fileList'].append(file_path)
+                    metadata['validationDetails']['validPatches'] += 1
+                    
+                    # Add file checksum for validation
+                    import hashlib
+                    metadata['fileChecksums'][file_path] = hashlib.md5(content.encode('utf-8')).hexdigest()
+                    
                 else:
                     self.logger.error(f"Failed to update file {file_path}")
+                    metadata['validationDetails']['rejectedPatches'] += 1
+                    reason = 'Commit failure'
+                    metadata['validationDetails']['rejectionReasons'][reason] = metadata['validationDetails']['rejectionReasons'].get(reason, 0) + 1
             
             # Verify changes were actually made
             if changes_applied:
@@ -169,8 +210,11 @@ class GitHubService:
                 has_changes = self._verify_changes(branch_name)
                 if has_changes:
                     self.logger.info(f"Verified changes were made to branch {branch_name}")
+                    metadata['validationDetails']['changesVerified'] = True
                 else:
                     self.logger.warning(f"No actual changes detected in branch {branch_name} after applying patches")
+                    metadata['validationDetails']['changesVerified'] = False
+                    metadata['validationDetails']['additionalInfo'] = "No changes were detected after patch application"
                     # Return false since no changes were actually made
                     return False
             
@@ -282,6 +326,17 @@ class GitHubService:
                             diff_preview += f"... [{len(diff_result.stdout) - max_log_length} more characters]"
                         self.logger.info(f"Changes applied:\n{diff_preview}")
                         
+                        # Add an additional git diff check to verify changes are meaningful
+                        diff_cached = subprocess.run(
+                            ['git', 'diff', '--cached', '--exit-code'],
+                            cwd=temp_dir,
+                            capture_output=True
+                        )
+                        
+                        if diff_cached.returncode == 0:
+                            self.logger.warning(f"No staged changes found for {file_path}, skipping commit")
+                            return False
+                        
                         # Commit the updated content
                         return self.client.commit_file(branch_name, file_path, patched_content, f"Apply patch to {file_path}")
                     else:
@@ -312,6 +367,17 @@ class GitHubService:
                             # If no changes were detected, log and return false
                             if diff_result.returncode == 0:
                                 self.logger.warning(f"No changes detected after applying patch with --ignore-whitespace to {file_path}")
+                                return False
+                                
+                            # Add an additional git diff --cached check
+                            diff_cached = subprocess.run(
+                                ['git', 'diff', '--cached', '--exit-code'],
+                                cwd=temp_dir,
+                                capture_output=True
+                            )
+                            
+                            if diff_cached.returncode == 0:
+                                self.logger.warning(f"No staged changes found for {file_path}, skipping commit")
                                 return False
                                 
                             return self.client.commit_file(branch_name, file_path, patched_content, f"Apply patch to {file_path}")
@@ -410,6 +476,19 @@ class GitHubService:
                     self.logger.error("Patched content is empty but original wasn't! Rejecting change.")
                     return False
                 
+                # Do a diff comparison to verify changes before committing
+                import difflib
+                diff = list(difflib.unified_diff(
+                    current_content.splitlines(True),
+                    patched_content.splitlines(True),
+                    fromfile=f'a/{file_path}',
+                    tofile=f'b/{file_path}'
+                ))
+                
+                if not diff:
+                    self.logger.warning("Manual diff verification shows no changes were made")
+                    return False
+                    
                 # Commit the updated content
                 return self.client.commit_file(branch_name, file_path, patched_content, f"Apply patch to {file_path}")
                 

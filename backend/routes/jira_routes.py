@@ -1,12 +1,11 @@
 
-import os
-import json
 import logging
-from flask import Blueprint, request, jsonify
+import json
+from flask import Blueprint, request, jsonify, current_app
 from ..jira_service.jira_service import JiraService
+from ..log_utils import log_operation_attempt, log_operation_result, get_error_metadata, GitHubOperationError
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("jira-routes")
 
 # Create blueprint for Jira routes
@@ -16,23 +15,164 @@ jira_bp = Blueprint('jira', __name__, url_prefix='/api/jira')
 jira_service = None
 try:
     jira_service = JiraService()
-    logger.info("Jira service initialized for routes")
+    logger.info("Jira service initialized")
 except Exception as e:
     logger.error(f"Failed to initialize Jira service: {str(e)}")
 
+@jira_bp.route('/tickets', methods=['GET'])
+def get_tickets():
+    """Get tickets from Jira"""
+    try:
+        if not jira_service:
+            return jsonify({'error': 'Jira service not initialized'}), 500
+            
+        # Get query parameters
+        ticket_id = request.args.get('ticket_id')
+        status = request.args.get('status')
+        
+        # Get tickets based on parameters
+        if ticket_id:
+            tickets = jira_service.get_ticket(ticket_id)
+            if not tickets:
+                return jsonify({'error': f'Ticket {ticket_id} not found'}), 404
+        elif status:
+            tickets = jira_service.get_tickets_by_status(status)
+        else:
+            tickets = jira_service.get_all_tickets()
+            
+        # Return tickets
+        return jsonify({'tickets': tickets}), 200
+    except Exception as e:
+        logger.error(f"Error getting tickets: {str(e)}")
+        return jsonify({'error': f'Failed to get tickets: {str(e)}'}), 500
+        
+@jira_bp.route('/tickets/<ticket_id>/update', methods=['POST'])
+def update_ticket_status():
+    """Update ticket status"""
+    try:
+        if not jira_service:
+            return jsonify({'error': 'Jira service not initialized'}), 500
+            
+        # Get ticket ID and data
+        ticket_id = request.view_args.get('ticket_id')
+        data = request.json
+        
+        if not ticket_id or not data:
+            return jsonify({'error': 'Missing ticket ID or update data'}), 400
+            
+        # Extract update fields
+        status = data.get('status')
+        comment = data.get('comment')
+        escalation = data.get('escalation')
+        error_message = data.get('error_message')
+        github_metadata = data.get('github_metadata', {})
+        
+        # Log GitHub operation if present
+        if github_metadata:
+            log_operation_attempt(logger, "PR creation for ticket", {
+                "ticket_id": ticket_id, 
+                "github_metadata": github_metadata
+            })
+        
+        # Update ticket
+        result = jira_service.update_ticket(
+            ticket_id,
+            status=status,
+            comment=comment,
+            escalation=escalation,
+            error_message=error_message,
+            github_metadata=github_metadata
+        )
+        
+        # Log a successful GitHub operation result
+        if github_metadata:
+            log_operation_result(logger, "PR creation for ticket", True, {
+                "ticket_id": ticket_id, 
+                "status_updated": status is not None,
+                "comment_added": comment is not None
+            })
+        
+        # Return result
+        return jsonify({
+            'success': True,
+            'message': f'Ticket {ticket_id} updated',
+            'result': result
+        }), 200
+    except GitHubOperationError as e:
+        # Handle GitHub-specific errors
+        logger.error(f"GitHub operation error for ticket update: {e.message}")
+        logger.error(f"Error metadata: {json.dumps(e.metadata, default=str)}")
+        
+        if e.original_exception:
+            logger.error(f"Original error: {str(e.original_exception)}")
+            
+        # Log failed GitHub operation
+        log_operation_result(logger, e.operation, False, e.metadata)
+        
+        return jsonify({
+            'success': False,
+            'error': f'GitHub operation failed: {e.message}',
+            'metadata': e.metadata
+        }), 500
+    except Exception as e:
+        logger.error(f"Error updating ticket: {str(e)}")
+        error_metadata = get_error_metadata(e)
+        
+        return jsonify({
+            'success': False,
+            'error': f'Failed to update ticket: {str(e)}',
+            'metadata': error_metadata
+        }), 500
+
+@jira_bp.route('/tickets/<ticket_id>/comment', methods=['POST'])
+def add_ticket_comment():
+    """Add a comment to a ticket"""
+    try:
+        if not jira_service:
+            return jsonify({'error': 'Jira service not initialized'}), 500
+            
+        # Get ticket ID and data
+        ticket_id = request.view_args.get('ticket_id')
+        data = request.json
+        
+        if not ticket_id or not data:
+            return jsonify({'error': 'Missing ticket ID or comment data'}), 400
+            
+        # Extract comment text
+        comment = data.get('comment')
+        
+        if not comment:
+            return jsonify({'error': 'Missing comment text'}), 400
+            
+        # Add comment to ticket
+        result = jira_service.add_comment(ticket_id, comment)
+        
+        # Return result
+        return jsonify({
+            'success': True,
+            'message': f'Comment added to ticket {ticket_id}',
+            'result': result
+        }), 200
+    except Exception as e:
+        logger.error(f"Error adding comment to ticket: {str(e)}")
+        error_metadata = get_error_metadata(e)
+        
+        return jsonify({
+            'success': False,
+            'error': f'Failed to add comment: {str(e)}',
+            'metadata': error_metadata
+        }), 500
+
 @jira_bp.route('/config', methods=['GET'])
 def get_jira_config():
-    """Get Jira configuration from environment variables"""
+    """Get Jira configuration"""
     try:
-        # Get Jira configuration
+        # Return basic Jira config info (non-sensitive)
         config = {
-            'jira_url': os.environ.get('JIRA_URL', ''),
-            'jira_project': os.environ.get('JIRA_PROJECT', ''),
-            'test_mode': os.environ.get('JIRA_TEST_MODE', 'false').lower() == 'true',
-            'environment': os.environ.get('ENVIRONMENT', 'development')
+            'jira_enabled': bool(jira_service),
+            'jira_url': jira_service.url if jira_service else None,
+            'jira_project': jira_service.project if jira_service else None
         }
-        
-        # Don't include auth-related values like username/token
         
         return jsonify({
             'success': True,
@@ -42,194 +182,5 @@ def get_jira_config():
         logger.error(f"Error getting Jira config: {str(e)}")
         return jsonify({
             'success': False,
-            'error': f"Failed to get Jira config: {str(e)}"
-        }), 500
-
-@jira_bp.route('/ticket/<ticket_id>', methods=['GET'])
-def get_ticket_details(ticket_id):
-    """Get details for a specific ticket"""
-    try:
-        if not jira_service:
-            return jsonify({
-                'success': False,
-                'error': 'Jira service not initialized'
-            }), 503
-            
-        # Get ticket details from Jira
-        ticket = jira_service.get_ticket(ticket_id)
-        
-        if not ticket:
-            return jsonify({
-                'success': False,
-                'error': f'Ticket {ticket_id} not found'
-            }), 404
-            
-        # Simplify the response to just the essential fields
-        simplified_ticket = {
-            'id': ticket.get('id'),
-            'key': ticket.get('key'),
-            'summary': ticket.get('fields', {}).get('summary', ''),
-            'description': ticket.get('fields', {}).get('summary', ''),
-            'status': ticket.get('fields', {}).get('status', {}).get('name', '')
-        }
-            
-        return jsonify({
-            'success': True,
-            'ticket': simplified_ticket
-        }), 200
-    except Exception as e:
-        logger.error(f"Error getting ticket {ticket_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f"Failed to get ticket details: {str(e)}"
-        }), 500
-
-@jira_bp.route('/ticket/<ticket_id>/status', methods=['PUT'])
-def update_ticket_status(ticket_id):
-    """Update the status of a Jira ticket"""
-    try:
-        if not jira_service:
-            return jsonify({
-                'success': False,
-                'error': 'Jira service not initialized'
-            }), 503
-            
-        data = request.json
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-            
-        status = data.get('status')
-        comment = data.get('comment')
-        
-        if not status:
-            return jsonify({
-                'success': False,
-                'error': 'No status provided'
-            }), 400
-            
-        # Update the ticket status
-        success = jira_service.update_ticket_status(ticket_id, status, comment)
-        
-        if not success:
-            return jsonify({
-                'success': False,
-                'error': f'Failed to update ticket {ticket_id} status'
-            }), 500
-            
-        return jsonify({
-            'success': True,
-            'message': f'Ticket {ticket_id} status updated to {status}'
-        }), 200
-    except Exception as e:
-        logger.error(f"Error updating ticket {ticket_id} status: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f"Failed to update ticket status: {str(e)}"
-        }), 500
-
-@jira_bp.route('/ticket/<ticket_id>/comment', methods=['POST'])
-def add_ticket_comment(ticket_id):
-    """Add a comment to a Jira ticket"""
-    try:
-        if not jira_service:
-            return jsonify({
-                'success': False,
-                'error': 'Jira service not initialized'
-            }), 503
-            
-        data = request.json
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-            
-        comment = data.get('comment')
-        
-        if not comment:
-            return jsonify({
-                'success': False,
-                'error': 'No comment provided'
-            }), 400
-            
-        # Add the comment
-        success = jira_service.add_comment(ticket_id, comment)
-        
-        if not success:
-            return jsonify({
-                'success': False,
-                'error': f'Failed to add comment to ticket {ticket_id}'
-            }), 500
-            
-        return jsonify({
-            'success': True,
-            'message': f'Comment added to ticket {ticket_id}'
-        }), 200
-    except Exception as e:
-        logger.error(f"Error adding comment to ticket {ticket_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f"Failed to add comment: {str(e)}"
-        }), 500
-
-@jira_bp.route('/ticket/<ticket_id>/pr', methods=['POST'])
-def link_pr_to_ticket(ticket_id):
-    """Link a pull request to a Jira ticket and update status"""
-    try:
-        if not jira_service:
-            return jsonify({
-                'success': False,
-                'error': 'Jira service not initialized'
-            }), 503
-            
-        data = request.json
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            }), 400
-            
-        pr_url = data.get('pr_url')
-        pr_number = data.get('pr_number')
-        qa_passed = data.get('qa_passed', True)  # Default to passing if not specified
-        comment = data.get('comment')
-        
-        if not pr_url:
-            return jsonify({
-                'success': False,
-                'error': 'No PR URL provided'
-            }), 400
-            
-        if not pr_number:
-            # Try to extract PR number from URL
-            import re
-            match = re.search(r'/pull/(\d+)', pr_url)
-            if match:
-                pr_number = int(match.group(1))
-            else:
-                pr_number = 0
-                
-        # Update the ticket with PR info
-        success = jira_service.update_ticket_with_pr(ticket_id, pr_url, pr_number, qa_passed, comment)
-        
-        if not success:
-            return jsonify({
-                'success': False,
-                'error': f'Failed to link PR to ticket {ticket_id}'
-            }), 500
-            
-        return jsonify({
-            'success': True,
-            'message': f'PR linked to ticket {ticket_id}',
-            'status_updated': True,
-            'new_status': 'In Review' if qa_passed else 'QA Failed'
-        }), 200
-    except Exception as e:
-        logger.error(f"Error linking PR to ticket {ticket_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f"Failed to link PR: {str(e)}"
+            'error': f'Failed to get Jira config: {str(e)}'
         }), 500

@@ -1,37 +1,30 @@
 
 import os
 import base64
-import requests
 import json
+import requests
 from typing import Dict, Any, List, Optional, Tuple, Union
-from ..log_utils import logger
+import logging
 
 class GitHubClient:
     """Client for interacting with the GitHub API"""
     
     def __init__(self):
         """Initialize GitHub client with environment variables"""
-        self.logger = logger.get_logger("github_client")
+        self.logger = logging.getLogger("github-client")
         
         # Get credentials from environment variables
         self.github_token = os.environ.get("GITHUB_TOKEN")
         self.repo_owner = os.environ.get("GITHUB_REPO_OWNER")
         self.repo_name = os.environ.get("GITHUB_REPO_NAME")
         self.default_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
-        self.test_mode = os.environ.get("GITHUB_TEST_MODE", "False").lower() == "true"
         self.use_default_branch_only = os.environ.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", "False").lower() == "true"
         
         if not all([self.github_token, self.repo_owner, self.repo_name]):
-            if self.test_mode:
-                self.logger.warning("Missing GitHub credentials, but test mode is enabled - using mock values")
-                self.github_token = "mock_token"
-                self.repo_owner = self.repo_owner or "mock_owner"
-                self.repo_name = self.repo_name or "mock_repo"
-            else:
-                self.logger.error("Missing required GitHub environment variables")
-                raise EnvironmentError(
-                    "Missing GitHub credentials. Please set GITHUB_TOKEN, GITHUB_REPO_OWNER and GITHUB_REPO_NAME environment variables."
-                )
+            self.logger.error("Missing required GitHub environment variables")
+            raise EnvironmentError(
+                "Missing GitHub credentials. Please set GITHUB_TOKEN, GITHUB_REPO_OWNER and GITHUB_REPO_NAME environment variables."
+            )
             
         # Set up headers
         self.headers = {
@@ -48,7 +41,6 @@ class GitHubClient:
         self.logger.info(f"GitHub client initialized with repo {self.repo_owner}/{self.repo_name}")
         self.logger.info(f"Default branch: {self.default_branch}")
         self.logger.info(f"Use default branch only: {self.use_default_branch_only}")
-        self.logger.info(f"Test mode: {self.test_mode}")
         
     def check_branch_exists(self, branch_name: str) -> bool:
         """
@@ -87,11 +79,6 @@ class GitHubClient:
         Returns:
             Success status (True/False)
         """
-        # Check if we're in test mode
-        if self.test_mode and not self.use_default_branch_only:
-            self.logger.info(f"Test mode: Simulating branch creation for {branch_name}")
-            return True
-            
         # Check if we should only use the default branch
         if self.use_default_branch_only:
             self.logger.info(f"Skipping branch creation for {branch_name} - configured to use default branch only ({self.default_branch})")
@@ -160,20 +147,16 @@ class GitHubClient:
             self.logger.info(f"Using default branch {self.default_branch} as head branch instead of {head_branch}")
             head_branch = self.default_branch
             
-            # Skip PR creation when we're only using the default branch
-            self.logger.info("Skipping PR creation since we're only using the default branch")
-            # Return a proper tuple with URL and PR number instead of just a string
-            mock_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/tree/{self.default_branch}"
-            mock_pr_number = 1  # Mock PR number for simulation
-            return mock_url, mock_pr_number
-            
-        # Check if we're in test mode
-        if self.test_mode:
-            self.logger.info(f"Test mode: Simulating PR creation from {head_branch} to {base_branch}")
-            pr_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/pull/1"
-            pr_number = 1  # Mock PR number
-            self.logger.info(f"Test mode: Created mock PR: {pr_url}")
-            return pr_url, pr_number
+            # Only create a mock PR if in test mode
+            if os.environ.get("GITHUB_TEST_MODE", "false").lower() == "true":
+                self.logger.info("Test mode enabled - creating a mock PR")
+                mock_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/tree/{self.default_branch}"
+                mock_pr_number = 1  # Mock PR number for simulation
+                return mock_url, mock_pr_number
+            else:
+                # Skip PR creation when we're only using the default branch but not in test mode
+                self.logger.info("Skipping PR creation since we're only using the default branch")
+                return f"https://github.com/{self.repo_owner}/{self.repo_name}/tree/{self.default_branch}", 0
             
         url = f"{self.repo_api_url}/pulls"
         
@@ -215,57 +198,84 @@ class GitHubClient:
         self.logger.info(f"Successfully created PR #{pr_number}: {pr_url}")
         return pr_url, pr_number
         
-    def commit_patch(self, branch_name: str, patch_content: str, commit_message: str, patch_file_paths: List[str] = None) -> bool:
+    def commit_file(self, branch_name: str, file_path: str, content: str, commit_message: str) -> bool:
         """
-        Apply a patch and commit changes
+        Commit a file to the repository
         
         Args:
-            branch_name: Branch to commit to
-            patch_content: Patch content to apply
+            file_path: Path to the file in the repository
+            content: New content for the file
             commit_message: Commit message
-            patch_file_paths: List of file paths affected by the patch
+            branch_name: Branch to commit to
             
         Returns:
             Success status (True/False)
         """
-        # If configured to only use default branch, use that instead of the provided branch
-        if self.use_default_branch_only:
-            self.logger.info(f"Using default branch {self.default_branch} instead of {branch_name}")
-            branch_name = self.default_branch
-            
-        # Check if we're in test mode
-        if self.test_mode:
-            self.logger.info(f"Test mode: Simulating patch application to {len(patch_file_paths) if patch_file_paths else 0} files in branch {branch_name}")
-            return True
-            
-        # Log that we're committing to the branch
-        self.logger.info(f"Committing patch to branch {branch_name}")
-        self.logger.info(f"Patch affects {len(patch_file_paths) if patch_file_paths else 0} files")
-        self.logger.info(f"Commit message: {commit_message}")
-        
-        # Make actual changes to files instead of just logging
-        if patch_file_paths and len(patch_file_paths) > 0:
-            import time
-            
-            for file_path in patch_file_paths:
-                # Simple placeholder content for the file
-                content = f"# File updated by GitHub client\n# Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n# Path: {file_path}\n\n"
-                
-                # Try to get current content
-                current_content = self.get_file_content(file_path, branch_name)
-                if current_content:
-                    content += current_content
-                
-                # Commit the file
-                result = self.commit_file(file_path, content, commit_message, branch_name)
-                if not result:
-                    self.logger.error(f"Failed to commit changes to {file_path}")
+        # Type safety: ensure content is a string before encoding
+        if not isinstance(content, str):
+            if isinstance(content, dict):
+                self.logger.warning(f"Converting dict content to JSON string for file {file_path}")
+                content = json.dumps(content, indent=2)
+            else:
+                try:
+                    self.logger.warning(f"Converting {type(content).__name__} to string for file {file_path}")
+                    content = str(content)
+                except Exception as e:
+                    self.logger.error(f"Cannot convert content to string for {file_path}: {str(e)}")
                     return False
         
-        # All files committed successfully
-        self.logger.info(f"Applied patch to {len(patch_file_paths) if patch_file_paths else 0} files in branch {branch_name}")
-        return True
-    
+        # First, get the current file info to get the SHA
+        url = f"{self.repo_api_url}/contents/{file_path}"
+        params = {"ref": branch_name}
+        
+        self.logger.info(f"Checking if file {file_path} exists in {branch_name}")
+        response = requests.get(url, headers=self.headers, params=params)
+        
+        try:
+            if response.status_code == 200:
+                # File exists, update it
+                file_sha = response.json()["sha"]
+                
+                update_data = {
+                    "message": commit_message,
+                    "content": base64.b64encode(content.encode('utf-8')).decode(),
+                    "sha": file_sha,
+                    "branch": branch_name
+                }
+                
+                self.logger.info(f"Updating existing file {file_path} in {branch_name}")
+                update_response = requests.put(url, headers=self.headers, json=update_data)
+                
+                if update_response.status_code != 200:
+                    self.logger.error(f"Failed to update file {file_path}: {update_response.status_code}, {update_response.text}")
+                    return False
+                    
+                self.logger.info(f"Successfully updated file {file_path}")
+                return True
+            elif response.status_code == 404:
+                # File doesn't exist, create it
+                create_data = {
+                    "message": commit_message,
+                    "content": base64.b64encode(content.encode('utf-8')).decode(),
+                    "branch": branch_name
+                }
+                
+                self.logger.info(f"Creating new file {file_path} in {branch_name}")
+                create_response = requests.put(url, headers=self.headers, json=create_data)
+                
+                if create_response.status_code != 201:
+                    self.logger.error(f"Failed to create file {file_path}: {create_response.status_code}, {create_response.text}")
+                    return False
+                    
+                self.logger.info(f"Successfully created file {file_path}")
+                return True
+            else:
+                self.logger.error(f"Failed to check file {file_path}: {response.status_code}, {response.text}")
+                return False
+        except Exception as e:
+            self.logger.error(f"Error in commit_file for {file_path}: {str(e)}")
+            return False
+
     def get_file_content(self, file_path: str, branch: str = None) -> Optional[str]:
         """
         Get the content of a file from GitHub
@@ -279,19 +289,6 @@ class GitHubClient:
         """
         if not branch:
             branch = self.default_branch
-            
-        # In test mode, provide mock content
-        if self.test_mode:
-            self.logger.info(f"Test mode: Providing mock content for {file_path}")
-            extension = file_path.split('.')[-1] if '.' in file_path else ''
-            mock_content = f"# Mock content for {file_path} in test mode\n"
-            
-            if extension == 'py':
-                mock_content += "def test_function():\n    return 'This is a test'\n"
-            elif extension in ('js', 'ts'):
-                mock_content += "function testFunction() {\n  return 'This is a test';\n}\n"
-            
-            return mock_content
             
         url = f"{self.repo_api_url}/contents/{file_path}"
         params = {"ref": branch}
@@ -315,112 +312,3 @@ class GitHubClient:
         except Exception as e:
             self.logger.error(f"Failed to decode file content: {str(e)}")
             return None
-
-    def update_file_using_patch(self, file_path: str, patch_content: str, branch_name: str, commit_message: str) -> bool:
-        """
-        Update a file using a patch instead of direct content replacement
-        
-        Args:
-            file_path: Path to the file to update
-            patch_content: The patch content in unified diff format
-            branch_name: Branch to commit to
-            commit_message: Commit message
-            
-        Returns:
-            Success status (True/False)
-        """
-        # First, get the current file content
-        current_content = self.get_file_content(file_path, branch_name)
-        if current_content is None:
-            self.logger.error(f"Cannot apply patch: Unable to retrieve current content of {file_path}")
-            return False
-            
-        # Apply the patch (in a real implementation, you would use a proper patch library here)
-        # For this example, we're just printing what we would do
-        self.logger.info(f"Would apply patch to {file_path}:")
-        self.logger.info(patch_content[:200] + "..." if len(patch_content) > 200 else patch_content)
-        
-        # In a real implementation, apply the patch here using a library like unidiff
-        # patched_content = apply_patch(current_content, patch_content)
-        
-        # Since we aren't actually applying the patch here, just pretend we did
-        patched_content = current_content  # Replace this with the patched content
-        
-        # Now commit the updated file
-        return self.commit_file(file_path, patched_content, commit_message, branch_name)
-        
-    def commit_file(self, file_path: str, content: str, commit_message: str, branch_name: str) -> bool:
-        """
-        Commit a file to the repository
-        
-        Args:
-            file_path: Path to the file in the repository
-            content: New content for the file
-            commit_message: Commit message
-            branch_name: Branch to commit to
-            
-        Returns:
-            Success status (True/False)
-        """
-        # Verify content is a string before encoding
-        if not isinstance(content, str):
-            if isinstance(content, dict):
-                # Convert dictionary to JSON string
-                self.logger.warning(f"Converting dict content to JSON string for file {file_path}")
-                content = json.dumps(content, indent=2)
-            else:
-                self.logger.error(f"Cannot commit non-string content for {file_path}: {type(content)}")
-                return False
-                
-        # Check if in test mode
-        if self.test_mode:
-            self.logger.info(f"Test mode: Simulating commit of file {file_path} to branch {branch_name}")
-            return True
-                
-        # First, get the current file info to get the SHA
-        url = f"{self.repo_api_url}/contents/{file_path}"
-        params = {"ref": branch_name}
-        
-        self.logger.info(f"Checking if file {file_path} exists in {branch_name}")
-        response = requests.get(url, headers=self.headers, params=params)
-        
-        if response.status_code == 200:
-            # File exists, update it
-            file_sha = response.json()["sha"]
-            
-            update_data = {
-                "message": commit_message,
-                "content": base64.b64encode(content.encode()).decode(),
-                "sha": file_sha,
-                "branch": branch_name
-            }
-            
-            self.logger.info(f"Updating existing file {file_path} in {branch_name}")
-            update_response = requests.put(url, headers=self.headers, json=update_data)
-            
-            if update_response.status_code != 200:
-                self.logger.error(f"Failed to update file {file_path}: {update_response.status_code}, {update_response.text}")
-                return False
-                
-            self.logger.info(f"Successfully updated file {file_path}")
-            return True
-        elif response.status_code == 404:
-            # File doesn't exist, create it
-            create_data = {
-                "message": commit_message,
-                "content": base64.b64encode(content.encode()).decode(),
-                "branch": branch_name
-            }
-            
-            self.logger.info(f"Creating new file {file_path} in {branch_name}")
-            create_response = requests.put(url, headers=self.headers, json=create_data)
-            
-            if create_response.status_code != 201:
-                self.logger.error(f"Failed to create file {file_path}: {create_response.status_code}, {create_response.text}")
-                return False
-                
-            self.logger.info(f"Successfully created file {file_path}")
-            return True
-        else:
-            self.logger.error(f"Failed to check file {file_path}: {response.status_code}, {response.text}")
-            return False
