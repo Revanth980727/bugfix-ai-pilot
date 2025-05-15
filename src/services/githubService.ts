@@ -1,4 +1,3 @@
-
 import { GitHubConfig } from '@/types/ticket';
 import { isValidGitHubSource, diagnoseGitHubAccessIssues } from '@/utils/developerSourceLogger';
 
@@ -55,35 +54,98 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
 export const generateDiff = (originalContent: string, modifiedContent: string, filename: string): string => {
   console.log(`Generating diff for file: ${filename}`);
   
-  // This is a simplified diff generation - in a real app, you'd use a proper diff library
+  // Use a better diff generation approach
   const originalLines = originalContent.split('\n');
   const modifiedLines = modifiedContent.split('\n');
   
-  // Mock diff generation - in reality this would use a proper diff algorithm
-  let diff = `--- a/${filename}\n+++ b/${filename}\n`;
+  // Generate a unified diff
+  const diff = [];
+  diff.push(`--- a/${filename}`);
+  diff.push(`+++ b/${filename}`);
   
-  // Find some line numbers for the mock diff
-  const lineNum = Math.min(originalLines.length, 5);
-  diff += `@@ -${lineNum},3 +${lineNum},3 @@\n`;
+  // Create a real unified diff
+  const diffLines = [];
+  let currentHunk = [];
+  let hunkHeader = '';
+  let inHunk = false;
+  let oldLineNo = 1;
+  let newLineNo = 1;
   
-  // Add some context lines
-  for (let i = Math.max(0, lineNum - 2); i < lineNum; i++) {
-    diff += ` ${originalLines[i] || ''}\n`;
+  for (let i = 0; i < Math.max(originalLines.length, modifiedLines.length); i++) {
+    const originalLine = i < originalLines.length ? originalLines[i] : null;
+    const modifiedLine = i < modifiedLines.length ? modifiedLines[i] : null;
+    
+    if (originalLine === modifiedLine) {
+      // Context line
+      if (inHunk) {
+        currentHunk.push(' ' + originalLine);
+        oldLineNo++;
+        newLineNo++;
+      } else {
+        // Start a new hunk with context
+        if (i > 0) {
+          const contextStartIdx = Math.max(0, i - 3); // Up to 3 lines of context
+          for (let j = contextStartIdx; j < i; j++) {
+            currentHunk.push(' ' + originalLines[j]);
+          }
+          hunkHeader = `@@ -${contextStartIdx + 1},${i - contextStartIdx + 1} +${contextStartIdx + 1},${i - contextStartIdx + 1} @@`;
+          inHunk = true;
+          oldLineNo = i + 1;
+          newLineNo = i + 1;
+        }
+      }
+    } else {
+      // Start a new hunk if not already in one
+      if (!inHunk) {
+        const contextStartIdx = Math.max(0, i - 3); // Up to 3 lines of context
+        for (let j = contextStartIdx; j < i; j++) {
+          currentHunk.push(' ' + originalLines[j]);
+        }
+        hunkHeader = `@@ -${contextStartIdx + 1},${i - contextStartIdx + 1} +${contextStartIdx + 1},${i - contextStartIdx + 1} @@`;
+        inHunk = true;
+        oldLineNo = i + 1;
+        newLineNo = i + 1;
+      }
+      
+      // Handle line differences
+      if (originalLine !== null && modifiedLine !== null) {
+        // Line was modified
+        currentHunk.push('-' + originalLine);
+        currentHunk.push('+' + modifiedLine);
+        oldLineNo++;
+        newLineNo++;
+      } else if (originalLine === null) {
+        // Line was added
+        currentHunk.push('+' + modifiedLine);
+        newLineNo++;
+      } else if (modifiedLine === null) {
+        // Line was removed
+        currentHunk.push('-' + originalLine);
+        oldLineNo++;
+      }
+    }
+    
+    // End the hunk if we've gone 3+ lines with no changes
+    const isEnd = i === Math.max(originalLines.length, modifiedLines.length) - 1;
+    if (inHunk && (i > 0 && i % 20 === 0 || isEnd)) {
+      if (currentHunk.length > 0) {
+        diff.push(hunkHeader);
+        diff.push(...currentHunk);
+      }
+      currentHunk = [];
+      inHunk = false;
+    }
   }
   
-  // Add a removed line
-  diff += `-${originalLines[lineNum] || ''}\n`;
-  
-  // Add an added line
-  diff += `+${modifiedLines[lineNum] || originalLines[lineNum] + ' // modified'}\n`;
-  
-  // Add more context
-  for (let i = lineNum + 1; i < lineNum + 3 && i < originalLines.length; i++) {
-    diff += ` ${originalLines[i] || ''}\n`;
+  // Add any remaining hunk
+  if (inHunk && currentHunk.length > 0) {
+    diff.push(hunkHeader);
+    diff.push(...currentHunk);
   }
   
-  console.log(`Generated ${diff.split('\n').length} lines of diff`);
-  return diff;
+  const finalDiff = diff.join('\n');
+  console.log(`Generated ${finalDiff.split('\n').length} lines of diff`);
+  return finalDiff;
 };
 
 /**

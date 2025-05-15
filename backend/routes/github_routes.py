@@ -5,7 +5,7 @@ import logging
 import re
 import time
 from flask import Blueprint, request, jsonify
-from ..github_utils import get_file_content, generate_diff, commit_using_patch
+from ..github_utils import get_file_content, generate_diff
 from ..github_service.github_service import GitHubService
 
 # Configure logging
@@ -81,12 +81,18 @@ def create_patch():
         # Generate a diff between the original and modified content
         diff = generate_diff(original_content, modified_content, file_path)
         
+        # Calculate lines added and removed from the diff
+        lines_added = sum(1 for line in diff.splitlines() if line.startswith('+') and not line.startswith('+++'))
+        lines_removed = sum(1 for line in diff.splitlines() if line.startswith('-') and not line.startswith('---'))
+        
+        logger.info(f"Generated diff for {file_path}: {lines_added} lines added, {lines_removed} lines removed")
+        
         return jsonify({
             'success': True,
             'diff': diff,
             'filename': file_path,
-            'linesAdded': diff.count('\n+') - 1,  # -1 to account for the +++ line
-            'linesRemoved': diff.count('\n-') - 1  # -1 to account for the --- line
+            'linesAdded': lines_added,
+            'linesRemoved': lines_removed
         }), 200
     except Exception as e:
         logger.error(f"Error generating patch: {str(e)}")
@@ -117,6 +123,19 @@ def commit_changes():
                 'success': False,
                 'error': 'Missing required parameters'
             }), 400
+        
+        # Prepare metadata for validation and response
+        metadata = {
+            'fileList': [],
+            'totalFiles': len(file_changes),
+            'fileChecksums': {},
+            'validationDetails': {
+                'totalPatches': len(file_changes),
+                'validPatches': 0,
+                'rejectedPatches': 0,
+                'rejectionReasons': {}
+            }
+        }
             
         # Extract file paths and contents
         file_paths = []
@@ -124,28 +143,61 @@ def commit_changes():
         
         for change in file_changes:
             if not change.get('filename') or not change.get('content'):
+                metadata['validationDetails']['rejectedPatches'] += 1
+                reason = 'Missing filename or content'
+                metadata['validationDetails']['rejectionReasons'][reason] = metadata['validationDetails']['rejectionReasons'].get(reason, 0) + 1
                 continue
             
-            file_paths.append(change.get('filename'))
-            modified_contents.append(change.get('content'))
+            filename = change.get('filename')
+            content = change.get('content')
+            
+            # Skip test files in production
+            if os.environ.get('ENVIRONMENT') == 'production' and (filename.endswith('test.md') or '/test/' in filename):
+                logger.info(f"Skipping test file in production: {filename}")
+                continue
+                
+            file_paths.append(filename)
+            modified_contents.append(content)
+            metadata['fileList'].append(filename)
+            
+            # Add file checksum for validation
+            import hashlib
+            metadata['fileChecksums'][filename] = hashlib.md5(content.encode('utf-8')).hexdigest()
+            
+            metadata['validationDetails']['validPatches'] += 1
             
         # Add timestamp to ensure changes are detected
         commit_message = f"{commit_message} - {time.strftime('%Y-%m-%d %H:%M:%S')}"
         
-        # Commit the changes using the patch method
-        result = commit_using_patch(repo_name, branch, file_paths, modified_contents, commit_message)
+        logger.info(f"Committing changes to {branch}: {len(file_paths)} files")
+        
+        # Use the GitHub service for the commit if available
+        if github_service:
+            result = github_service.commit_bug_fix(
+                branch,
+                file_paths,
+                modified_contents,
+                "TICKET-ID",  # Replace with actual ticket ID if available
+                commit_message
+            )
+        else:
+            # Fallback to the original method
+            from ..github_utils import commit_using_patch
+            result = commit_using_patch(repo_name, branch, file_paths, modified_contents, commit_message)
         
         if result:
             return jsonify({
                 'success': True,
                 'message': f"Changes committed to branch {branch}",
                 'branch': branch,
-                'files_changed': len(file_paths)
+                'files_changed': len(file_paths),
+                'metadata': metadata
             }), 200
         else:
             return jsonify({
                 'success': False,
-                'error': 'Failed to commit changes'
+                'error': 'Failed to commit changes',
+                'metadata': metadata
             }), 500
     except Exception as e:
         logger.error(f"Error committing changes: {str(e)}")

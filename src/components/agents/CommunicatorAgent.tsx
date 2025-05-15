@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -6,7 +7,7 @@ import { GitPullRequest, MessageSquare, Github, AlertTriangle, Info, RefreshCcw,
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
 import { AgentStatus } from '@/hooks/useDashboardState';
-import { Update } from '@/types/ticket';
+import { Update, UpdateMetadata } from '@/types/ticket';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -41,14 +42,6 @@ interface CommunicatorAgentProps {
     fileChecksums?: Record<string, string>;
     validationScore?: number;
   };
-}
-
-// Define proper type for metadata
-interface CommunicatorMetadata {
-  fileList?: string[];
-  totalFiles?: number;
-  fileChecksums?: Record<string, string>;
-  validationDetails?: ValidationMetrics;
 }
 
 export function CommunicatorAgent({ 
@@ -294,15 +287,13 @@ export function CommunicatorAgent({
               }
               
               // Safely cast metadata to the proper type
-              const metadata = update.metadata as CommunicatorMetadata | undefined;
+              const metadata = update.metadata as UpdateMetadata | undefined;
               
               // Special handling for file list update
               const showFileList = isFileListMessage && 
-                                  typeof metadata === 'object' && 
-                                  metadata !== null && 
-                                  'fileList' in metadata && 
+                                  metadata?.fileList && 
                                   Array.isArray(metadata.fileList) &&
-                                  'totalFiles' in metadata;
+                                  metadata.totalFiles !== undefined;
                                          
               return (
                 <div key={index} className="flex gap-2 mb-2 text-sm">
@@ -327,7 +318,7 @@ export function CommunicatorAgent({
                     </div>
                     
                     {/* File list collapsible for file modifications */}
-                    {showFileList && metadata?.fileList && metadata?.totalFiles && (
+                    {showFileList && metadata?.fileList && (
                       <Collapsible className="mt-1">
                         <CollapsibleTrigger className="flex items-center text-xs text-muted-foreground hover:text-foreground">
                           <span>Show files</span>
@@ -336,7 +327,7 @@ export function CommunicatorAgent({
                           {metadata.fileList.map((file: string, i: number) => (
                             <div key={i} className="font-mono">{file}</div>
                           ))}
-                          {metadata.totalFiles > metadata.fileList.length && (
+                          {metadata.totalFiles && metadata.totalFiles > metadata.fileList.length && (
                             <div className="text-muted-foreground">
                               ...and {metadata.totalFiles - metadata.fileList.length} more
                             </div>
@@ -346,11 +337,7 @@ export function CommunicatorAgent({
                     )}
                     
                     {/* File checksums collapsible for validation updates */}
-                    {isValidationMessage && 
-                     typeof metadata === 'object' && 
-                     metadata !== null && 
-                     'fileChecksums' in metadata && 
-                     metadata.fileChecksums && (
+                    {isValidationMessage && metadata?.fileChecksums && (
                       <Collapsible className="mt-1">
                         <CollapsibleTrigger className="flex items-center text-xs text-muted-foreground hover:text-foreground">
                           <span>File details</span>

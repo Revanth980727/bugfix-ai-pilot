@@ -19,7 +19,7 @@ export interface Ticket {
     qa_message?: string;
   }>;
   early_escalation?: boolean;
-  code_context?: { [filePath: string]: string }; // Added code_context property
+  code_context?: { [filePath: string]: string }; 
   github_source?: {
     repo_owner?: string;
     repo_name?: string;
@@ -33,7 +33,7 @@ export interface AffectedFile {
   file: string;
   valid: boolean;
   reason?: string;
-  content?: string;  // Added content property
+  content?: string;
 }
 
 export interface PlannerAnalysis {
@@ -42,10 +42,10 @@ export interface PlannerAnalysis {
   affected_files: string[] | AffectedFile[];
   error_type: string;
   using_fallback?: boolean;
-  affectedFiles?: string[];  // For backward compatibility
-  rootCause?: string;        // For backward compatibility
-  suggestedApproach?: string; // For backward compatibility
-  code_context?: { [filePath: string]: string }; // Added code_context property
+  affectedFiles?: string[];
+  rootCause?: string;
+  suggestedApproach?: string;
+  code_context?: { [filePath: string]: string };
 }
 
 export interface CodeDiff {
@@ -53,8 +53,6 @@ export interface CodeDiff {
   diff: string;
   linesAdded: number;
   linesRemoved: number;
-  // Removed oldPath and newPath properties and replaced with filename
-  // Removed content property and replaced with diff
 }
 
 export type TestStatus = 'pass' | 'fail';
@@ -69,7 +67,7 @@ export interface TestResult {
 
 export type UpdateType = 'jira' | 'github' | 'system';
 
-// Metadata type definition for Update interface
+// Detailed metadata type definition for Update interface
 export interface UpdateMetadata {
   fileList?: string[];
   totalFiles?: number;
@@ -88,7 +86,7 @@ export interface Update {
   message: string;
   type: UpdateType;
   confidenceScore?: number;
-  metadata?: UpdateMetadata; // Update metadata with explicit type
+  metadata?: UpdateMetadata;
   github_source?: {
     repo_owner?: string;
     repo_name?: string;
