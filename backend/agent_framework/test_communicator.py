@@ -1,4 +1,3 @@
-
 import pytest
 import logging
 import asyncio
@@ -49,6 +48,9 @@ async def test_communicator_agent():
     agent.patch_validator._is_valid_file_path = MagicMock(return_value=True)
     agent.patch_validator._is_valid_diff_syntax = MagicMock(return_value=True)
     agent.patch_validator._check_for_placeholders = MagicMock(return_value=[])
+    
+    # Test various test success field name variations
+    await test_field_name_variations(agent)
     
     # Test successful case
     success_input = {
@@ -341,6 +343,51 @@ async def test_patch_validation(agent):
     assert "validation_metrics" in result, "Validation metrics should be included"
     if "validation_metrics" in result:
         assert result["validation_metrics"].get("rejectedPatches", 0) == 2, "Should have 2 rejected patches"
+
+async def test_field_name_variations(agent):
+    """Test handling of different field names that indicate test success"""
+    # Test all possible variations of test success fields
+    field_variations = [
+        {"ticket_id": "TEST-123", "test_passed": True},
+        {"ticket_id": "TEST-124", "passed": True},
+        {"ticket_id": "TEST-125", "success": True},
+        {"ticket_id": "TEST-126", "tests_passed": True}
+    ]
+    
+    for idx, input_data in enumerate(field_variations):
+        logger.info(f"Testing field variation: {input_data}")
+        result = await agent.run(input_data)
+        
+        # Should be treated as success in all cases
+        assert agent.status == AgentStatus.SUCCESS, f"Test case {idx} not treated as success"
+        assert "updates" in result, f"Result missing updates for test case {idx}"
+        
+        # Check that there are no "Test failed" messages in the updates
+        failure_updates = [u for u in result.get("updates", []) if "failed" in u.get("message", "").lower()]
+        assert len(failure_updates) == 0, f"Found failure messages in test case {idx}: {failure_updates}"
+        
+    # Test the inverse as well - various ways of indicating failure
+    failure_variations = [
+        {"ticket_id": "TEST-127", "test_passed": False},
+        {"ticket_id": "TEST-128", "passed": False},
+        {"ticket_id": "TEST-129", "success": False},
+        {"ticket_id": "TEST-130", "tests_passed": False}
+    ]
+    
+    for idx, input_data in enumerate(failure_variations):
+        input_data["retry_count"] = 1  # Add retry count to avoid escalation
+        input_data["max_retries"] = 4  # Add max retries to avoid escalation
+        
+        logger.info(f"Testing failure variation: {input_data}")
+        result = await agent.run(input_data)
+        
+        # Should be treated as failure but not error
+        assert agent.status != AgentStatus.SUCCESS, f"Test case {idx} incorrectly treated as success"
+        assert "updates" in result, f"Result missing updates for test case {idx}"
+        
+        # Check that there are "Test failed" messages in the updates
+        failure_updates = [u for u in result.get("updates", []) if "failed" in u.get("message", "").lower()]
+        assert len(failure_updates) > 0, f"No failure messages found in test case {idx}"
 
 if __name__ == "__main__":
     asyncio.run(test_communicator_agent())

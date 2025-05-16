@@ -154,11 +154,9 @@ class CommunicatorAgent:
                 result["updates"] = updates
                 return result
             
-            # Case 2: Process PR if tests passed 
-            test_passed = input_data.get("test_passed", False)
-            
-            # Check if we have an existing PR URL
-            github_pr_url = input_data.get("github_pr_url")
+            # Case 2: Process PR if tests passed
+            # FIX: Use a more explicit check for test success, considering all possible field names
+            test_passed = self._determine_test_success(input_data)
             
             # If tests passed, create/update PR
             if test_passed:
@@ -294,6 +292,41 @@ class CommunicatorAgent:
         
         logger.info(f"Completed communication tasks for ticket {ticket_id}")
         return result
+    
+    def _determine_test_success(self, input_data: Dict[str, Any]) -> bool:
+        """
+        Helper method to determine if tests passed by checking multiple possible field names
+        
+        Args:
+            input_data: The input data dictionary
+            
+        Returns:
+            Boolean indicating whether tests passed
+        """
+        # Check all possible fields that might indicate test success
+        # This handles different field names that might be used by different agents
+        if input_data.get("test_passed") is True:
+            return True
+        if input_data.get("passed") is True:
+            return True
+        if input_data.get("success") is True:
+            return True
+        if input_data.get("tests_passed") is True:
+            return True
+        
+        # If none of the positive indicators are present, check for explicit failure flags
+        if input_data.get("test_passed") is False:
+            return False
+        if input_data.get("passed") is False:
+            return False
+        if input_data.get("success") is False:
+            return False
+        if input_data.get("tests_passed") is False:
+            return False
+        
+        # Default to assuming tests failed if we can't determine otherwise
+        # This is conservative but safer than assuming success
+        return False
     
     async def _validate_patches(self, patches: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -530,34 +563,35 @@ class CommunicatorAgent:
             async def update_ticket(self, ticket_id, status, description):
                 logger.info(f"[MOCK] Would update JIRA ticket {ticket_id} to status {status}")
                 return True
-        
+                
         return MockJiraClient()
-    
+        
     def _create_mock_github_service(self) -> object:
         """Create a mock GitHub service when the real one isn't available"""
         class MockGitHubService:
             def create_fix_branch(self, ticket_id, base_branch="main"):
                 logger.info(f"[MOCK] Would create branch fix/{ticket_id} from {base_branch}")
-                return (True, f"fix/{ticket_id}")
+                return True, f"fix/{ticket_id}"
                 
             def commit_bug_fix(self, branch_name, file_changes, ticket_id, commit_message):
-                file_count = len(file_changes) if file_changes else 0
-                logger.info(f"[MOCK] Would commit {file_count} changes to {branch_name} with message: {commit_message}")
+                logger.info(f"[MOCK] Would commit changes to branch {branch_name}")
                 return True
                 
-            def create_fix_pr(self, branch_name, ticket_id, title, body):
-                logger.info(f"[MOCK] Would create PR for {branch_name} with title: {title}")
-                mock_url = f"https://github.com/example/repo/pull/{ticket_id}"
-                return {"url": mock_url, "number": 123}
+            def create_fix_pr(self, branch_name, ticket_id, title, description):
+                logger.info(f"[MOCK] Would create PR for branch {branch_name}")
+                return {
+                    "url": f"https://github.com/example/repo/pull/123-{ticket_id}",
+                    "number": 123
+                }
                 
             def add_pr_comment(self, pr_number, comment):
                 logger.info(f"[MOCK] Would add comment to PR #{pr_number}")
                 return True
                 
-            def check_file_exists(self, path):
+            def check_file_exists(self, file_path):
                 return True
                 
             def validate_patch(self, patch):
-                return {"valid": True, "reasons": []}
-        
+                return {"valid": True, "reasons": [], "confidence_boost": 5}
+                
         return MockGitHubService()
