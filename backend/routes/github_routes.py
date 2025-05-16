@@ -5,10 +5,14 @@ import difflib
 import logging
 import re
 import time
+import hashlib
+import tempfile
+import subprocess
 from flask import Blueprint, request, jsonify
 from ..github_utils import get_file_content, generate_diff
 from ..github_service.github_service import GitHubService
 from ..github_service.utils import prepare_response_metadata, is_test_mode, is_production
+from ..github_service.config import verify_config, get_repo_info
 from ..log_utils import log_diff_summary, format_validation_result, create_structured_error
 
 # Configure logging
@@ -30,16 +34,20 @@ except Exception as e:
 def get_github_config():
     """Get GitHub configuration from environment variables"""
     try:
+        # Make sure config is valid first
+        if not verify_config():
+            return jsonify({
+                'success': False,
+                'error': 'GitHub configuration is invalid or incomplete'
+            }), 500
+            
         # Get GitHub configuration
-        config = {
-            'repo_owner': os.environ.get('GITHUB_REPO_OWNER', ''),
-            'repo_name': os.environ.get('GITHUB_REPO_NAME', ''),
-            'default_branch': os.environ.get('GITHUB_DEFAULT_BRANCH', 'main'),
-            'branch': os.environ.get('GITHUB_BRANCH', ''),
+        config = get_repo_info()
+        config.update({
             'patch_mode': os.environ.get('PATCH_MODE', 'line-by-line'),
             'test_mode': is_test_mode(),
             'environment': os.environ.get('ENVIRONMENT', 'development')
-        }
+        })
         
         return jsonify({
             'success': True,
@@ -50,6 +58,85 @@ def get_github_config():
         return jsonify({
             'success': False,
             'error': f"Failed to get GitHub config: {str(e)}"
+        }), 500
+
+@github_bp.route('/validate-diff', methods=['POST'])
+def validate_diff():
+    """Validate a diff to ensure it's properly formatted and applies cleanly"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            }), 400
+            
+        # Extract required data
+        diff_content = data.get('diff')
+        file_path = data.get('file_path')
+        
+        if not diff_content:
+            return jsonify({
+                'success': False,
+                'error': 'No diff content provided',
+                'errorCode': 'MISSING_DIFF'
+            }), 400
+            
+        # Basic syntax validation
+        if not diff_content.startswith("@@") and not diff_content.startswith("---"):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid diff format - must start with @@ or ---',
+                'errorCode': 'INVALID_DIFF_FORMAT'
+            }), 400
+            
+        # Count lines added/removed
+        lines_added = sum(1 for line in diff_content.splitlines() if line.startswith('+') and not line.startswith('+++'))
+        lines_removed = sum(1 for line in diff_content.splitlines() if line.startswith('-') and not line.startswith('---'))
+        
+        # Validate using git if possible
+        validation_result = {
+            'valid': True,
+            'lines_added': lines_added,
+            'lines_removed': lines_removed,
+            'syntax_valid': True
+        }
+        
+        # Attempt advanced validation using git apply --check
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.diff', mode='w') as diff_file:
+                diff_file.write(diff_content)
+                diff_file.flush()
+                
+                # Try to validate with git
+                try:
+                    result = subprocess.run(
+                        ['git', 'apply', '--check', diff_file.name],
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if result.returncode != 0:
+                        validation_result['valid'] = False
+                        validation_result['error'] = result.stderr
+                        validation_result['errorCode'] = 'PATCH_APPLY_FAILED'
+                except (subprocess.SubprocessError, FileNotFoundError):
+                    # If git isn't available, fall back to basic validation
+                    pass
+        except Exception as e:
+            logger.warning(f"Advanced diff validation failed: {str(e)}")
+            # This is just extra validation, so continue even if it fails
+            
+        return jsonify({
+            'success': True,
+            'validation': validation_result
+        }), 200
+    except Exception as e:
+        logger.error(f"Error validating diff: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f"Failed to validate diff: {str(e)}",
+            'errorCode': 'VALIDATION_ERROR'
         }), 500
 
 @github_bp.route('/patch', methods=['POST'])
@@ -114,7 +201,6 @@ def create_patch():
         lines_removed = sum(1 for line in diff.splitlines() if line.startswith('-') and not line.startswith('---'))
         
         # Calculate checksums for validation
-        import hashlib
         before_checksum = hashlib.md5(original_content.encode('utf-8')).hexdigest()
         after_checksum = hashlib.md5(modified_content.encode('utf-8')).hexdigest()
         
@@ -159,8 +245,9 @@ def commit_changes():
         branch = data.get('branch')
         file_changes = data.get('file_changes', [])
         commit_message = data.get('commit_message', 'Update files')
+        patch_content = data.get('patch_content')
         
-        if not all([repo_name, branch, file_changes]):
+        if not all([repo_name, branch]) or (not file_changes and not patch_content):
             return jsonify({
                 'success': False,
                 'error': 'Missing required parameters'
@@ -176,57 +263,58 @@ def commit_changes():
         modified_contents = []
         file_results = []
         
-        for change in file_changes:
-            if not change.get('filename') or not change.get('content'):
-                file_results.append({
-                    "file_path": change.get('filename', 'unknown'),
-                    "success": False,
-                    "error": create_structured_error(
-                        "VALIDATION_FAILED",
-                        "Missing filename or content",
-                        change.get('filename', 'unknown')
-                    )
-                })
-                logger.warning(f"Rejected patch: Missing filename or content")
-                continue
-            
-            filename = change.get('filename')
-            content = change.get('content')
-            
-            # Skip test files in production unless test_mode is enabled
-            if is_prod and not test_mode and (filename.endswith('test.md') or '/test/' in filename):
+        # Process file changes from direct content updates
+        if file_changes:
+            for change in file_changes:
+                if not change.get('filename') or not change.get('content'):
+                    file_results.append({
+                        "file_path": change.get('filename', 'unknown'),
+                        "success": False,
+                        "error": create_structured_error(
+                            "VALIDATION_FAILED",
+                            "Missing filename or content",
+                            change.get('filename', 'unknown')
+                        )
+                    })
+                    logger.warning(f"Rejected patch: Missing filename or content")
+                    continue
+                
+                filename = change.get('filename')
+                content = change.get('content')
+                
+                # Skip test files in production unless test_mode is enabled
+                if is_prod and not test_mode and (filename.endswith('test.md') or '/test/' in filename):
+                    file_results.append({
+                        "file_path": filename,
+                        "success": False,
+                        "error": create_structured_error(
+                            "TEST_MODE_REQUIRED",
+                            "Test file in production",
+                            filename,
+                            "Enable test mode or use non-test file paths"
+                        )
+                    })
+                    logger.warning(f"Skipping test file in production: {filename}")
+                    continue
+                    
+                file_paths.append(filename)
+                modified_contents.append(content)
+                
+                # Calculate file checksum for tracking
+                if isinstance(content, str):
+                    content_bytes = content.encode('utf-8')
+                elif isinstance(content, dict):
+                    content_bytes = json.dumps(content, sort_keys=True).encode('utf-8')
+                else:
+                    content_bytes = str(content).encode('utf-8')
+                    
                 file_results.append({
                     "file_path": filename,
-                    "success": False,
-                    "error": create_structured_error(
-                        "TEST_MODE_REQUIRED",
-                        "Test file in production",
-                        filename,
-                        "Enable test mode or use non-test file paths"
-                    )
+                    "success": True,
+                    "checksum": hashlib.md5(content_bytes).hexdigest()
                 })
-                logger.warning(f"Skipping test file in production: {filename}")
-                continue
                 
-            file_paths.append(filename)
-            modified_contents.append(content)
-            
-            # Calculate file checksum for tracking
-            import hashlib
-            if isinstance(content, str):
-                content_bytes = content.encode('utf-8')
-            elif isinstance(content, dict):
-                content_bytes = json.dumps(content, sort_keys=True).encode('utf-8')
-            else:
-                content_bytes = str(content).encode('utf-8')
-                
-            file_results.append({
-                "file_path": filename,
-                "success": True,
-                "checksum": hashlib.md5(content_bytes).hexdigest()
-            })
-            
-            logger.info(f"Validated patch for file: {filename} (MD5: {hashlib.md5(content_bytes).hexdigest()[:8]}...)")
+                logger.info(f"Validated patch for file: {filename} (MD5: {hashlib.md5(content_bytes).hexdigest()[:8]}...)")
             
         # Add timestamp to ensure changes are detected
         commit_message = f"{commit_message} - {time.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -235,7 +323,58 @@ def commit_changes():
         metadata = prepare_response_metadata(file_results)
         
         logger.info(f"Committing changes to {branch}: {len(file_paths)} files")
-        logger.info(f"Validation summary: {metadata['validFiles']} valid, {metadata['validationDetails']['rejectedPatches']} rejected")
+        
+        # If we have a patch_content field, use that for patch-based commits
+        if patch_content and github_service:
+            patched_file_paths = data.get('patched_files', [])
+            
+            if not patched_file_paths:
+                logger.warning("Patch content provided but no patched file paths specified")
+                return jsonify({
+                    'success': False,
+                    'error': 'Patch content provided but no patched file paths specified',
+                    'errorCode': 'MISSING_PATCHED_FILES',
+                    'metadata': metadata
+                }), 400
+                
+            logger.info(f"Using patch-based commit for {len(patched_file_paths)} files")
+            
+            # Skip test files in production unless test_mode is enabled
+            if is_prod and not test_mode:
+                filtered_paths = []
+                for path in patched_file_paths:
+                    if path.endswith('test.md') or '/test/' in path:
+                        logger.warning(f"Skipping test file in production: {path}")
+                        continue
+                    filtered_paths.append(path)
+                patched_file_paths = filtered_paths
+            
+            # Commit using patch content
+            success, patch_metadata = github_service.commit_patch(
+                branch,
+                patch_content,
+                commit_message,
+                patched_file_paths
+            )
+            
+            if success:
+                # Update metadata with patch-specific information
+                metadata.update(patch_metadata)
+                
+                return jsonify({
+                    'success': True,
+                    'message': f"Changes committed to branch {branch} using patch",
+                    'branch': branch,
+                    'files_changed': len(patched_file_paths),
+                    'metadata': metadata
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': patch_metadata.get('error', 'Failed to apply patch'),
+                    'errorCode': patch_metadata.get('code', 'PATCH_FAILED'),
+                    'metadata': metadata
+                }), 400
         
         # Skip commit if no valid patches
         if len(file_paths) == 0:

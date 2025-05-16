@@ -1,3 +1,4 @@
+
 import { useState } from 'react';
 import { Update } from '../types/ticket';
 import { AgentStatus } from './useDashboardState';
@@ -30,7 +31,9 @@ export function useCommunicatorAgent() {
     rejectionReason?: string;
     validationMetrics?: ValidationMetrics;
     validationScore?: number;
-    fileChecksums?: Record<string, string>; // New field to store file checksums
+    fileChecksums?: Record<string, string>; // Store file checksums
+    patchesApplied?: number; // New field to track number of patches applied
+    linesChanged?: { added: number; removed: number }; // Track lines changed
   } | undefined>(undefined);
 
   const simulateWork = (
@@ -49,7 +52,9 @@ export function useCommunicatorAgent() {
         rejectionReason?: string;
         validationMetrics?: ValidationMetrics;
         validationScore?: number;
-        fileChecksums?: Record<string, string>; // New field to store file checksums
+        fileChecksums?: Record<string, string>;
+        patchesApplied?: number;
+        linesChanged?: { added: number; removed: number };
       };
     }
   ) => {
@@ -104,11 +109,23 @@ export function useCommunicatorAgent() {
     
     // Add patch validation update if applicable
     if (patchValidation) {
+      const validationMessage = patchValidation.isValid 
+        ? `✅ Patch validation passed - All file paths and diffs are valid ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`
+        : `❌ Patch validation failed: ${patchValidation.rejectionReason} ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`;
+      
+      // Include patch application details if available
+      const patchDetailsMessage = patchValidation.patchesApplied !== undefined
+        ? ` (${patchValidation.patchesApplied} patches applied)`
+        : '';
+        
+      // Include line changes if available
+      const lineChangesMessage = patchValidation.linesChanged
+        ? ` | +${patchValidation.linesChanged.added}/-${patchValidation.linesChanged.removed} lines`
+        : '';
+        
       const validationUpdate: Update = {
         timestamp: new Date().toISOString(),
-        message: patchValidation.isValid 
-          ? `✅ Patch validation passed - All file paths and diffs are valid ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`
-          : `❌ Patch validation failed: ${patchValidation.rejectionReason} ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`,
+        message: validationMessage + patchDetailsMessage + lineChangesMessage,
         type: 'system',
         confidenceScore: confidence,
         metadata: {

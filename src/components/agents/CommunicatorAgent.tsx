@@ -3,7 +3,7 @@ import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
-import { GitPullRequest, MessageSquare, Github, AlertTriangle, Info, RefreshCcw, CheckCircle, XCircle, FileCode } from 'lucide-react';
+import { GitPullRequest, MessageSquare, Github, AlertTriangle, Info, RefreshCcw, CheckCircle, XCircle, FileCode, GitCompare } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/use-toast';
 import { AgentStatus } from '@/hooks/useDashboardState';
@@ -41,6 +41,8 @@ interface CommunicatorAgentProps {
     validationMetrics?: ValidationMetrics;
     fileChecksums?: Record<string, string>;
     validationScore?: number;
+    patchesApplied?: number;
+    linesChanged?: { added: number, removed: number };
   };
 }
 
@@ -147,6 +149,24 @@ export function CommunicatorAgent({
               {patchValidationResults.validationMetrics && (
                 <p className="text-xs mt-1">
                   {patchValidationResults.validationMetrics.validPatches || 0}/{patchValidationResults.validationMetrics.totalPatches || 0} patches valid
+                </p>
+              )}
+              
+              {/* Line changes data if available */}
+              {patchValidationResults.linesChanged && (
+                <div className="flex items-center gap-1 mt-1 text-xs">
+                  <GitCompare className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-green-700 dark:text-green-400">+{patchValidationResults.linesChanged.added}</span>
+                  <span>/</span>
+                  <span className="text-red-700 dark:text-red-400">-{patchValidationResults.linesChanged.removed}</span>
+                  <span className="text-muted-foreground ml-1">lines</span>
+                </div>
+              )}
+              
+              {/* Applied patches count if available */}
+              {patchValidationResults.patchesApplied !== undefined && (
+                <p className="text-xs mt-1">
+                  {patchValidationResults.patchesApplied} {patchValidationResults.patchesApplied === 1 ? 'patch' : 'patches'} applied
                 </p>
               )}
             </div>

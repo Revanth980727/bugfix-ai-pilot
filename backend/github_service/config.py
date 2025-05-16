@@ -16,6 +16,9 @@ GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO_OWNER = os.getenv('GITHUB_REPO_OWNER')
 GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME')
 GITHUB_DEFAULT_BRANCH = os.getenv('GITHUB_DEFAULT_BRANCH', 'main')
+GITHUB_USE_DEFAULT_BRANCH_ONLY = os.getenv('GITHUB_USE_DEFAULT_BRANCH_ONLY', 'False').lower() == 'true'
+DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
+TEST_MODE = os.getenv('TEST_MODE', 'False').lower() == 'true'
 
 def verify_config():
     """Verify that all required environment variables are set."""
@@ -39,4 +42,26 @@ def verify_config():
         return False
 
     logger.info("GitHub configuration validated successfully")
+    if DEBUG_MODE:
+        logger.info(f"Owner: {GITHUB_REPO_OWNER}, Repo: {GITHUB_REPO_NAME}, Branch: {GITHUB_DEFAULT_BRANCH}")
+        logger.info(f"Use default branch only: {GITHUB_USE_DEFAULT_BRANCH_ONLY}")
+        logger.info(f"Test mode: {TEST_MODE}, Debug mode: {DEBUG_MODE}")
+    
     return True
+
+def get_repo_info():
+    """Return repository information dictionary."""
+    return {
+        "owner": GITHUB_REPO_OWNER,
+        "name": GITHUB_REPO_NAME,
+        "default_branch": GITHUB_DEFAULT_BRANCH,
+        "use_default_branch_only": GITHUB_USE_DEFAULT_BRANCH_ONLY
+    }
+
+def is_test_mode():
+    """Check if running in test mode."""
+    return TEST_MODE
+
+def is_debug_mode():
+    """Check if running in debug mode."""
+    return DEBUG_MODE

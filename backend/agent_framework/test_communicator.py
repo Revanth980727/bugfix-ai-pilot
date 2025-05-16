@@ -30,14 +30,14 @@ async def test_communicator_agent():
     
     agent.github_service = MagicMock()
     agent.github_service.create_fix_branch = MagicMock(return_value=True)
-    agent.github_service.create_pull_request = MagicMock(return_value="https://github.com/org/repo/pull/123")
+    agent.github_service.create_pull_request = MagicMock(return_value=("https://github.com/org/repo/pull/123", 123))
     agent.github_service.add_pr_comment = MagicMock(return_value=True)
     agent.github_service.find_pr_for_branch = MagicMock(return_value={
         "number": 123,
         "url": "https://github.com/org/repo/pull/123"
     })
     agent.github_service.check_file_exists = MagicMock(return_value=True)
-    agent.github_service.commit_bug_fix = MagicMock(return_value=True)
+    agent.github_service.commit_bug_fix = MagicMock(return_value=(True, {}))
     agent.github_service.validate_patch = MagicMock(return_value={
         "valid": True,
         "reasons": [],
@@ -95,6 +95,10 @@ async def test_communicator_agent():
         assert "communications_success" in result
         assert not result["test_passed"]
         
+        # Verify JIRA client was called with proper awaits
+        agent.jira_client.add_comment.assert_awaited()
+        agent.jira_client.update_ticket.assert_awaited()
+        
     except Exception as e:
         logger.error(f"Test failed: {str(e)}")
         raise
@@ -108,7 +112,7 @@ async def test_communicator_agent():
     }
     
     # Override the mock to simulate PR creation failure
-    agent.github_service.create_pull_request = MagicMock(return_value=None)
+    agent.github_service.create_pull_request = MagicMock(return_value=(None, None))
     
     try:
         result = await agent.run(edge_input)
@@ -178,8 +182,8 @@ async def test_patch_formats(agent):
     
     # Reset Github service mocks
     agent.github_service.create_fix_branch = MagicMock(return_value=True)
-    agent.github_service.commit_bug_fix = MagicMock(return_value=True)
-    agent.github_service.create_pull_request = MagicMock(return_value="https://github.com/example/repo/pull/123")
+    agent.github_service.commit_bug_fix = MagicMock(return_value=(True, {}))
+    agent.github_service.create_pull_request = MagicMock(return_value=("https://github.com/example/repo/pull/123", 123))
     agent.github_service.find_pr_for_branch = MagicMock(return_value=None)
     
     # Test case with "patches" format
@@ -260,6 +264,20 @@ async def test_patch_formats(agent):
     logger.info(f"Nested developer_result format result: {result}")
     assert result.get("github_updated", False), "Should successfully handle nested format"
     assert result.get("github_pr_url") is not None, "Should create PR with nested format"
+    
+    # Test nested empty developer_result (regression test)
+    empty_nested_input = {
+        "ticket_id": "TEST-204",
+        "test_passed": True,
+        "developer_result": {},
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    # Should not raise exceptions even with empty developer_result
+    result = await agent.run(empty_nested_input)
+    logger.info(f"Empty nested format result: {result}")
+    assert "error" not in result, "Should handle empty nested format gracefully"
 
 async def test_patch_validation(agent):
     """Test validation of LLM-generated patches"""

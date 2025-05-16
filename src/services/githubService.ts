@@ -1,3 +1,4 @@
+
 import { GitHubConfig } from '@/types/ticket';
 import { isValidGitHubSource, diagnoseGitHubAccessIssues } from '@/utils/developerSourceLogger';
 
@@ -192,6 +193,75 @@ export const getFileContent = async (filePath: string): Promise<string | null> =
     console.error(`Failed to get content for ${filePath}:`, error);
     return null;
   }
+};
+
+/**
+ * Validate a GitHub PR URL to ensure it points to the correct repository
+ * @param prUrl - The PR URL to validate 
+ * @param allowedRepos - Optional array of allowed repositories (owner/name format)
+ * @returns Validation result with standardized URL if valid
+ */
+export const validatePrUrl = async (
+  prUrl: string, 
+  allowedRepos?: string[]
+): Promise<{ 
+  valid: boolean; 
+  url?: string; 
+  prNumber?: number; 
+  repo?: string;
+  error?: string;
+}> => {
+  console.log(`Validating PR URL: ${prUrl}`);
+  
+  // Get config to check against allowed repositories
+  const config = await getGitHubConfig();
+  const configRepo = config ? `${config.repo_owner}/${config.repo_name}` : null;
+  
+  // If allowedRepos not provided, use the configured repo
+  if (!allowedRepos && configRepo) {
+    allowedRepos = [configRepo];
+  }
+  
+  // Try to extract PR number from a GitHub URL
+  // Format: https://github.com/owner/repo/pull/123
+  const urlMatch = /github\.com\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/i.exec(prUrl);
+  
+  if (!urlMatch) {
+    return { 
+      valid: false, 
+      error: "Invalid GitHub PR URL format. Expected: https://github.com/owner/repo/pull/123" 
+    };
+  }
+  
+  const owner = urlMatch[1];
+  const repo = urlMatch[2];
+  const prNumber = parseInt(urlMatch[3], 10);
+  const extractedRepo = `${owner}/${repo}`;
+  
+  // Check if the PR is in an allowed repository
+  if (allowedRepos && allowedRepos.length > 0) {
+    if (!allowedRepos.includes(extractedRepo)) {
+      console.warn(`PR URL ${prUrl} is not in an allowed repository. Allowed: ${allowedRepos.join(', ')}`);
+      
+      return {
+        valid: false,
+        prNumber,
+        repo: extractedRepo,
+        error: `PR must be in the configured repository: ${allowedRepos.join(' or ')}`
+      };
+    }
+  }
+  
+  // Return standardized URL
+  const standardizedUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  
+  console.log(`PR URL validated: ${standardizedUrl} (PR #${prNumber})`);
+  return {
+    valid: true,
+    url: standardizedUrl,
+    prNumber,
+    repo: extractedRepo
+  };
 };
 
 /**
