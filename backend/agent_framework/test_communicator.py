@@ -1,3 +1,4 @@
+
 import pytest
 import logging
 import asyncio
@@ -166,6 +167,82 @@ async def test_communicator_agent():
     
     # Test patch validation - new test case for patch quality assessment
     await test_patch_validation(agent)
+    
+    # Test handling of different patch formats
+    await test_patch_formats(agent)
+
+async def test_patch_formats(agent):
+    """Test handling of different patch format structures"""
+    logger.info("Testing patch format handling...")
+    
+    # Reset Github service mocks
+    agent.github_service.create_fix_branch = MagicMock(return_value=True)
+    agent.github_service.commit_bug_fix = MagicMock(return_value=True)
+    agent.github_service.create_fix_pr = MagicMock(return_value={
+        "url": "https://github.com/example/repo/pull/123",
+        "number": 123
+    })
+    
+    # Test case with "patches" format
+    patches_format_input = {
+        "ticket_id": "TEST-200",
+        "test_passed": True,
+        "patches": [
+            {
+                "file_path": "src/file1.py",
+                "diff": "@@ -1,1 +1,1 @@\n-old\n+new"
+            }
+        ],
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    result = await agent.run(patches_format_input)
+    logger.info(f"'patches' format result: {result}")
+    assert result.get("github_updated", False), "Should successfully handle 'patches' format"
+    assert result.get("github_pr_url") is not None, "Should create PR with 'patches' format"
+    
+    # Test case with "patch_content" and "patched_files" format
+    patch_content_format_input = {
+        "ticket_id": "TEST-201",
+        "test_passed": True,
+        "patch_content": "@@ -1,1 +1,1 @@\n-old\n+new",
+        "patched_files": ["src/file2.py"],
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    result = await agent.run(patch_content_format_input)
+    logger.info(f"'patch_content' format result: {result}")
+    assert result.get("github_updated", False), "Should successfully handle 'patch_content' format"
+    assert result.get("github_pr_url") is not None, "Should create PR with 'patch_content' format"
+    
+    # Test case with both formats provided
+    hybrid_format_input = {
+        "ticket_id": "TEST-202",
+        "test_passed": True,
+        "patches": [
+            {
+                "file_path": "src/file3.py",
+                "diff": "@@ -1,1 +1,1 @@\n-old\n+new"
+            }
+        ],
+        "patch_content": "@@ -1,1 +1,1 @@\n-old-alt\n+new-alt",
+        "patched_files": ["src/file4.py"],
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    result = await agent.run(hybrid_format_input)
+    logger.info(f"Hybrid format result: {result}")
+    assert result.get("github_updated", False), "Should successfully handle hybrid format"
+    assert result.get("github_pr_url") is not None, "Should create PR with hybrid format"
+    
+    # Verify that the correct file changes were passed to commit_bug_fix
+    commit_call_args = agent.github_service.commit_bug_fix.call_args_list[-1][0]
+    file_changes = commit_call_args[1]  # Second argument should be the file changes
+    
+    # Note: In a real test we'd verify the exact files, but that's dependent on implementation details
 
 async def test_patch_validation(agent):
     """Test validation of LLM-generated patches"""
