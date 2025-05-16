@@ -1,3 +1,4 @@
+
 import pytest
 import logging
 import asyncio
@@ -28,7 +29,7 @@ async def test_communicator_agent():
     agent.jira_client.add_comment = AsyncMock(return_value=True)
     
     agent.github_service = MagicMock()
-    agent.github_service.create_fix_branch = MagicMock(return_value="test-branch")
+    agent.github_service.create_fix_branch = MagicMock(return_value=True)
     agent.github_service.create_pull_request = MagicMock(return_value="https://github.com/org/repo/pull/123")
     agent.github_service.add_pr_comment = MagicMock(return_value=True)
     agent.github_service.find_pr_for_branch = MagicMock(return_value={
@@ -36,6 +37,7 @@ async def test_communicator_agent():
         "url": "https://github.com/org/repo/pull/123"
     })
     agent.github_service.check_file_exists = MagicMock(return_value=True)
+    agent.github_service.commit_bug_fix = MagicMock(return_value=True)
     agent.github_service.validate_patch = MagicMock(return_value={
         "valid": True,
         "reasons": [],
@@ -177,10 +179,8 @@ async def test_patch_formats(agent):
     # Reset Github service mocks
     agent.github_service.create_fix_branch = MagicMock(return_value=True)
     agent.github_service.commit_bug_fix = MagicMock(return_value=True)
-    agent.github_service.create_fix_pr = MagicMock(return_value={
-        "url": "https://github.com/example/repo/pull/123",
-        "number": 123
-    })
+    agent.github_service.create_pull_request = MagicMock(return_value="https://github.com/example/repo/pull/123")
+    agent.github_service.find_pr_for_branch = MagicMock(return_value=None)
     
     # Test case with "patches" format
     patches_format_input = {
@@ -242,6 +242,24 @@ async def test_patch_formats(agent):
     file_changes = commit_call_args[1]  # Second argument should be the file changes
     
     # Note: In a real test we'd verify the exact files, but that's dependent on implementation details
+    
+    # Test with nested developer_result structure
+    nested_format_input = {
+        "ticket_id": "TEST-203",
+        "test_passed": True,
+        "developer_result": {
+            "patch_content": "@@ -1,1 +1,1 @@\n-old\n+new",
+            "patched_files": ["src/file5.py"],
+            "commit_message": "Fix bug in file5"
+        },
+        "retry_count": 0,
+        "max_retries": 4
+    }
+    
+    result = await agent.run(nested_format_input)
+    logger.info(f"Nested developer_result format result: {result}")
+    assert result.get("github_updated", False), "Should successfully handle nested format"
+    assert result.get("github_pr_url") is not None, "Should create PR with nested format"
 
 async def test_patch_validation(agent):
     """Test validation of LLM-generated patches"""

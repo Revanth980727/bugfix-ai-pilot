@@ -376,9 +376,9 @@ class CommunicatorAgent:
                 validation_metrics["rejectionReasons"][reason_key] = \
                     validation_metrics["rejectionReasons"].get(reason_key, 0) + 1
                 
-                confidence_adjustment -= 10  # Penalize confidence score
+                confidence_adjustment -= 10  # Penalty for invalid file path
                 continue
-                
+            
             # Validate diff syntax
             if self.patch_validator and not self.patch_validator._is_valid_diff_syntax(diff):
                 all_valid = False
@@ -389,45 +389,55 @@ class CommunicatorAgent:
                 validation_metrics["rejectionReasons"][reason_key] = \
                     validation_metrics["rejectionReasons"].get(reason_key, 0) + 1
                 
-                confidence_adjustment -= 15  # Penalize confidence score more for syntax issues
+                confidence_adjustment -= 15  # Larger penalty for syntax issues
                 continue
-                
+            
             # Check for placeholders
             if self.patch_validator:
                 placeholders = self.patch_validator._check_for_placeholders(file_path, diff)
                 if placeholders:
                     all_valid = False
-                    placeholder_types = ', '.join(placeholders)
-                    rejection_reason = f"Contains placeholders: {placeholder_types}"
+                    rejection_reason = f"Contains placeholder: {placeholders[0]}"
                     validation_metrics["rejectedPatches"] += 1
                     
                     reason_key = "contains_placeholders"
                     validation_metrics["rejectionReasons"][reason_key] = \
                         validation_metrics["rejectionReasons"].get(reason_key, 0) + 1
                     
-                    confidence_adjustment -= 20  # Significant confidence penalty
+                    confidence_adjustment -= 20  # Major penalty for placeholders
                     continue
             
-            # If we passed all checks, patch is valid
+            # If we got here, the patch is valid
             validation_metrics["validPatches"] += 1
-            confidence_adjustment += 5  # Boost confidence for valid patches
+            confidence_adjustment += 5  # Small boost for each valid patch
         
-        # Calculate validation score
-        validation_score = None
-        if validation_metrics["totalPatches"] > 0:
-            validation_score = (validation_metrics["validPatches"] / validation_metrics["totalPatches"]) * 100
-        
-        return {
+        # Return validation results
+        result = {
             "isValid": all_valid,
             "rejectionReason": rejection_reason,
             "validationMetrics": validation_metrics,
             "fileChecksums": file_checksums,
-            "validationScore": validation_score,
             "confidence_adjustment": confidence_adjustment
         }
+        
+        return result
     
     async def _handle_github_pr(self, ticket_id: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle GitHub PR creation or update"""
+        """
+        Handle GitHub PR creation or updating
+        
+        This method supports multiple patch formats:
+        1. List of patches with file_path and diff: input_data.get("patches", [])
+        2. Single patch content and list of files: input_data.get("patch_content") & input_data.get("patched_files", [])
+        3. Developer result object: input_data.get("developer_result", {})
+        
+        Args:
+            ticket_id: The JIRA ticket ID
+            input_data: The input data dictionary
+            
+        Returns:
+            Dictionary with PR handling results
+        """
         logger.info(f"Handling GitHub PR for ticket {ticket_id}")
         
         result = {
@@ -436,102 +446,207 @@ class CommunicatorAgent:
             "error": None
         }
         
-        try:
-            # Check for existing PR URL
-            github_pr_url = input_data.get("github_pr_url")
-            
-            if github_pr_url:
-                logger.info(f"Using existing PR URL: {github_pr_url}")
-                result["success"] = True
-                result["pr_url"] = github_pr_url
-                return result
-            
-            # Enhanced logic to handle different patch data formats
-            patches = input_data.get("patches", [])
-            patch_content = input_data.get("patch_content", "")
-            patched_files = input_data.get("patched_files", [])
-            
-            # If we have direct patch_content and patched_files, convert to patches format
-            if not patches and patch_content and patched_files:
-                logger.info(f"Converting patch_content and patched_files to patches format")
-                for file_path in patched_files:
-                    patches.append({
-                        "file_path": file_path,
-                        "diff": patch_content  # Note: This might need to be filtered per file in a real implementation
-                    })
-            
-            # Check if there are actually patches to process
-            has_patches = len(patches) > 0
-            has_patch_content = bool(patch_content) and bool(patched_files)
-            
-            if not has_patches and not has_patch_content:
-                logger.warning("No patches provided, cannot create PR")
-                result["error"] = "No patches provided"
-                return result
-            
-            # Create branch for the fix
-            branch_name = f"fix/{ticket_id}"
-            logger.info(f"Creating branch {branch_name}")
-            
-            branch_created = self.github_service.create_fix_branch(ticket_id)
-            
-            if not branch_created:
-                logger.error(f"Failed to create branch {branch_name}")
-                result["error"] = f"Failed to create branch {branch_name}"
-                return result
-                
-            # Format patches for commit
+        # 1. Check if PR URL is already provided
+        pr_url = input_data.get("github_pr_url")
+        if pr_url:
+            logger.info(f"Using provided PR URL: {pr_url}")
+            result["success"] = True
+            result["pr_url"] = pr_url
+            return result
+        
+        # 2. Extract patch data from various possible formats
+        # Check for the patches list format first
+        patches = input_data.get("patches", [])
+        patch_content = input_data.get("patch_content", "")
+        patched_files = input_data.get("patched_files", [])
+        
+        # Log the patch data format for debugging
+        logger.info(f"Patch data formats - patches list: {bool(patches)}, patch_content: {bool(patch_content)}, patched_files: {len(patched_files) if patched_files else 0}")
+        
+        # If we have a developer result, try to extract from there as well
+        developer_result = input_data.get("developer_result", {})
+        if developer_result and isinstance(developer_result, dict):
+            # This might override existing values if both are present
+            if not patches:
+                patches = developer_result.get("patches", [])
+            if not patch_content:
+                patch_content = developer_result.get("patch_content", "")
+            if not patched_files:
+                patched_files = developer_result.get("patched_files", [])
+        
+        # Convert patches list to patch_content and patched_files if needed
+        if patches and isinstance(patches, list) and (not patch_content or not patched_files):
             file_changes = []
-            if has_patches:
-                for patch in patches:
-                    file_changes.append({
-                        "filename": patch.get("file_path", ""),
-                        "content": patch.get("diff", "")
-                    })
-            elif has_patch_content:
-                # Use the patch_content and patched_files directly
-                for file_path in patched_files:
+            extracted_file_paths = []
+            
+            for patch in patches:
+                if not isinstance(patch, dict):
+                    continue
+                    
+                file_path = patch.get("file_path", "")
+                diff = patch.get("diff", "")
+                
+                if file_path and diff:
                     file_changes.append({
                         "filename": file_path,
-                        "content": patch_content
+                        "content": diff
                     })
-                
-            # Create commit message
-            commit_message = input_data.get("commit_message", f"Fix {ticket_id}")
-            if not commit_message.startswith(f"Fix {ticket_id}"):
-                commit_message = f"Fix {ticket_id}: {commit_message}"
-                
-            # Commit changes
-            logger.info(f"Committing changes to branch {branch_name}")
-            commit_success = self.github_service.commit_bug_fix(branch_name, file_changes, ticket_id, commit_message)
+                    extracted_file_paths.append(file_path)
             
-            if not commit_success:
-                logger.error("Failed to commit changes")
-                result["error"] = "Failed to commit changes"
-                return result
-                
-            # Create pull request
-            logger.info(f"Creating pull request for branch {branch_name}")
-            pr_result = self.github_service.create_fix_pr(
-                branch_name,
-                ticket_id,
-                f"Fix {ticket_id}",
-                f"Automated fix for {ticket_id}"
-            )
-            
-            if not pr_result or not pr_result.get("url"):
-                logger.error("Failed to create pull request")
-                result["error"] = "Failed to create pull request"
-                return result
-                
-            # Success!
+            # If we successfully extracted patches, use those instead
+            if file_changes:
+                logger.info(f"Extracted {len(file_changes)} file changes from patches list")
+                if not patched_files:
+                    patched_files = extracted_file_paths
+        
+        # Check if we have any valid patch data after all extraction attempts
+        has_patches = bool((patches and isinstance(patches, list)) or 
+                          (patch_content and isinstance(patch_content, str) and 
+                           patched_files and isinstance(patched_files, list)))
+        
+        if not has_patches:
+            logger.warning("No patches provided, cannot create PR")
+            result["error"] = "No patches provided"
+            return result
+        
+        # 3. Try to find existing PR for this branch
+        branch_name = f"fix/{ticket_id}"
+        
+        # Check if PR already exists for this branch
+        existing_pr = self.github_service.find_pr_for_branch(branch_name)
+        if existing_pr:
+            logger.info(f"Found existing PR for branch {branch_name}: {existing_pr.get('url')}")
             result["success"] = True
-            result["pr_url"] = pr_result.get("url")
-            
+            result["pr_url"] = existing_pr.get("url")
             return result
+            
+        # 4. Create branch and PR
+        # Create a branch for the fix
+        branch_created = self.github_service.create_fix_branch(ticket_id)
+        if not branch_created:
+            logger.error(f"Failed to create branch {branch_name}")
+            result["error"] = "Failed to create branch"
+            return result
+        
+        logger.info(f"Branch created: {branch_name}")
+        
+        # Prepare file changes for commit
+        file_changes = []
+        
+        # Handle the two different formats for patches
+        if patches:
+            # Format 1: List of patches with file_path and diff
+            for patch in patches:
+                if isinstance(patch, dict):
+                    file_path = patch.get("file_path", "")
+                    diff = patch.get("diff", "")
+                    
+                    if file_path and diff:
+                        file_changes.append({
+                            "filename": file_path,
+                            "content": diff
+                        })
+        elif patch_content and patched_files:
+            # Format 2: Single patch content with list of files
+            # In this format, we need to distribute the patch content across files
+            # For now, we'll assume the patch content is already formatted for each file
+            for file_path in patched_files:
+                file_changes.append({
+                    "filename": file_path,
+                    "content": patch_content
+                })
+        
+        # Commit the changes
+        commit_message = f"Fix {ticket_id}: Automated bug fix"
+        if "commit_message" in input_data:
+            commit_message = input_data["commit_message"]
+        elif developer_result and "commit_message" in developer_result:
+            commit_message = developer_result["commit_message"]
+            
+        # Ensure commit message starts with ticket ID
+        if not commit_message.startswith(f"Fix {ticket_id}"):
+            commit_message = f"Fix {ticket_id}: {commit_message}"
+            
+        commit_success = self.github_service.commit_bug_fix(
+            branch_name, 
+            file_changes,
+            ticket_id,
+            commit_message
+        )
+        
+        if not commit_success:
+            logger.error("Failed to commit changes")
+            result["error"] = "Failed to commit changes"
+            return result
+            
+        # Create pull request
+        pr_title = f"Fix {ticket_id}"
+        pr_body = f"Automated bug fix for issue {ticket_id}"
+        
+        pr_url = self.github_service.create_pull_request(
+            title=pr_title,
+            body=pr_body,
+            head_branch=branch_name
+        )
+        
+        if not pr_url:
+            logger.error("Failed to create pull request")
+            result["error"] = "Failed to create pull request"
+            return result
+            
+        logger.info(f"PR created: {pr_url}")
+        result["success"] = True
+        result["pr_url"] = pr_url
+        
+        return result
+    
+    async def _update_jira(self, ticket_id: str, status: str, comment: str) -> bool:
+        """Update JIRA ticket with new status and comment"""
+        try:
+            # Add the comment
+            self.jira_client.add_comment(ticket_id, comment)
+            
+            # Update the status
+            self.jira_client.update_ticket(ticket_id, status, comment)
+            
+            return True
         except Exception as e:
-            logger.error(f"Error creating GitHub PR: {str(e)}")
-            result["error"] = str(e)
-            return result
-            
-    # ... keep existing code for _update_jira, _create_mock_jira_client, _create_mock_github_service, _create_update, _get_timestamp methods
+            logger.error(f"Error updating JIRA: {str(e)}")
+            return False
+    
+    def _create_update(self, message: str, type_str: str = "system") -> Dict[str, Any]:
+        """Create an update message for the UI"""
+        import datetime
+        
+        return {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "message": message,
+            "type": type_str
+        }
+    
+    def _get_timestamp(self) -> str:
+        """Get current timestamp string"""
+        import datetime
+        return datetime.datetime.now().isoformat()
+        
+    def _create_mock_jira_client(self):
+        """Create a mock JIRA client for testing"""
+        from unittest.mock import AsyncMock, MagicMock
+        
+        mock_client = MagicMock()
+        mock_client.update_ticket = AsyncMock(return_value=True)
+        mock_client.add_comment = AsyncMock(return_value=True)
+        
+        return mock_client
+        
+    def _create_mock_github_service(self):
+        """Create a mock GitHub service for testing"""
+        from unittest.mock import MagicMock
+        
+        mock_service = MagicMock()
+        mock_service.create_fix_branch = MagicMock(return_value=True)
+        mock_service.commit_bug_fix = MagicMock(return_value=True)
+        mock_service.create_pull_request = MagicMock(return_value="https://github.com/org/repo/pull/123")
+        mock_service.find_pr_for_branch = MagicMock(return_value=None)
+        
+        return mock_service
