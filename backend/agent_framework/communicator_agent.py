@@ -446,8 +446,7 @@ class CommunicatorAgent:
                 result["pr_url"] = github_pr_url
                 return result
             
-            # Check for patches in different formats
-            # This is the key fix: We now look for patches in multiple different formats/locations
+            # Enhanced logic to handle different patch data formats
             patches = input_data.get("patches", [])
             patch_content = input_data.get("patch_content", "")
             patched_files = input_data.get("patched_files", [])
@@ -461,7 +460,11 @@ class CommunicatorAgent:
                         "diff": patch_content  # Note: This might need to be filtered per file in a real implementation
                     })
             
-            if not patches:
+            # Check if there are actually patches to process
+            has_patches = len(patches) > 0
+            has_patch_content = bool(patch_content) and bool(patched_files)
+            
+            if not has_patches and not has_patch_content:
                 logger.warning("No patches provided, cannot create PR")
                 result["error"] = "No patches provided"
                 return result
@@ -479,11 +482,19 @@ class CommunicatorAgent:
                 
             # Format patches for commit
             file_changes = []
-            for patch in patches:
-                file_changes.append({
-                    "filename": patch.get("file_path", ""),
-                    "content": patch.get("diff", "")
-                })
+            if has_patches:
+                for patch in patches:
+                    file_changes.append({
+                        "filename": patch.get("file_path", ""),
+                        "content": patch.get("diff", "")
+                    })
+            elif has_patch_content:
+                # Use the patch_content and patched_files directly
+                for file_path in patched_files:
+                    file_changes.append({
+                        "filename": file_path,
+                        "content": patch_content
+                    })
                 
             # Create commit message
             commit_message = input_data.get("commit_message", f"Fix {ticket_id}")
@@ -513,98 +524,14 @@ class CommunicatorAgent:
                 result["error"] = "Failed to create pull request"
                 return result
                 
-            # Add comment to PR with test results
-            pr_number = pr_result.get("number")
-            if pr_number:
-                logger.info(f"Adding comment to PR #{pr_number}")
-                
-                comment = f"This PR was created automatically by BugFix AI to fix issue {ticket_id}\n\n"
-                comment += "All tests passed successfully."
-                
-                self.github_service.add_pr_comment(pr_number, comment)
-                
+            # Success!
             result["success"] = True
             result["pr_url"] = pr_result.get("url")
             
             return result
-            
         except Exception as e:
-            logger.error(f"Error handling GitHub PR: {str(e)}")
+            logger.error(f"Error creating GitHub PR: {str(e)}")
             result["error"] = str(e)
             return result
-
-    async def _update_jira(self, ticket_id: str, status: Optional[str], comment: str) -> bool:
-        """Update JIRA ticket with status and comment"""
-        try:
-            logger.info(f"Updating JIRA ticket {ticket_id}")
             
-            # Add comment to the ticket
-            comment_added = await self.jira_client.add_comment(ticket_id, comment)
-            
-            # Update status if provided
-            status_updated = True
-            if status:
-                status_updated = await self.jira_client.update_ticket(ticket_id, status, "")
-                
-            return comment_added and status_updated
-        except Exception as e:
-            logger.error(f"Error updating JIRA: {str(e)}")
-            return False
-    
-    def _create_update(self, message: str, update_type: str) -> Dict[str, Any]:
-        """Create a formatted update message"""
-        return {
-            "timestamp": self._get_timestamp(),
-            "message": message,
-            "type": update_type
-        }
-    
-    def _get_timestamp(self) -> str:
-        """Get current ISO timestamp"""
-        from datetime import datetime
-        return datetime.now().isoformat()
-    
-    def _create_mock_jira_client(self) -> object:
-        """Create a mock JIRA client when the real one isn't available"""
-        class MockJiraClient:
-            async def add_comment(self, ticket_id, comment):
-                logger.info(f"[MOCK] Would add comment to JIRA ticket {ticket_id}: {comment}")
-                return True
-                
-            async def update_ticket(self, ticket_id, status, description):
-                logger.info(f"[MOCK] Would update JIRA ticket {ticket_id} to status {status}")
-                return True
-                
-        return MockJiraClient()
-        
-    def _create_mock_github_service(self) -> object:
-        """Create a mock GitHub service when the real one isn't available"""
-        class MockGitHubService:
-            def create_fix_branch(self, ticket_id, base_branch="main"):
-                logger.info(f"[MOCK] Would create branch fix/{ticket_id} from {base_branch}")
-                return True, f"fix/{ticket_id}"
-                
-            def commit_bug_fix(self, branch_name, file_changes, ticket_id, commit_message):
-                logger.info(f"[MOCK] Would commit changes to branch {branch_name}")
-                return True
-                
-            def create_fix_pr(self, branch_name, ticket_id, title, description):
-                logger.info(f"[MOCK] Would create PR for branch {branch_name}")
-                return {
-                    "url": f"https://github.com/example/repo/pull/123-{ticket_id}",
-                    "number": 123
-                }
-                
-            def add_pr_comment(self, pr_number, comment):
-                logger.info(f"[MOCK] Would add comment to PR #{pr_number}")
-                return True
-                
-            def check_file_exists(self, file_path):
-                logger.info(f"[MOCK] Would check if file {file_path} exists")
-                return True
-                
-            def validate_patch(self, patch):
-                logger.info(f"[MOCK] Would validate patch")
-                return {"valid": True, "reasons": []}
-                
-        return MockGitHubService()
+    # ... keep existing code for _update_jira, _create_mock_jira_client, _create_mock_github_service, _create_update, _get_timestamp methods
