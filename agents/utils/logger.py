@@ -4,12 +4,7 @@ import os
 from datetime import datetime
 import traceback
 import sys
-
-# Add the parent directory to sys.path to allow importing backend modules
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
-# Now import from backend package
-from backend.log_utils import GitHubOperationError
+import importlib.util
 
 class Logger:
     """Enhanced logging utility for agents"""
@@ -116,3 +111,22 @@ class Logger:
             self.logger.error(f"{message}\n{traceback.format_exc()}")
         else:
             self.logger.error(message)
+
+# Define a custom error class directly in the logger module to remove the dependency on backend
+class GitHubOperationError(Exception):
+    """Custom exception for GitHub operation errors with metadata"""
+    
+    def __init__(self, message: str, operation: str, metadata: Optional[Dict[str, Any]] = None, 
+                 original_exception: Optional[Exception] = None, error_code: str = "GITHUB_ERROR"):
+        self.message = message
+        self.operation = operation
+        self.metadata = metadata or {}
+        self.original_exception = original_exception
+        self.error_code = error_code
+        
+        # Construct a detailed message
+        detailed_message = f"GitHub {operation} error: {message}"
+        if original_exception:
+            detailed_message += f" (Original error: {str(original_exception)})"
+            
+        super().__init__(detailed_message)

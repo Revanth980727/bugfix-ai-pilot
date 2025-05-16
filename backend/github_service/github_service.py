@@ -1,4 +1,3 @@
-
 import os
 import logging
 import json
@@ -19,7 +18,7 @@ from .utils import (
     validate_file_changes,
     prepare_response_metadata
 )
-from ..log_utils import (
+from backend.log_utils import (
     log_operation_attempt,
     log_operation_result,
     create_structured_error,
@@ -874,5 +873,3 @@ class GitHubService:
             # In case of error, assume changes exist but mark verification as uncertain
             verification_details["uncertain"] = True
             return True, verification_details
-    
-    # ... keep existing code (PR creation and comment functionality)
