@@ -65,3 +65,11 @@ def is_test_mode():
 def is_debug_mode():
     """Check if running in debug mode."""
     return DEBUG_MODE
+
+# Export explicit repo string for consistent usage
+def get_repo_string():
+    """Get the repository string in 'owner/name' format."""
+    if not GITHUB_REPO_OWNER or not GITHUB_REPO_NAME:
+        logger.warning("Cannot create repo string - owner or name missing from environment")
+        return None
+    return f"{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"

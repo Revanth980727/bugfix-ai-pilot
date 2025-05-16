@@ -207,8 +207,16 @@ export function useCommunicatorAgent() {
           clearInterval(interval);
           setStatus(isEarlyEscalation || (attemptCount && maxAttempts && attemptCount >= maxAttempts) ? 'escalated' : 'success');
           setUpdates(mockUpdates);
-          if (mockResult) {
+          if (mockResult && (!mockResult.prUrl || !mockResult.prUrl.includes('org/repo/pull') || mockResult.prUrl.match(/org\/repo\/pull\/\d+/))) {
+            // Only set the result if it's a valid PR URL or doesn't contain placeholder values
             setResult(mockResult);
+          } else if (mockResult) {
+            // Handle case with placeholder PR URL - replace with more descriptive message
+            const updatedResult = {
+              ...mockResult,
+              prUrl: mockResult.prUrl?.includes('org/repo/pull') ? undefined : mockResult.prUrl
+            };
+            setResult(updatedResult);
           }
           onComplete();
           return 100;
