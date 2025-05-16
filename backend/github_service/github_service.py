@@ -18,7 +18,7 @@ from .utils import (
     validate_file_changes,
     prepare_response_metadata
 )
-from backend.log_utils import (
+from .log_utils import (
     log_operation_attempt,
     log_operation_result,
     create_structured_error,

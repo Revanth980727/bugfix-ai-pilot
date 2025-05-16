@@ -1,10 +1,10 @@
-
 import logging
 import os
 from datetime import datetime
 import traceback
 import sys
 import importlib.util
+from typing import Dict, Any, Optional
 
 class Logger:
     """Enhanced logging utility for agents"""
