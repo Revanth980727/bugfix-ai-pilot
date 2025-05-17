@@ -40,6 +40,15 @@ def verify_config():
     if GITHUB_TOKEN == "your_github_token_here":
         logger.error("GITHUB_TOKEN contains a placeholder value. Please set a valid GitHub token in your .env file.")
         return False
+        
+    # Check if repo owner/name are placeholders
+    if GITHUB_REPO_OWNER == "your_github_username_or_org":
+        logger.error("GITHUB_REPO_OWNER contains a placeholder value. Please set a valid GitHub username or organization in your .env file.")
+        return False
+        
+    if GITHUB_REPO_NAME == "your_repository_name":
+        logger.error("GITHUB_REPO_NAME contains a placeholder value. Please set a valid repository name in your .env file.")
+        return False
 
     logger.info("GitHub configuration validated successfully")
     if DEBUG_MODE:

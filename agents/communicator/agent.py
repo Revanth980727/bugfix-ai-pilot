@@ -37,18 +37,17 @@ github_service = None
 try:
     # First try to import directly from the github_service package
     from backend.github_service.github_service import GitHubService
-    github_service = GitHubService()
-    logger.info("Successfully imported GitHubService from backend package")
-    
-    # Verify configuration
     from backend.github_service.config import verify_config, get_repo_info, is_test_mode
     
+    # Verify configuration before instantiating the service
     if verify_config():
         repo_info = get_repo_info()
         logger.info(f"GitHub configuration verified: {repo_info['owner']}/{repo_info['name']}")
+        github_service = GitHubService()
+        logger.info("Successfully initialized GitHubService from backend package")
     else:
-        logger.error("GitHub configuration verification failed")
-        # Don't create a mock if verification fails - let it error out
+        logger.error("GitHub configuration verification failed - cannot initialize service")
+        # Don't create a mock if verification fails
 except ImportError as e:
     logger.warning(f"Error importing GitHub service directly: {str(e)}")
     
@@ -174,6 +173,11 @@ async def deploy_fix(request: DeployRequest):
                     detail="Repository not provided and GITHUB_REPO_OWNER/GITHUB_REPO_NAME not set in environment"
                 )
     
+    # Log detailed information about the repository
+    logger.info(f"Repository info - Name: {repository}")
+    logger.info(f"Environment variables - GITHUB_REPO_OWNER: {os.environ.get('GITHUB_REPO_OWNER')}, "
+               f"GITHUB_REPO_NAME: {os.environ.get('GITHUB_REPO_NAME')}")
+    
     try:
         # Validate the diffs before proceeding
         all_diffs_valid = await validate_diffs(request.diffs)
@@ -236,8 +240,8 @@ async def deploy_fix(request: DeployRequest):
                 
                 # Log the actual diff content for debugging in debug mode
                 if DEBUG_MODE:
-                    for diff in request.diffs:
-                        logger.debug(f"Diff for {diff.filename}: {diff.diff[:100]}...")
+                    for i, diff in enumerate(request.diffs[:2]):  # Log just first 2 diffs to avoid flooding logs
+                        logger.debug(f"Diff {i} for {diff.filename}: {diff.diff[:100]}...")
                 
                 # Commit the changes
                 try:
@@ -300,6 +304,12 @@ async def deploy_fix(request: DeployRequest):
                             if match:
                                 pr_number = int(match.group(1))
                         
+                        # Check if the PR URL is a placeholder
+                        if "org/repo" in pr_url:
+                            logger.error(f"PR URL contains placeholder value: {pr_url}")
+                            if not TEST_MODE:
+                                raise HTTPException(status_code=500, detail="PR URL contains placeholder value")
+                        
                         logger.info(f"PR created at: {pr_url} with number {pr_number}")
                 except Exception as e:
                     logger.error(f"Error creating PR: {str(e)}")
@@ -330,10 +340,15 @@ async def deploy_fix(request: DeployRequest):
                 # Format the diffs for the commit
                 file_changes = []
                 for diff in request.diffs:
-                    file_changes.append({
-                        "filename": diff.filename,
-                        "content": diff.diff
-                    })
+                    # Log detailed info about each diff
+                    logger.debug(f"Processing diff for {diff.filename}, length: {len(diff.diff)}")
+                    if diff.diff and len(diff.diff) > 0:
+                        file_changes.append({
+                            "filename": diff.filename,
+                            "content": diff.diff
+                        })
+                    else:
+                        logger.warning(f"Empty diff content for file {diff.filename} - skipping")
                 
                 # Log the diff details for debugging
                 if DEBUG_MODE:
@@ -379,6 +394,11 @@ async def deploy_fix(request: DeployRequest):
                         pr_number = int(match.group(1))
                     else:
                         pr_number = None
+                
+                # Check if the PR URL is a placeholder
+                if "org/repo" in pr_url and not TEST_MODE:
+                    logger.error(f"PR URL contains placeholder value: {pr_url}")
+                    raise HTTPException(status_code=500, detail="PR URL contains placeholder value")
                 
                 logger.info(f"PR created at: {pr_url}")
             except Exception as e:
@@ -439,28 +459,35 @@ async def validate_diffs(diffs: List[FileDiff]) -> bool:
         logger.error("No diffs provided")
         return False
         
+    valid_diffs = 0
     for diff in diffs:
         if not diff.filename:
             logger.error("Diff missing filename")
-            return False
+            continue
             
         if not diff.diff or diff.diff.strip() == "":
             logger.error(f"Empty diff for file {diff.filename}")
-            return False
+            continue
             
         # Validate diff format - should contain unified diff markers
-        if not ("@@" in diff.diff and (diff.diff.startswith("--- ") or diff.diff.startswith("diff --git"))):
+        has_markers = "@@" in diff.diff or diff.diff.startswith("--- ") or diff.diff.startswith("diff --git")
+        logger.debug(f"Diff for {diff.filename}: length={len(diff.diff)}, has_markers={has_markers}")
+            
+        if not has_markers:
             logger.warning(f"Diff for {diff.filename} doesn't appear to be in unified format")
             
             # Log the actual content for debugging
             if DEBUG_MODE:
                 logger.debug(f"Invalid diff content: {diff.diff[:100]}...")
-            
-            # Don't reject entirely - might be a raw replacement diff
-            # But do log the issue
+        
+        valid_diffs += 1
     
-    logger.info(f"All {len(diffs)} diffs validated successfully")
-    return True
+    if valid_diffs > 0:
+        logger.info(f"Validated {valid_diffs} of {len(diffs)} diffs successfully")
+        return True
+    else:
+        logger.error("No valid diffs found")
+        return False
 
 async def post_pr_comment_with_service(pr_number: int, comment: str) -> bool:
     """Post a comment to a GitHub PR using the GitHub service"""

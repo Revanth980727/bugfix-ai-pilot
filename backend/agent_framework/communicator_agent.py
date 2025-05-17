@@ -45,9 +45,16 @@ class CommunicatorAgent:
         try:
             from backend.github_service.github_service import GitHubService
             self.github_service = GitHubService()
-            logger.info("GitHub service initialized successfully")
-        except ImportError:
-            logger.warning("GitHub service could not be imported - will mock GitHub interactions")
+            
+            # Check if config is valid (not using placeholders)
+            from backend.github_service.config import verify_config
+            if verify_config():
+                logger.info("GitHub service initialized successfully with valid configuration")
+            else:
+                logger.error("GitHub service initialized, but configuration is invalid")
+                raise ValueError("Invalid GitHub configuration - using placeholders")
+        except ImportError as e:
+            logger.warning(f"GitHub service could not be imported - will mock GitHub interactions: {e}")
             self.github_service = self._create_mock_github_service()
         except Exception as e:
             logger.error(f"Error initializing GitHub service: {str(e)}")
@@ -65,6 +72,11 @@ class CommunicatorAgent:
         except Exception as e:
             logger.error(f"Error initializing patch validator: {str(e)}")
             self.patch_validator = None
+            
+        # Check test mode flag
+        self.test_mode = os.environ.get("TEST_MODE", "False").lower() == "true"
+        if self.test_mode:
+            logger.warning("Running in TEST_MODE - using mock implementations")
 
     async def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -461,21 +473,48 @@ class CommunicatorAgent:
         patched_files = input_data.get("patched_files", [])
         
         # Log the patch data format for debugging
-        logger.info(f"Patch data formats - patches list: {bool(patches)}, patch_content: {bool(patch_content)}, patched_files: {len(patched_files) if patched_files else 0}")
+        logger.info(f"Patch data formats - patches list: {bool(patches) and len(patches) > 0}, "
+                   f"patch_content: {bool(patch_content) and len(patch_content.strip()) > 0}, "
+                   f"patched_files: {len(patched_files) if patched_files else 0}")
+        
+        if patches:
+            logger.debug(f"Found {len(patches)} patches")
+            for i, patch in enumerate(patches[:2]):  # Log first few patches
+                logger.debug(f"Patch {i}: file={patch.get('file_path', 'unknown')}, "
+                           f"diff_length={len(patch.get('diff', ''))}")
+        
+        if patch_content:
+            logger.debug(f"Patch content length: {len(patch_content)}")
+            logger.debug(f"First 100 chars of patch: {patch_content[:100]}")
+            
+        if patched_files:
+            logger.debug(f"Patched files: {patched_files}")
         
         # If we have a developer result, try to extract from there as well
         developer_result = input_data.get("developer_result", {})
         if developer_result and isinstance(developer_result, dict):
             # This might override existing values if both are present
             if not patches:
-                patches = developer_result.get("patches", [])
+                developer_patches = developer_result.get("patches", [])
+                if developer_patches:
+                    logger.info(f"Extracted {len(developer_patches)} patches from developer_result")
+                    patches = developer_patches
+            
             if not patch_content:
-                patch_content = developer_result.get("patch_content", "")
+                developer_patch_content = developer_result.get("patch_content", "")
+                if developer_patch_content and len(developer_patch_content.strip()) > 0:
+                    logger.info(f"Extracted patch_content from developer_result "
+                              f"(length: {len(developer_patch_content)})")
+                    patch_content = developer_patch_content
+            
             if not patched_files:
-                patched_files = developer_result.get("patched_files", [])
+                developer_patched_files = developer_result.get("patched_files", [])
+                if developer_patched_files and len(developer_patched_files) > 0:
+                    logger.info(f"Extracted {len(developer_patched_files)} patched_files from developer_result")
+                    patched_files = developer_patched_files
         
         # Convert patches list to patch_content and patched_files if needed
-        if patches and isinstance(patches, list) and (not patch_content or not patched_files):
+        if patches and isinstance(patches, list) and len(patches) > 0 and (not patch_content or not patched_files):
             file_changes = []
             extracted_file_paths = []
             
@@ -496,17 +535,56 @@ class CommunicatorAgent:
             # If we successfully extracted patches, use those instead
             if file_changes:
                 logger.info(f"Extracted {len(file_changes)} file changes from patches list")
-                if not patched_files:
+                if not patched_files or len(patched_files) == 0:
                     patched_files = extracted_file_paths
+                    logger.info(f"Created patched_files list with {len(patched_files)} entries")
         
         # Check if we have any valid patch data after all extraction attempts
-        has_patches = bool((patches and isinstance(patches, list)) or 
-                          (patch_content and isinstance(patch_content, str) and 
-                           patched_files and isinstance(patched_files, list)))
+        has_patches = False
         
+        # Check patches list
+        if patches and isinstance(patches, list) and len(patches) > 0:
+            valid_patches = [p for p in patches if isinstance(p, dict) and 
+                            p.get("file_path") and p.get("diff")]
+            if valid_patches:
+                has_patches = True
+                logger.info(f"Found {len(valid_patches)} valid patches in patch list")
+        
+        # Check patch_content + patched_files combination
+        if (patch_content and isinstance(patch_content, str) and len(patch_content.strip()) > 0 and
+            patched_files and isinstance(patched_files, list) and len(patched_files) > 0):
+            has_patches = True
+            logger.info(f"Found valid patch_content ({len(patch_content)} chars) and "
+                       f"patched_files ({len(patched_files)} files)")
+            
         if not has_patches:
-            logger.warning("No patches provided, cannot create PR")
-            result["error"] = "No patches provided"
+            logger.error("No valid patches provided after checking all possible formats")
+            result["error"] = "No valid patches provided"
+            
+            # Log the specific validation issues
+            if not patches and not patch_content:
+                logger.error("Both patches list and patch_content are empty")
+            elif patches and (not isinstance(patches, list) or len(patches) == 0):
+                logger.error(f"Patches is not a valid list or is empty: {type(patches)}")
+            elif patch_content and (not isinstance(patch_content, str) or len(patch_content.strip()) == 0):
+                logger.error("patch_content is not a valid string or is empty/whitespace")
+            elif not patched_files:
+                logger.error("patched_files is empty")
+            elif not isinstance(patched_files, list) or len(patched_files) == 0:
+                logger.error(f"patched_files is not a valid list or is empty: {type(patched_files)}")
+                
+            return result
+        
+        # If we're in test mode, warn that we'll use mocked PR creation
+        if self.test_mode:
+            logger.warning("TEST_MODE enabled - using mock PR creation")
+            # In test mode, create a placeholder PR URL
+            import datetime
+            pr_number = int(datetime.datetime.now().timestamp()) % 1000
+            mock_pr_url = f"https://github.com/test-org/test-repo/pull/{pr_number}"
+            result["success"] = True
+            result["pr_url"] = mock_pr_url
+            logger.info(f"Created mock PR URL for test mode: {mock_pr_url}")
             return result
         
         # 3. Try to find existing PR for this branch
@@ -522,19 +600,21 @@ class CommunicatorAgent:
             
         # 4. Create branch and PR
         # Create a branch for the fix
-        branch_created = self.github_service.create_fix_branch(ticket_id)
+        branch_created, actual_branch_name = self.github_service.create_fix_branch(ticket_id)
         if not branch_created:
             logger.error(f"Failed to create branch {branch_name}")
             result["error"] = "Failed to create branch"
             return result
         
+        # Use the actual branch name from the service
+        branch_name = actual_branch_name or branch_name
         logger.info(f"Branch created: {branch_name}")
         
         # Prepare file changes for commit
         file_changes = []
         
         # Handle the two different formats for patches
-        if patches:
+        if patches and isinstance(patches, list) and len(patches) > 0:
             # Format 1: List of patches with file_path and diff
             for patch in patches:
                 if isinstance(patch, dict):
@@ -549,7 +629,6 @@ class CommunicatorAgent:
         elif patch_content and patched_files:
             # Format 2: Single patch content with list of files
             # In this format, we need to distribute the patch content across files
-            # For now, we'll assume the patch content is already formatted for each file
             for file_path in patched_files:
                 file_changes.append({
                     "filename": file_path,
@@ -567,7 +646,8 @@ class CommunicatorAgent:
         if not commit_message.startswith(f"Fix {ticket_id}"):
             commit_message = f"Fix {ticket_id}: {commit_message}"
             
-        commit_success = self.github_service.commit_bug_fix(
+        logger.info(f"Committing {len(file_changes)} file changes to branch {branch_name}")
+        commit_success, commit_details = self.github_service.commit_bug_fix(
             branch_name, 
             file_changes,
             ticket_id,
@@ -575,7 +655,7 @@ class CommunicatorAgent:
         )
         
         if not commit_success:
-            logger.error("Failed to commit changes")
+            logger.error(f"Failed to commit changes: {commit_details}")
             result["error"] = "Failed to commit changes"
             return result
             
@@ -583,20 +663,59 @@ class CommunicatorAgent:
         pr_title = f"Fix {ticket_id}"
         pr_body = f"Automated bug fix for issue {ticket_id}"
         
-        pr_url = self.github_service.create_pull_request(
-            title=pr_title,
-            body=pr_body,
-            head_branch=branch_name
+        logger.info(f"Creating pull request for branch {branch_name}")
+        pr_result = self.github_service.create_fix_pr(
+            branch_name,
+            ticket_id,
+            pr_title,
+            pr_body
         )
         
-        if not pr_url:
-            logger.error("Failed to create pull request")
+        if not pr_result:
+            logger.error("Failed to create pull request - PR result is None or empty")
             result["error"] = "Failed to create pull request"
             return result
+        
+        # Handle different return types from github_service
+        if isinstance(pr_result, dict):
+            pr_url = pr_result.get('url')
+            logger.info(f"PR created: {pr_url}")
             
-        logger.info(f"PR created: {pr_url}")
-        result["success"] = True
-        result["pr_url"] = pr_url
+            # Validate PR URL - shouldn't contain placeholders
+            if pr_url and not ("org/repo" in pr_url or "test-org/test-repo" in pr_url):
+                result["success"] = True
+                result["pr_url"] = pr_url
+            else:
+                logger.error(f"Created PR URL contains placeholder values: {pr_url}")
+                result["error"] = "PR URL contains placeholder values"
+                result["pr_url"] = None
+        elif isinstance(pr_result, tuple) and len(pr_result) > 0:
+            pr_url = pr_result[0]
+            logger.info(f"PR created: {pr_url}")
+            
+            # Validate PR URL
+            if pr_url and not ("org/repo" in pr_url or "test-org/test-repo" in pr_url):
+                result["success"] = True
+                result["pr_url"] = pr_url
+            else:
+                logger.error(f"Created PR URL contains placeholder values: {pr_url}")
+                result["error"] = "PR URL contains placeholder values"
+                result["pr_url"] = None
+        elif isinstance(pr_result, str):
+            pr_url = pr_result
+            logger.info(f"PR created: {pr_url}")
+            
+            # Validate PR URL
+            if pr_url and not ("org/repo" in pr_url or "test-org/test-repo" in pr_url):
+                result["success"] = True
+                result["pr_url"] = pr_url
+            else:
+                logger.error(f"Created PR URL contains placeholder values: {pr_url}")
+                result["error"] = "PR URL contains placeholder values"
+                result["pr_url"] = None
+        else:
+            logger.error(f"Unexpected PR result type: {type(pr_result)}")
+            result["error"] = "Unexpected PR result type"
         
         return result
     
@@ -604,10 +723,10 @@ class CommunicatorAgent:
         """Update JIRA ticket with new status and comment"""
         try:
             # Add the comment
-            self.jira_client.add_comment(ticket_id, comment)
+            await self.jira_client.add_comment(ticket_id, comment)
             
             # Update the status
-            self.jira_client.update_ticket(ticket_id, status, comment)
+            await self.jira_client.update_ticket(ticket_id, status, comment)
             
             return True
         except Exception as e:
@@ -634,6 +753,7 @@ class CommunicatorAgent:
         from unittest.mock import AsyncMock, MagicMock
         
         mock_client = MagicMock()
+        # Use AsyncMock for async methods
         mock_client.update_ticket = AsyncMock(return_value=True)
         mock_client.add_comment = AsyncMock(return_value=True)
         
@@ -644,9 +764,10 @@ class CommunicatorAgent:
         from unittest.mock import MagicMock
         
         mock_service = MagicMock()
-        mock_service.create_fix_branch = MagicMock(return_value=True)
-        mock_service.commit_bug_fix = MagicMock(return_value=True)
-        mock_service.create_pull_request = MagicMock(return_value="https://github.com/org/repo/pull/123")
+        mock_service.create_fix_branch = MagicMock(return_value=(True, "fix/mock-ticket"))
+        mock_service.commit_bug_fix = MagicMock(return_value=(True, "Commit successful"))
+        mock_service.create_fix_pr = MagicMock(return_value={"url": "https://github.com/test-org/test-repo/pull/123", "number": 123})
         mock_service.find_pr_for_branch = MagicMock(return_value=None)
         
         return mock_service
+
