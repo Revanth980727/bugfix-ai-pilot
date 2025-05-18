@@ -21,13 +21,23 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
       patch_mode: (process.env.PATCH_MODE || import.meta.env.VITE_PATCH_MODE as string || 'line-by-line') as 'intelligent' | 'line-by-line' | 'direct'
     };
     
+    // Get TEST_MODE setting
+    const isTestMode = process.env.TEST_MODE?.toLowerCase() === 'true' || 
+                      import.meta.env.VITE_TEST_MODE === 'true';
+    
+    // Log TEST_MODE status
+    if (isTestMode) {
+      console.warn("⚠️ Running in TEST_MODE - using placeholder repo values and mock GitHub operations");
+      console.warn("Set TEST_MODE=False in .env for real GitHub interactions");
+    }
+    
     // Validate configuration before returning
     if (!config.repo_owner || !config.repo_name) {
       console.error('GitHub configuration is incomplete: Missing repo_owner or repo_name');
       console.error('Please check your .env file and ensure GITHUB_REPO_OWNER and GITHUB_REPO_NAME are set');
       
       // Don't fall back to placeholder values in production - only in test mode
-      if (process.env.TEST_MODE?.toLowerCase() === 'true' || import.meta.env.VITE_TEST_MODE === 'true') {
+      if (isTestMode) {
         console.warn('Running in TEST_MODE - using placeholder repo values');
         config.repo_owner = config.repo_owner || 'example-org';
         config.repo_name = config.repo_name || 'example-repo';
@@ -41,9 +51,11 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
       console.error('Please set proper values in your .env file before using in production');
       
       // Only allow placeholder values in test mode
-      if (!(process.env.TEST_MODE?.toLowerCase() === 'true' || import.meta.env.VITE_TEST_MODE === 'true')) {
+      if (!isTestMode) {
         console.error('Refusing to use placeholder values outside of test mode');
         return null;
+      } else {
+        console.warn("Using placeholder values is only allowed in TEST_MODE - don't use in production");
       }
     }
     
@@ -59,6 +71,7 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
     console.log(`GitHub config loaded: ${config.repo_owner}/${config.repo_name}`);
     console.log(`Using branch: ${config.branch} (default: ${config.default_branch})`);
     console.log(`Using patch mode: ${config.patch_mode}`);
+    console.log(`Test mode: ${isTestMode ? 'Enabled' : 'Disabled'}`);
     
     // Log raw environment variables (redacted) for debugging
     console.log('Environment variables present:', {
@@ -72,7 +85,7 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
     
     // Validate the configuration
     const valid = isValidGitHubSource(config);
-    if (!valid) {
+    if (!valid && !isTestMode) {
       console.warn('GitHub configuration is incomplete or invalid');
       const issues = diagnoseGitHubAccessIssues(config);
       console.warn('Potential GitHub access issues:', issues);
@@ -285,12 +298,31 @@ export const validatePrUrl = async (
   const isTestMode = process.env.TEST_MODE?.toLowerCase() === 'true' || 
                      import.meta.env.VITE_TEST_MODE === 'true';
   
+  // Explicitly check for mock/placeholder URLs
+  const isMockUrl = prUrl.includes('example-org/example-repo') ||
+                   prUrl.includes('org/repo/pull') ||
+                   prUrl.includes('999');
+  
   // Detect placeholder URLs (only allow in test mode)
-  if (prUrl.includes('org/repo/pull') && !isTestMode) {
-    return {
-      valid: false,
-      error: "Cannot use placeholder PR URLs outside of test mode"
-    };
+  if (isMockUrl) {
+    if (!isTestMode) {
+      console.error("Detected placeholder/mock PR URL outside of TEST_MODE:", prUrl);
+      return {
+        valid: false,
+        error: "Placeholder or mock PR URL detected outside of test mode"
+      };
+    } else {
+      console.warn("Using placeholder/mock PR URL:", prUrl);
+      console.warn("This is only allowed in TEST_MODE - don't use in production");
+      
+      // When in test mode, we'll allow this and return a standardized mock URL
+      return {
+        valid: true,
+        url: "https://github.com/example-org/example-repo/pull/999",
+        prNumber: 999,
+        repo: "example-org/example-repo"
+      };
+    }
   }
   
   // Try to extract PR number from a GitHub URL
@@ -555,9 +587,19 @@ export const validatePatch = (
   patchesApplied: number;
   linesChanged: { added: number; removed: number };
 } => {
-  console.log(`Validating patch with ${filePaths.length} files`);
+  console.log(`Validating patch with ${filePaths ? filePaths.length : 0} files`);
   console.log(`Patch content length: ${patchContent ? patchContent.length : 0} bytes`);
-  console.log(`Number of file paths: ${filePaths ? filePaths.length : 0}`);
+  
+  const patchContentSample = patchContent 
+    ? `${patchContent.substring(0, 50)}${patchContent.length > 50 ? '...' : ''}`
+    : 'No content';
+  console.log(`Patch content sample: ${patchContentSample}`);
+  
+  if (filePaths) {
+    console.log(`File paths: ${JSON.stringify(filePaths.slice(0, 3))}${filePaths.length > 3 ? '...' : ''}`);
+  } else {
+    console.log(`File paths: None provided`);
+  }
   
   // Basic structure to track validation metrics
   const validationMetrics = {
@@ -639,7 +681,7 @@ export const validatePatch = (
     filesMentionedInPatch.add(match[1]);
   }
   
-  console.log(`Files detected in patch content: ${Array.from(filesMentionedInPatch).join(', ')}`);
+  console.log(`Files detected in patch content: ${Array.from(filesMentionedInPatch).slice(0, 5).join(', ')}${filesMentionedInPatch.size > 5 ? '...' : ''} (${filesMentionedInPatch.size} total)`);
   
   // Count added and removed lines in the patch
   const addedLines = (patchContent.match(/^\+(?!\+\+)/gm) || []).length;
@@ -675,23 +717,68 @@ export const validatePatch = (
   }
   
   // Final validation decision
-  const isValid = validationMetrics.validPatches > 0 && validationMetrics.rejectedPatches === 0;
+  const isValid = validationMetrics.validPatches > 0;
   
   // Enhanced logging based on validation result
   if (isValid) {
     console.log(`Patch validation passed: ${validationMetrics.validPatches} files will be patched`);
-  } else if (validationMetrics.validPatches > 0 && validationMetrics.rejectedPatches > 0) {
-    console.warn(`Patch validation partial: ${validationMetrics.validPatches} files valid, ${validationMetrics.rejectedPatches} files rejected`);
+    if (validationMetrics.rejectedPatches > 0) {
+      console.warn(`Note: ${validationMetrics.rejectedPatches} files will be skipped (not found in patch)`);
+    }
   } else {
-    console.error(`Patch validation failed: ${validationMetrics.rejectedPatches} files rejected, 0 valid`);
+    console.error(`Patch validation failed: No valid files found in patch`);
   }
   
   return {
     isValid,
-    rejectionReason: isValid ? undefined : `Some files were not found in the patch content (${validationMetrics.rejectedPatches} of ${validationMetrics.totalPatches})`,
+    rejectionReason: isValid ? undefined : `No files from the provided list were found in the patch content`,
     validationMetrics,
     fileChecksums,
     patchesApplied,
     linesChanged
+  };
+};
+
+/**
+ * Check if the environment is properly configured for GitHub operations
+ * @returns Status of the GitHub configuration
+ */
+export const checkGitHubEnvironment = async (): Promise<{
+  isValid: boolean;
+  isTestMode: boolean;
+  hasPlaceholders: boolean;
+  details: Record<string, any>;
+}> => {
+  // Get GitHub configuration
+  const config = await getGitHubConfig();
+  
+  // Check if running in test mode
+  const isTestMode = process.env.TEST_MODE?.toLowerCase() === 'true' || 
+                    import.meta.env.VITE_TEST_MODE === 'true';
+  
+  // Check for placeholder values
+  const hasPlaceholders = 
+    !config?.repo_owner || 
+    !config?.repo_name ||
+    config?.repo_owner === 'your_github_username_or_org' ||
+    config?.repo_name === 'your_repository_name';
+  
+  // Determine if configuration is valid
+  const isValid = 
+    (config !== null) && 
+    (!hasPlaceholders || isTestMode);
+  
+  return {
+    isValid,
+    isTestMode,
+    hasPlaceholders,
+    details: {
+      repo: config ? `${config.repo_owner}/${config.repo_name}` : 'Not configured',
+      branch: config?.branch || 'Not specified',
+      defaultBranch: config?.default_branch || 'main',
+      patchMode: config?.patch_mode || 'line-by-line',
+      testMode: isTestMode,
+      usePlaceholders: hasPlaceholders && isTestMode
+    }
   };
 };

@@ -62,6 +62,13 @@ def verify_config():
         logger.error("GITHUB_REPO_NAME is an empty string. Please set a valid repository name in your .env file.")
         return False
 
+    # Explicitly check if we're in test mode and warn about it
+    if TEST_MODE:
+        logger.warning("⚠️ Running in TEST_MODE - using mock GitHub integration!")
+        logger.warning("Set TEST_MODE=False in .env for real GitHub interactions")
+    else:
+        logger.info("✅ Using real GitHub integration (TEST_MODE is off)")
+
     # Log configuration values for debugging
     logger.info("GitHub configuration validated successfully")
     if DEBUG_MODE:

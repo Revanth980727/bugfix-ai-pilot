@@ -1,3 +1,4 @@
+
 import os
 import sys
 import logging
@@ -35,6 +36,18 @@ class EnvironmentValidator:
         self.variables["MAX_RETRIES"] = int(os.getenv("MAX_RETRIES", "4"))
         self.variables["RETRY_DELAY_SECONDS"] = int(os.getenv("RETRY_DELAY_SECONDS", "5"))
         self.variables["LOG_LEVEL"] = os.getenv("LOG_LEVEL", "INFO")
+        
+        # Testing/debugging configuration
+        self.variables["TEST_MODE"] = os.getenv("TEST_MODE", "False").lower() == "true"
+        self.variables["DEBUG_MODE"] = os.getenv("DEBUG_MODE", "False").lower() == "true"
+        
+        # Log important configuration values
+        if self.variables["TEST_MODE"]:
+            self.logger.warning("⚠️ TEST_MODE is enabled - using mocked services!")
+            self.logger.warning("Set TEST_MODE=False in .env for real service interactions")
+        
+        if self.variables["DEBUG_MODE"]:
+            self.logger.info("Debug mode is enabled")
     
     def validate_environment(self, required_groups: List[str] = None) -> Tuple[bool, List[str]]:
         """
@@ -47,6 +60,7 @@ class EnvironmentValidator:
             Tuple of (is_valid, missing_variables)
         """
         missing_vars = []
+        placeholder_vars = []
         groups_to_check = required_groups or ["all"]
         
         # Define required variables by group
@@ -54,6 +68,17 @@ class EnvironmentValidator:
             "github": ["GITHUB_TOKEN", "GITHUB_REPO_OWNER", "GITHUB_REPO_NAME"],
             "jira": ["JIRA_API_TOKEN", "JIRA_USERNAME", "JIRA_URL"],
             "openai": ["OPENAI_API_KEY"]
+        }
+        
+        # Define placeholder values to check against
+        placeholders = {
+            "GITHUB_TOKEN": "your_github_token_here",
+            "GITHUB_REPO_OWNER": "your_github_username_or_org",
+            "GITHUB_REPO_NAME": "your_repository_name",
+            "JIRA_API_TOKEN": "your_jira_token_here",
+            "JIRA_USERNAME": "your_jira_email_here",
+            "JIRA_URL": "your_jira_url_here",
+            "OPENAI_API_KEY": "your_openai_api_key_here"
         }
         
         # Check all groups if 'all' is specified
@@ -67,14 +92,29 @@ class EnvironmentValidator:
                 continue
                 
             for var in requirements[group]:
+                # Check if variable is missing
                 if not self.variables.get(var):
                     missing_vars.append(var)
+                # Check if variable has placeholder value
+                elif var in placeholders and self.variables.get(var) == placeholders[var]:
+                    placeholder_vars.append(var)
+        
+        # Log results
+        if missing_vars:
+            self.logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        
+        if placeholder_vars and not self.variables.get("TEST_MODE", False):
+            self.logger.error(f"Placeholder values detected for: {', '.join(placeholder_vars)}")
+            self.logger.error("Please replace placeholder values with real credentials in .env file")
+            # If not in test mode, consider placeholder values as invalid
+            missing_vars.extend(placeholder_vars)
+        elif placeholder_vars:
+            self.logger.warning(f"Placeholder values detected for: {', '.join(placeholder_vars)}")
+            self.logger.warning("Running with placeholder values only works in TEST_MODE")
         
         is_valid = len(missing_vars) == 0
         
-        if not is_valid:
-            self.logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
-        else:
+        if is_valid:
             self.logger.info("All required environment variables are set")
         
         return is_valid, missing_vars
@@ -90,7 +130,8 @@ class EnvironmentValidator:
             "owner": self.variables.get("GITHUB_REPO_OWNER"),
             "repo": self.variables.get("GITHUB_REPO_NAME"),
             "default_branch": self.variables.get("GITHUB_DEFAULT_BRANCH"),
-            "use_default_branch_only": self.variables.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", False)
+            "use_default_branch_only": self.variables.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", False),
+            "test_mode": self.variables.get("TEST_MODE", False)
         }
     
     def get_jira_config(self) -> Dict[str, Any]:
@@ -123,3 +164,75 @@ def validate_required_config(groups: List[str] = None) -> bool:
 def get_env(key: str, default: Any = None) -> Any:
     """Get a configuration value by key with optional default"""
     return env_validator.get(key, default)
+
+# Function to check if we're in test mode
+def is_test_mode() -> bool:
+    """Check if the application is running in test mode"""
+    return env_validator.get("TEST_MODE", False)
+
+# Function to check if GitHub configuration is valid for real interactions
+def has_valid_github_config(allow_test_mode: bool = False) -> bool:
+    """
+    Check if GitHub configuration is valid for real interactions
+    
+    Args:
+        allow_test_mode: If True, test mode is considered valid
+        
+    Returns:
+        True if configuration is valid, False otherwise
+    """
+    # If test mode is allowed, don't validate as strictly
+    if allow_test_mode and env_validator.get("TEST_MODE", False):
+        return True
+        
+    # Check for required variables
+    token = env_validator.get("GITHUB_TOKEN")
+    owner = env_validator.get("GITHUB_REPO_OWNER")
+    repo = env_validator.get("GITHUB_REPO_NAME")
+    
+    # Check if variables are present
+    if not (token and owner and repo):
+        return False
+        
+    # Check if variables contain placeholder values
+    if token == "your_github_token_here":
+        return False
+        
+    if owner == "your_github_username_or_org":
+        return False
+        
+    if repo == "your_repository_name":
+        return False
+        
+    return True
+
+# Print debug function
+def print_environment_summary():
+    """Print a summary of the environment configuration"""
+    print("\n===== Environment Configuration =====")
+    
+    # GitHub configuration
+    print("GitHub Configuration:")
+    github_config = env_validator.get_github_config()
+    print(f"  Repository: {github_config['owner']}/{github_config['repo']}")
+    print(f"  Default Branch: {github_config['default_branch']}")
+    print(f"  Token Present: {'Yes' if github_config['token'] else 'No'}")
+    print(f"  Use Default Branch Only: {'Yes' if github_config['use_default_branch_only'] else 'No'}")
+    print(f"  Test Mode: {'Yes' if github_config['test_mode'] else 'No'}")
+    
+    # JIRA configuration
+    print("\nJIRA Configuration:")
+    jira_config = env_validator.get_jira_config()
+    print(f"  URL: {jira_config['url'] or 'Not set'}")
+    print(f"  Username Present: {'Yes' if jira_config['username'] else 'No'}")
+    print(f"  Token Present: {'Yes' if jira_config['token'] else 'No'}")
+    print(f"  Project Key: {jira_config['project_key'] or 'Not set'}")
+    print(f"  Poll Interval: {jira_config['poll_interval']} seconds")
+    
+    # Other configuration
+    print("\nOther Configuration:")
+    print(f"  TEST_MODE: {'Enabled' if env_validator.get('TEST_MODE') else 'Disabled'}")
+    print(f"  DEBUG_MODE: {'Enabled' if env_validator.get('DEBUG_MODE') else 'Disabled'}")
+    print(f"  MAX_RETRIES: {env_validator.get('MAX_RETRIES')}")
+    print(f"  LOG_LEVEL: {env_validator.get('LOG_LEVEL')}")
+    print("===================================\n")

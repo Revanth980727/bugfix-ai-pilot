@@ -56,6 +56,7 @@ export function useCommunicatorAgent() {
         patchesApplied?: number;
         linesChanged?: { added: number; removed: number };
       };
+      isTestMode?: boolean;
     }
   ) => {
     setStatus('working');
@@ -67,7 +68,8 @@ export function useCommunicatorAgent() {
       retryCount: attemptCount,
       maxRetries: maxAttempts,
       analytics,
-      patchValidation
+      patchValidation,
+      isTestMode
     } = options || {};
     
     if (isEarlyEscalation) {
@@ -108,6 +110,17 @@ export function useCommunicatorAgent() {
       };
       
       enhancedMockUpdates = [retryUpdate, ...enhancedMockUpdates];
+    }
+    
+    // Add test mode warning if applicable
+    if (isTestMode) {
+      const testModeUpdate: Update = {
+        timestamp: new Date().toISOString(),
+        message: `⚠️ Running in TEST_MODE - GitHub operations are simulated. Set TEST_MODE=False in .env for real GitHub interactions.`,
+        type: 'system'
+      };
+      
+      enhancedMockUpdates = [testModeUpdate, ...enhancedMockUpdates];
     }
     
     // Add detailed patch validation update if applicable
@@ -186,6 +199,20 @@ export function useCommunicatorAgent() {
         
         enhancedMockUpdates = [emptyPatchUpdate, ...enhancedMockUpdates];
       }
+      
+      // Add GitHub configuration warnings if mock PR URL detected
+      if (mockResult?.prUrl && 
+          (mockResult.prUrl.includes('example-org') || 
+           mockResult.prUrl.includes('org/repo') || 
+           mockResult.prUrl.includes('999'))) {
+        const mockPrUpdate: Update = {
+          timestamp: new Date().toISOString(),
+          message: `⚠️ Using mock PR URL due to ${isTestMode ? 'TEST_MODE' : 'invalid GitHub configuration'}: ${mockResult.prUrl}`,
+          type: 'github'
+        };
+        
+        enhancedMockUpdates = [mockPrUpdate, ...enhancedMockUpdates];
+      }
     }
     
     // Add escalation update if applicable
@@ -237,17 +264,25 @@ export function useCommunicatorAgent() {
           clearInterval(interval);
           setStatus(isEarlyEscalation || (attemptCount && maxAttempts && attemptCount >= maxAttempts) ? 'escalated' : 'success');
           setUpdates(enhancedMockUpdates);
-          if (mockResult && (!mockResult.prUrl || !mockResult.prUrl.includes('org/repo/pull') || mockResult.prUrl.match(/org\/repo\/pull\/\d+/))) {
-            // Only set the result if it's a valid PR URL or doesn't contain placeholder values
-            setResult(mockResult);
-          } else if (mockResult) {
-            // Handle case with placeholder PR URL - replace with more descriptive message
-            const updatedResult = {
-              ...mockResult,
-              prUrl: mockResult.prUrl?.includes('org/repo/pull') ? undefined : mockResult.prUrl
-            };
-            setResult(updatedResult);
+          
+          // Validate the PR URL before setting it
+          let finalResult = { ...mockResult };
+          if (mockResult?.prUrl) {
+            const isPrMocked = mockResult.prUrl.includes('example-org/example-repo') || 
+                              mockResult.prUrl.includes('org/repo/pull') ||
+                              mockResult.prUrl.includes('/pull/999');
+                              
+            // Only set the PR URL if it's a valid URL or we're in test mode
+            if (!isPrMocked || isTestMode) {
+              finalResult.prUrl = mockResult.prUrl;
+            } else {
+              // In production mode, don't use mock URLs
+              console.error(`Not using placeholder PR URL in production mode: ${mockResult.prUrl}`);
+              finalResult.prUrl = undefined;
+            }
           }
+          
+          setResult(finalResult);
           onComplete();
           return 100;
         }

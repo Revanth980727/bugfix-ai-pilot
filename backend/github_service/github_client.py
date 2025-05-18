@@ -9,7 +9,7 @@ import logging
 class GitHubClient:
     """Client for interacting with the GitHub API"""
     
-    def __init__(self):
+    def __init__(self, force_real=False):
         """Initialize GitHub client with environment variables"""
         self.logger = logging.getLogger("github-client")
         
@@ -20,10 +20,49 @@ class GitHubClient:
         self.default_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
         self.use_default_branch_only = os.environ.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", "False").lower() == "true"
         
+        # Check for test mode
+        self.test_mode = os.environ.get("TEST_MODE", "False").lower() == "true"
+        
+        # If force_real is True, we should not use test mode regardless of env setting
+        if force_real:
+            self.test_mode = False
+            self.logger.info("Forcing real GitHub interaction (test mode disabled)")
+        
+        # Validate configuration before proceeding
         if not all([self.github_token, self.repo_owner, self.repo_name]):
             self.logger.error("Missing required GitHub environment variables")
-            raise EnvironmentError(
-                "Missing GitHub credentials. Please set GITHUB_TOKEN, GITHUB_REPO_OWNER and GITHUB_REPO_NAME environment variables."
+            error_details = {
+                "token_present": bool(self.github_token),
+                "owner_present": bool(self.repo_owner),
+                "repo_present": bool(self.repo_name)
+            }
+            self.logger.error(f"Configuration details: {error_details}")
+            
+            if not self.test_mode:
+                raise EnvironmentError(
+                    "Missing GitHub credentials. Please set GITHUB_TOKEN, GITHUB_REPO_OWNER and GITHUB_REPO_NAME environment variables."
+                )
+            else:
+                self.logger.warning("⚠️ Running in TEST_MODE with incomplete GitHub configuration!")
+        
+        # Check for placeholder values
+        placeholder_found = False
+        if self.github_token == "your_github_token_here":
+            self.logger.error("GITHUB_TOKEN contains a placeholder value")
+            placeholder_found = True
+            
+        if self.repo_owner == "your_github_username_or_org":
+            self.logger.error("GITHUB_REPO_OWNER contains a placeholder value")
+            placeholder_found = True
+            
+        if self.repo_name == "your_repository_name":
+            self.logger.error("GITHUB_REPO_NAME contains a placeholder value")
+            placeholder_found = True
+            
+        # Fail on placeholder values if not in test mode
+        if placeholder_found and not self.test_mode:
+            raise ValueError(
+                "GitHub configuration contains placeholder values. Please set valid values in your .env file."
             )
             
         # Set up headers
@@ -42,6 +81,9 @@ class GitHubClient:
         self.logger.info(f"Default branch: {self.default_branch}")
         self.logger.info(f"Use default branch only: {self.use_default_branch_only}")
         
+        if self.test_mode:
+            self.logger.warning("⚠️ Running in TEST_MODE - all GitHub operations will be simulated!")
+        
     def check_branch_exists(self, branch_name: str) -> bool:
         """
         Check if a branch exists in the repository
@@ -52,6 +94,11 @@ class GitHubClient:
         Returns:
             bool: True if the branch exists, False otherwise
         """
+        # In test mode, simulate success
+        if self.test_mode:
+            self.logger.info(f"[TEST MODE] Simulating branch check for {branch_name}")
+            return True
+            
         url = f"{self.repo_api_url}/git/refs/heads/{branch_name}"
         
         self.logger.info(f"Checking if branch {branch_name} exists")
@@ -82,6 +129,11 @@ class GitHubClient:
         # Check if we should only use the default branch
         if self.use_default_branch_only:
             self.logger.info(f"Skipping branch creation for {branch_name} - configured to use default branch only ({self.default_branch})")
+            return True
+            
+        # In test mode, simulate success
+        if self.test_mode:
+            self.logger.info(f"[TEST MODE] Simulating branch creation: {branch_name}")
             return True
         
         if not from_branch:
@@ -147,16 +199,17 @@ class GitHubClient:
             self.logger.info(f"Using default branch {self.default_branch} as head branch instead of {head_branch}")
             head_branch = self.default_branch
             
-            # Only create a mock PR if in test mode
-            if os.environ.get("GITHUB_TEST_MODE", "false").lower() == "true":
-                self.logger.info("Test mode enabled - creating a mock PR")
-                mock_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/tree/{self.default_branch}"
-                mock_pr_number = 1  # Mock PR number for simulation
-                return mock_url, mock_pr_number
-            else:
-                # Skip PR creation when we're only using the default branch but not in test mode
-                self.logger.info("Skipping PR creation since we're only using the default branch")
-                return f"https://github.com/{self.repo_owner}/{self.repo_name}/tree/{self.default_branch}", 0
+        # If in test mode, return a mock PR URL and PR number
+        if self.test_mode:
+            self.logger.warning("⚠️ TEST MODE: Creating mock PR instead of real GitHub PR")
+            mock_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/pull/999"
+            mock_pr_number = 999
+            return mock_url, mock_pr_number
+            
+        # Only create a mock PR if configured to use only default branch (no need for real PR)
+        if self.use_default_branch_only:
+            self.logger.info("Skipping PR creation since we're only using the default branch")
+            return f"https://github.com/{self.repo_owner}/{self.repo_name}/tree/{self.default_branch}", 0
             
         url = f"{self.repo_api_url}/pulls"
         
@@ -211,6 +264,11 @@ class GitHubClient:
         Returns:
             Success status (True/False)
         """
+        # In test mode, simulate success
+        if self.test_mode:
+            self.logger.warning(f"[TEST MODE] Simulating file commit for {file_path} to branch {branch_name}")
+            return True
+
         # Type safety: ensure content is a string before encoding
         if not isinstance(content, str):
             if isinstance(content, dict):
@@ -287,6 +345,11 @@ class GitHubClient:
         Returns:
             The content of the file if successful, None otherwise
         """
+        # In test mode, return mock content
+        if self.test_mode:
+            self.logger.warning(f"[TEST MODE] Returning mock content for file {file_path}")
+            return f"// Mock content for {file_path} (TEST_MODE is enabled)\n// Set TEST_MODE=False in .env for real GitHub interactions"
+            
         if not branch:
             branch = self.default_branch
             
@@ -312,3 +375,47 @@ class GitHubClient:
         except Exception as e:
             self.logger.error(f"Failed to decode file content: {str(e)}")
             return None
+
+    # Add a method to check if branches have differences
+    def check_branches_have_diff(self, head_branch: str, base_branch: str = None) -> bool:
+        """
+        Check if there are differences between two branches
+        
+        Args:
+            head_branch: Source branch
+            base_branch: Target branch (defaults to default_branch)
+            
+        Returns:
+            True if differences exist, False otherwise
+        """
+        if self.test_mode:
+            self.logger.warning(f"[TEST MODE] Simulating branch diff check between {head_branch} and {base_branch or self.default_branch}")
+            return True
+            
+        if not base_branch:
+            base_branch = self.default_branch
+            
+        # If using only default branch, there are no diffs
+        if self.use_default_branch_only and head_branch == base_branch:
+            self.logger.info(f"No diffs when comparing the same branch {head_branch}")
+            return False
+            
+        url = f"{self.repo_api_url}/compare/{base_branch}...{head_branch}"
+        
+        self.logger.info(f"Checking for differences between {base_branch} and {head_branch}")
+        response = requests.get(url, headers=self.headers)
+        
+        if response.status_code != 200:
+            self.logger.error(f"Failed to compare branches: {response.status_code}, {response.text}")
+            return False
+            
+        compare_data = response.json()
+        has_commits = compare_data.get("total_commits", 0) > 0
+        has_files = len(compare_data.get("files", [])) > 0
+        
+        if has_commits and has_files:
+            self.logger.info(f"Found differences between {base_branch} and {head_branch}: {compare_data.get('total_commits')} commits, {len(compare_data.get('files', []))} files")
+            return True
+        else:
+            self.logger.warning(f"No meaningful differences found between {base_branch} and {head_branch}")
+            return False
