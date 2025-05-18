@@ -50,6 +50,15 @@ def verify_config():
         logger.error("GITHUB_REPO_NAME contains a placeholder value. Please set a valid repository name in your .env file.")
         return False
 
+    # Check if repo owner/name are empty strings
+    if GITHUB_REPO_OWNER == "":
+        logger.error("GITHUB_REPO_OWNER is an empty string. Please set a valid GitHub username or organization in your .env file.")
+        return False
+        
+    if GITHUB_REPO_NAME == "":
+        logger.error("GITHUB_REPO_NAME is an empty string. Please set a valid repository name in your .env file.")
+        return False
+
     logger.info("GitHub configuration validated successfully")
     if DEBUG_MODE:
         logger.info(f"Owner: {GITHUB_REPO_OWNER}, Repo: {GITHUB_REPO_NAME}, Branch: {GITHUB_DEFAULT_BRANCH}")

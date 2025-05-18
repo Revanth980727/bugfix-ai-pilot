@@ -179,10 +179,15 @@ async def deploy_fix(request: DeployRequest):
                f"GITHUB_REPO_NAME: {os.environ.get('GITHUB_REPO_NAME')}")
     
     try:
-        # Validate the diffs before proceeding
-        all_diffs_valid = await validate_diffs(request.diffs)
-        if not all_diffs_valid:
-            raise HTTPException(status_code=400, detail="Some diffs are invalid or empty")
+        # Validate the diffs before proceeding - IMPROVED VALIDATION
+        valid_diffs, validation_details = await validate_diffs(request.diffs)
+        
+        # Log detailed validation results
+        logger.info(f"Patch validation results: {validation_details}")
+        
+        if not valid_diffs:
+            logger.error(f"Invalid diffs detected: {validation_details}")
+            raise HTTPException(status_code=400, detail=f"Invalid diffs: {validation_details}")
         
         # Check if we're using the GitHub service or github_utils
         if github_service:
@@ -231,10 +236,17 @@ async def deploy_fix(request: DeployRequest):
                 # Format the diffs for the commit
                 file_changes = []
                 for diff in request.diffs:
-                    file_changes.append({
-                        "filename": diff.filename,
-                        "content": diff.diff
-                    })
+                    if diff.diff and diff.diff.strip():  # Ensure diff is not empty or just whitespace
+                        file_changes.append({
+                            "filename": diff.filename,
+                            "content": diff.diff
+                        })
+                    else:
+                        logger.warning(f"Skipping empty diff for file {diff.filename}")
+                
+                if not file_changes:
+                    logger.error("No valid file changes to commit")
+                    raise HTTPException(status_code=400, detail="No valid file changes to commit")
                 
                 logger.info(f"Committing {len(file_changes)} file changes to branch {branch_name}")
                 
@@ -342,13 +354,18 @@ async def deploy_fix(request: DeployRequest):
                 for diff in request.diffs:
                     # Log detailed info about each diff
                     logger.debug(f"Processing diff for {diff.filename}, length: {len(diff.diff)}")
-                    if diff.diff and len(diff.diff) > 0:
+                    if diff.diff and len(diff.diff.strip()) > 0:
                         file_changes.append({
                             "filename": diff.filename,
                             "content": diff.diff
                         })
                     else:
                         logger.warning(f"Empty diff content for file {diff.filename} - skipping")
+                
+                # Ensure we have valid changes to commit
+                if not file_changes:
+                    logger.error("No valid file changes to commit after filtering")
+                    raise HTTPException(status_code=400, detail="No valid file changes to commit")
                 
                 # Log the diff details for debugging
                 if DEBUG_MODE:
@@ -453,41 +470,81 @@ async def deploy_fix(request: DeployRequest):
         logger.error(f"Error deploying fix for ticket {request.ticket_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error deploying fix: {str(e)}")
 
-async def validate_diffs(diffs: List[FileDiff]) -> bool:
-    """Validate diffs to ensure they're not empty or invalid"""
+async def validate_diffs(diffs: List[FileDiff]) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Improved validation of diffs to ensure they're not empty or invalid.
+    Returns a tuple with (is_valid, validation_details).
+    """
+    validation_details = {
+        "total_diffs": len(diffs),
+        "valid_diffs": 0,
+        "invalid_diffs": 0,
+        "empty_diffs": 0,
+        "whitespace_only_diffs": 0,
+        "missing_filenames": 0,
+        "diff_length_stats": [],
+        "has_unified_format": 0,
+        "invalid_reasons": []
+    }
+    
     if not diffs:
         logger.error("No diffs provided")
-        return False
+        validation_details["invalid_reasons"].append("No diffs provided")
+        return False, validation_details
         
-    valid_diffs = 0
     for diff in diffs:
+        # Check filename
         if not diff.filename:
             logger.error("Diff missing filename")
+            validation_details["missing_filenames"] += 1
+            validation_details["invalid_diffs"] += 1
+            validation_details["invalid_reasons"].append("Missing filename")
             continue
             
-        if not diff.diff or diff.diff.strip() == "":
+        # Check for empty diff
+        if not diff.diff:
             logger.error(f"Empty diff for file {diff.filename}")
+            validation_details["empty_diffs"] += 1
+            validation_details["invalid_diffs"] += 1
+            validation_details["invalid_reasons"].append(f"Empty diff for {diff.filename}")
+            continue
+            
+        # Check for whitespace-only diff
+        if diff.diff.strip() == "":
+            logger.error(f"Whitespace-only diff for file {diff.filename}")
+            validation_details["whitespace_only_diffs"] += 1
+            validation_details["invalid_diffs"] += 1
+            validation_details["invalid_reasons"].append(f"Whitespace-only diff for {diff.filename}")
             continue
             
         # Validate diff format - should contain unified diff markers
         has_markers = "@@" in diff.diff or diff.diff.startswith("--- ") or diff.diff.startswith("diff --git")
-        logger.debug(f"Diff for {diff.filename}: length={len(diff.diff)}, has_markers={has_markers}")
-            
-        if not has_markers:
+        
+        # Store statistics
+        diff_length = len(diff.diff)
+        validation_details["diff_length_stats"].append({
+            "filename": diff.filename,
+            "length": diff_length,
+            "has_markers": has_markers
+        })
+        
+        if has_markers:
+            validation_details["has_unified_format"] += 1
+        else:
             logger.warning(f"Diff for {diff.filename} doesn't appear to be in unified format")
             
             # Log the actual content for debugging
             if DEBUG_MODE:
-                logger.debug(f"Invalid diff content: {diff.diff[:100]}...")
+                logger.debug(f"Non-unified diff content for {diff.filename}: {diff.diff[:100]}...")
         
-        valid_diffs += 1
+        validation_details["valid_diffs"] += 1
     
-    if valid_diffs > 0:
-        logger.info(f"Validated {valid_diffs} of {len(diffs)} diffs successfully")
-        return True
-    else:
-        logger.error("No valid diffs found")
-        return False
+    is_valid = validation_details["valid_diffs"] > 0
+    
+    logger.info(f"Diff validation complete: {validation_details['valid_diffs']} valid, "
+               f"{validation_details['invalid_diffs']} invalid out of {validation_details['total_diffs']} total")
+    
+    return is_valid, validation_details
 
 async def post_pr_comment_with_service(pr_number: int, comment: str) -> bool:
     """Post a comment to a GitHub PR using the GitHub service"""
