@@ -34,6 +34,19 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
       }
     }
     
+    // Detect placeholder values and warn if they shouldn't be used
+    if (config.repo_owner === 'your_github_username_or_org' || 
+        config.repo_name === 'your_repository_name') {
+      console.error('GitHub configuration contains placeholder values');
+      console.error('Please set proper values in your .env file before using in production');
+      
+      // Only allow placeholder values in test mode
+      if (!(process.env.TEST_MODE?.toLowerCase() === 'true' || import.meta.env.VITE_TEST_MODE === 'true')) {
+        console.error('Refusing to use placeholder values outside of test mode');
+        return null;
+      }
+    }
+    
     // Set default branch name if not provided
     if (!config.branch) {
       const defaultBranchBase = config.default_branch || 'main';
@@ -78,6 +91,12 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
 export const generateDiff = (originalContent: string, modifiedContent: string, filename: string): string => {
   console.log(`Generating diff for file: ${filename}`);
   
+  // Quick check if there's actually a change
+  if (originalContent === modifiedContent) {
+    console.warn(`No changes detected for file ${filename} - content exactly matches`);
+    return '';
+  }
+  
   // Use a better diff generation approach
   const originalLines = originalContent.split('\n');
   const modifiedLines = modifiedContent.split('\n');
@@ -94,6 +113,11 @@ export const generateDiff = (originalContent: string, modifiedContent: string, f
   let inHunk = false;
   let oldLineNo = 1;
   let newLineNo = 1;
+  
+  // Track statistics for better logging
+  let addedLines = 0;
+  let removedLines = 0;
+  let modifiedHunks = 0;
   
   for (let i = 0; i < Math.max(originalLines.length, modifiedLines.length); i++) {
     const originalLine = i < originalLines.length ? originalLines[i] : null;
@@ -129,6 +153,7 @@ export const generateDiff = (originalContent: string, modifiedContent: string, f
         inHunk = true;
         oldLineNo = i + 1;
         newLineNo = i + 1;
+        modifiedHunks++;
       }
       
       // Handle line differences
@@ -138,14 +163,18 @@ export const generateDiff = (originalContent: string, modifiedContent: string, f
         currentHunk.push('+' + modifiedLine);
         oldLineNo++;
         newLineNo++;
+        removedLines++;
+        addedLines++;
       } else if (originalLine === null) {
         // Line was added
         currentHunk.push('+' + modifiedLine);
         newLineNo++;
+        addedLines++;
       } else if (modifiedLine === null) {
         // Line was removed
         currentHunk.push('-' + originalLine);
         oldLineNo++;
+        removedLines++;
       }
     }
     
@@ -168,11 +197,14 @@ export const generateDiff = (originalContent: string, modifiedContent: string, f
   }
   
   const finalDiff = diff.join('\n');
-  console.log(`Generated ${finalDiff.split('\n').length} lines of diff`);
+  
+  // Log detailed statistics about the diff for debugging
+  console.log(`Generated diff for ${filename}: ${finalDiff.split('\n').length} lines, ${modifiedHunks} hunks, +${addedLines}/-${removedLines} lines`);
   
   // Verify the diff is not empty
   if (!finalDiff.includes('@@') || finalDiff.split('\n').length <= 2) {
     console.warn('Generated diff appears to be empty or invalid');
+    return '';
   }
   
   return finalDiff;
@@ -524,10 +556,12 @@ export const validatePatch = (
   linesChanged: { added: number; removed: number };
 } => {
   console.log(`Validating patch with ${filePaths.length} files`);
+  console.log(`Patch content length: ${patchContent ? patchContent.length : 0} bytes`);
+  console.log(`Number of file paths: ${filePaths ? filePaths.length : 0}`);
   
   // Basic structure to track validation metrics
   const validationMetrics = {
-    totalPatches: filePaths.length,
+    totalPatches: filePaths ? filePaths.length : 0,
     validPatches: 0,
     rejectedPatches: 0,
     rejectionReasons: {} as Record<string, number>,
@@ -541,8 +575,9 @@ export const validatePatch = (
   
   // Simple check for empty patch content
   if (!patchContent || patchContent.trim() === '') {
-    validationMetrics.rejectedPatches = filePaths.length;
-    validationMetrics.rejectionReasons['empty_patch'] = filePaths.length;
+    validationMetrics.rejectedPatches = validationMetrics.totalPatches;
+    validationMetrics.rejectionReasons['empty_patch'] = validationMetrics.totalPatches;
+    console.error('Patch validation failed: Patch content is empty');
     return {
       isValid: false,
       rejectionReason: 'Patch content is empty',
@@ -553,10 +588,30 @@ export const validatePatch = (
     };
   }
   
+  // Check for empty or undefined file paths
+  if (!filePaths || !Array.isArray(filePaths) || filePaths.length === 0) {
+    console.error('Patch validation failed: No file paths provided');
+    return {
+      isValid: false,
+      rejectionReason: 'No file paths provided for patching',
+      validationMetrics: {
+        totalPatches: 0,
+        validPatches: 0,
+        rejectedPatches: 0,
+        rejectionReasons: { 'no_file_paths': 1 }
+      },
+      fileChecksums,
+      patchesApplied: 0,
+      linesChanged
+    };
+  }
+  
   // Check for valid diff format (looking for patch markers)
   if (!patchContent.includes('@@') || (!patchContent.includes('--- a/') && !patchContent.includes('diff --git'))) {
     validationMetrics.rejectedPatches = filePaths.length;
     validationMetrics.rejectionReasons['invalid_diff_format'] = filePaths.length;
+    console.error('Patch validation failed: Invalid diff format');
+    console.log(`Patch content first 100 chars: ${patchContent.substring(0, 100)}...`);
     return {
       isValid: false,
       rejectionReason: 'Patch content is not in a valid unified diff format',
@@ -570,42 +625,70 @@ export const validatePatch = (
   // Check for each file path in the patch
   let patchesApplied = 0;
   
+  // Enhanced logging to debug file path vs patch content issues
+  console.log(`Checking ${filePaths.length} files against patch content...`);
+  console.log(`First 3 files: ${filePaths.slice(0, 3).join(', ')}${filePaths.length > 3 ? '...' : ''}`);
+  
+  // Parse the patch to get actual files mentioned in it
+  const filesMentionedInPatch = new Set<string>();
+  
+  // Simple regex to extract file paths from unified diff
+  const fileHeaderRegex = /^(?:---|\+\+\+) [ab]\/(.+)$/gm;
+  let match;
+  while ((match = fileHeaderRegex.exec(patchContent)) !== null) {
+    filesMentionedInPatch.add(match[1]);
+  }
+  
+  console.log(`Files detected in patch content: ${Array.from(filesMentionedInPatch).join(', ')}`);
+  
+  // Count added and removed lines in the patch
+  const addedLines = (patchContent.match(/^\+(?!\+\+)/gm) || []).length;
+  const removedLines = (patchContent.match(/^-(?!--)/gm) || []).length;
+  
+  linesChanged.added = addedLines;
+  linesChanged.removed = removedLines;
+  
+  console.log(`Lines changed in patch: +${addedLines}/-${removedLines}`);
+  
   for (const filePath of filePaths) {
-    // Simple validation: is the file mentioned in the patch?
-    if (patchContent.includes(filePath) || 
-        patchContent.includes(filePath.replace(/^\//, '')) || 
-        patchContent.includes(`a/${filePath}`) || 
-        patchContent.includes(`b/${filePath}`)) {
+    // Enhanced validation logic to detect if a file is actually in the patch
+    const fileInPatch = 
+      filesMentionedInPatch.has(filePath) || 
+      patchContent.includes(`a/${filePath}`) || 
+      patchContent.includes(`b/${filePath}`) ||
+      patchContent.includes(`--- ${filePath}`) ||
+      patchContent.includes(`+++ ${filePath}`);
       
+    if (fileInPatch) {
       validationMetrics.validPatches++;
       patchesApplied++;
       
       // Generate a simple checksum for the file path
       fileChecksums[filePath] = `sha1:${Date.now().toString().slice(-8)}${Math.random().toString(36).substring(2, 10)}`;
-      
-      // Count line changes (approximate)
-      const fileSection = patchContent.split('\n')
-        .filter(line => line.includes(filePath) || line.includes(`a/${filePath}`) || line.includes(`b/${filePath}`))
-        .join('\n');
-        
-      const addedLines = (patchContent.match(/^\+(?!\+\+)/gm) || []).length;
-      const removedLines = (patchContent.match(/^-(?!--)/gm) || []).length;
-      
-      linesChanged.added += addedLines;
-      linesChanged.removed += removedLines;
+      console.log(`File ${filePath} found in patch - will be patched`);
     } else {
       validationMetrics.rejectedPatches++;
       validationMetrics.rejectionReasons['file_not_in_patch'] = 
         (validationMetrics.rejectionReasons['file_not_in_patch'] || 0) + 1;
+      console.warn(`File ${filePath} NOT found in patch content - will be skipped`);
     }
   }
   
   // Final validation decision
   const isValid = validationMetrics.validPatches > 0 && validationMetrics.rejectedPatches === 0;
   
+  // Enhanced logging based on validation result
+  if (isValid) {
+    console.log(`Patch validation passed: ${validationMetrics.validPatches} files will be patched`);
+  } else if (validationMetrics.validPatches > 0 && validationMetrics.rejectedPatches > 0) {
+    console.warn(`Patch validation partial: ${validationMetrics.validPatches} files valid, ${validationMetrics.rejectedPatches} files rejected`);
+  } else {
+    console.error(`Patch validation failed: ${validationMetrics.rejectedPatches} files rejected, 0 valid`);
+  }
+  
   return {
     isValid,
-    rejectionReason: isValid ? undefined : 'Some files were not found in the patch content',
+    rejectionReason: isValid ? undefined : `Some files were not found in the patch content (${validationMetrics.rejectedPatches} of ${validationMetrics.totalPatches})`,
     validationMetrics,
     fileChecksums,
     patchesApplied,

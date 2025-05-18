@@ -5,6 +5,7 @@ import hashlib
 import requests
 import tempfile
 import subprocess
+import re
 from typing import Dict, Any, List, Optional, Tuple, Union
 from .logger import Logger
 
@@ -23,12 +24,23 @@ class GitHubClient:
         self.use_default_branch_only = os.environ.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", "False").lower() == "true"
         self.test_mode = os.environ.get("TEST_MODE", "False").lower() == "true"
         self.debug_mode = os.environ.get("DEBUG_MODE", "False").lower() == "true"
+        self.patch_mode = os.environ.get("PATCH_MODE", "line-by-line")
         
         if not all([self.github_token, self.repo_owner, self.repo_name]):
             self.logger.error("Missing required GitHub environment variables")
             raise EnvironmentError(
                 "Missing GitHub credentials. Please set GITHUB_TOKEN, GITHUB_REPO_OWNER and GITHUB_REPO_NAME environment variables."
             )
+            
+        # Check for placeholder values
+        if any(v in ["your_github_token_here", "your_github_username_or_org", "your_repository_name"] 
+               for v in [self.github_token, self.repo_owner, self.repo_name]):
+            self.logger.error("GitHub credentials contain placeholder values")
+            if not self.test_mode:
+                raise EnvironmentError(
+                    "GitHub credentials contain placeholder values. This is only allowed in test mode."
+                )
+            self.logger.warning("Running with placeholder values in test mode")
             
         # Set up headers
         self.headers = {
@@ -47,6 +59,7 @@ class GitHubClient:
         self.logger.info(f"Use default branch only: {self.use_default_branch_only}")
         self.logger.info(f"Test mode: {self.test_mode}")
         self.logger.info(f"Debug mode: {self.debug_mode}")
+        self.logger.info(f"Patch mode: {self.patch_mode}")
         
     def check_branch_exists(self, branch_name: str) -> bool:
         """
@@ -161,6 +174,13 @@ class GitHubClient:
                 mock_pr_number = 1  # Mock PR number for simulation
                 return mock_url, mock_pr_number
             
+        # Check if there are actual changes between the branches before creating a PR
+        if head_branch != base_branch and not self.test_mode:
+            has_changes = self._check_branch_diff(head_branch, base_branch)
+            if not has_changes:
+                self.logger.warning(f"No changes detected between {head_branch} and {base_branch}, cannot create PR")
+                return None, None
+        
         url = f"{self.repo_api_url}/pulls"
         
         payload = {
@@ -217,6 +237,39 @@ class GitHubClient:
         pr_number = response.json()["number"]
         self.logger.info(f"Successfully created PR #{pr_number}: {pr_url}")
         return pr_url, pr_number
+    
+    def _check_branch_diff(self, head_branch: str, base_branch: str) -> bool:
+        """
+        Check if there are differences between two branches
+        
+        Args:
+            head_branch: Source branch
+            base_branch: Target branch
+            
+        Returns:
+            bool: True if there are differences, False otherwise
+        """
+        url = f"{self.repo_api_url}/compare/{base_branch}...{head_branch}"
+        self.logger.info(f"Checking for differences between {base_branch} and {head_branch}")
+        
+        response = requests.get(url, headers=self.headers)
+        
+        if response.status_code != 200:
+            self.logger.error(f"Failed to compare branches: {response.status_code}, {response.text}")
+            # Assume there are differences to be safe
+            return True
+        
+        data = response.json()
+        commits_ahead = data.get("ahead_by", 0)
+        commits_behind = data.get("behind_by", 0)
+        
+        # Check if we have any differences in files
+        files_count = len(data.get("files", []))
+        
+        self.logger.info(f"Branch comparison: {commits_ahead} commits ahead, {commits_behind} commits behind, {files_count} files changed")
+        
+        # Either ahead or has file differences
+        return commits_ahead > 0 or files_count > 0
         
     def apply_patch_content(self, file_content: str, patch_content: str, file_path: str) -> Tuple[str, bool, Dict[str, Any]]:
         """
@@ -231,16 +284,68 @@ class GitHubClient:
             Tuple of (patched content, success, metadata)
         """
         try:
-            # Use external tools for patching if available
-            if self._can_use_git_apply():
-                return self._apply_patch_using_git(file_content, patch_content, file_path)
+            # First, validate the patch content is not empty and is a valid diff
+            if not patch_content or not patch_content.strip():
+                self.logger.error(f"Empty patch content for {file_path}")
+                return file_content, False, {
+                    "error": "Empty patch content",
+                    "patch_applied": False,
+                    "file_path": file_path
+                }
             
-            # Fallback to manual patching
-            return self._apply_patch_manually(file_content, patch_content, file_path)
+            # Check if the patch looks like a unified diff
+            if not any(marker in patch_content for marker in ['@@ ', 'diff --git', '+++ ', '--- ']):
+                self.logger.error(f"Invalid patch format for {file_path}")
+                return file_content, False, {
+                    "error": "Invalid patch format - not a unified diff",
+                    "patch_applied": False,
+                    "file_path": file_path
+                }
+            
+            # Check if this file is actually mentioned in the patch
+            file_mentioned = False
+            for pattern in [
+                f"a/{file_path}", 
+                f"b/{file_path}", 
+                f"--- {file_path}",
+                f"+++ {file_path}",
+                f"diff --git a/{file_path}"
+            ]:
+                if pattern in patch_content:
+                    file_mentioned = True
+                    break
+                    
+            if not file_mentioned:
+                self.logger.warning(f"File {file_path} not found in patch content")
+                # Basic content log (first 100 chars)
+                if self.debug_mode:
+                    self.logger.debug(f"Patch content excerpt: {patch_content[:100]}...")
+                return file_content, False, {
+                    "error": f"File {file_path} not mentioned in patch content",
+                    "patch_applied": False,
+                    "file_path": file_path
+                }
+                
+            # Count lines to be added/removed
+            added_lines = len(re.findall(r'^\+(?!\+\+)', patch_content, re.MULTILINE))
+            removed_lines = len(re.findall(r'^-(?!--)', patch_content, re.MULTILINE))
+                
+            # Use the chosen patch application method
+            if self.patch_mode == "intelligent" and self._can_use_git_apply():
+                result = self._apply_patch_using_git(file_content, patch_content, file_path)
+            else:
+                result = self._apply_patch_manually(file_content, patch_content, file_path)
+            
+            # Add line change stats to the result metadata
+            if isinstance(result, tuple) and len(result) == 3 and isinstance(result[2], dict):
+                result[2]["lines_added"] = added_lines
+                result[2]["lines_removed"] = removed_lines
+            
+            return result
             
         except Exception as e:
             self.logger.error(f"Error applying patch to {file_path}: {str(e)}")
-            return file_content, False, {"error": str(e), "patch_applied": False}
+            return file_content, False, {"error": str(e), "patch_applied": False, "file_path": file_path}
     
     def _can_use_git_apply(self) -> bool:
         """Check if git apply can be used for patching"""
@@ -277,7 +382,8 @@ class GitHubClient:
                     return file_content, False, {
                         "error": "Patch validation failed",
                         "details": result.stderr,
-                        "patch_applied": False
+                        "patch_applied": False,
+                        "file_path": file_path
                     }
                 
                 # Actually apply the patch
@@ -293,7 +399,8 @@ class GitHubClient:
                     return file_content, False, {
                         "error": "Patch application failed",
                         "details": apply_result.stderr,
-                        "patch_applied": False
+                        "patch_applied": False,
+                        "file_path": file_path
                     }
                 
                 # Read the patched file
@@ -304,7 +411,7 @@ class GitHubClient:
                 original_checksum = hashlib.md5(file_content.encode()).hexdigest()
                 patched_checksum = hashlib.md5(patched_content.encode()).hexdigest()
                 
-                # Check if patch made any changes
+                # Check if patch actually changed the file
                 if original_checksum == patched_checksum:
                     self.logger.warning(f"Patch did not change file {file_path}")
                     return file_content, False, {
@@ -313,7 +420,8 @@ class GitHubClient:
                         "checksums": {
                             "before": original_checksum,
                             "after": patched_checksum
-                        }
+                        },
+                        "file_path": file_path
                     }
                 
                 self.logger.info(f"Successfully applied patch to {file_path}")
@@ -322,18 +430,20 @@ class GitHubClient:
                     "checksums": {
                         "before": original_checksum,
                         "after": patched_checksum
-                    }
+                    },
+                    "file_path": file_path
                 }
                 
             except subprocess.SubprocessError as e:
                 self.logger.error(f"Git apply failed: {str(e)}")
-                return file_content, False, {"error": str(e), "patch_applied": False}
+                return file_content, False, {
+                    "error": str(e), 
+                    "patch_applied": False,
+                    "file_path": file_path
+                }
     
     def _apply_patch_manually(self, file_content: str, patch_content: str, file_path: str) -> Tuple[str, bool, Dict[str, Any]]:
         """Apply patch manually line by line"""
-        # Simple line-by-line patching for demonstration
-        # In a production environment, use a proper patch library
-        
         # Calculate checksums for before/after comparison
         original_checksum = hashlib.md5(file_content.encode()).hexdigest()
         
@@ -370,9 +480,23 @@ class GitHubClient:
                 elif line.startswith(" "):
                     current_hunk["changes"].append(("context", line[1:]))
         
+        # If no hunks were parsed, log an error and return
+        if not hunks:
+            self.logger.error(f"Failed to parse any hunks from patch for {file_path}")
+            if self.debug_mode:
+                self.logger.debug(f"Patch content excerpt: {patch_content[:300]}...")
+            return file_content, False, {
+                "error": "No hunks found in patch",
+                "patch_applied": False,
+                "file_path": file_path
+            }
+            
+        self.logger.info(f"Parsed {len(hunks)} hunks from patch for {file_path}")
+        
         # Apply hunks
         modified_lines = lines.copy()
         offset = 0  # Track line number changes as we modify the file
+        changes_applied = 0
         
         for hunk in hunks:
             old_start = hunk["old_start"] - 1  # Convert to 0-based index
@@ -394,6 +518,7 @@ class GitHubClient:
                         if modified_lines[current_line] == content:
                             modified_lines.pop(current_line)
                             offset -= 1
+                            changes_applied += 1
                         else:
                             self.logger.warning(f"Remove mismatch in file {file_path} at line {current_line+1}")
                             self.logger.warning(f"Expected: '{content}'")
@@ -401,12 +526,14 @@ class GitHubClient:
                             # Try to continue anyway - this is a warning, not a failure
                             modified_lines.pop(current_line)
                             offset -= 1
+                            changes_applied += 1
                 elif change_type == "add":
                     # Add line
                     if 0 <= current_line <= len(modified_lines):
                         modified_lines.insert(current_line, content)
                         current_line += 1
                         offset += 1
+                        changes_applied += 1
         
         # Join lines back into content
         patched_content = "\n".join(modified_lines)
@@ -416,23 +543,27 @@ class GitHubClient:
         
         # Check if anything changed
         if original_checksum == patched_checksum:
-            self.logger.warning(f"Patch did not change file {file_path}")
+            self.logger.warning(f"Patch did not change file {file_path} despite {changes_applied} operations")
             return file_content, False, {
-                "warning": "Patch made no changes",
+                "warning": "Patch made no changes to file content",
                 "patch_applied": False,
                 "checksums": {
                     "before": original_checksum,
                     "after": patched_checksum
-                }
+                },
+                "operations_attempted": changes_applied,
+                "file_path": file_path
             }
         
-        self.logger.info(f"Successfully applied patch to {file_path}")
+        self.logger.info(f"Successfully applied patch to {file_path} with {changes_applied} changes")
         return patched_content, True, {
             "patch_applied": True,
             "checksums": {
                 "before": original_checksum,
                 "after": patched_checksum
-            }
+            },
+            "operations_applied": changes_applied,
+            "file_path": file_path
         }
 
     def commit_patch(self, branch_name: str, patch_content: str, commit_message: str, patch_file_paths: List[str] = None) -> Tuple[bool, Dict[str, Any]]:
@@ -448,6 +579,25 @@ class GitHubClient:
         Returns:
             Tuple of (success status, metadata)
         """
+        # Validate input parameters
+        if not patch_content or not patch_content.strip():
+            self.logger.error("Empty patch content provided")
+            return False, {
+                "error": "Empty patch content", 
+                "code": "EMPTY_PATCH"
+            }
+            
+        if not patch_file_paths or not isinstance(patch_file_paths, list) or len(patch_file_paths) == 0:
+            self.logger.error("No file paths provided for patching")
+            return False, {
+                "error": "No file paths provided", 
+                "code": "NO_FILE_PATHS"
+            }
+            
+        # Log patch information
+        self.logger.info(f"Patch content length: {len(patch_content)} bytes")
+        self.logger.info(f"Number of files to patch: {len(patch_file_paths)}")
+        
         # If configured to only use default branch, use that instead of the provided branch
         if self.use_default_branch_only:
             self.logger.info(f"Using default branch {self.default_branch} instead of {branch_name}")
@@ -496,8 +646,15 @@ class GitHubClient:
                 patched_content, success, metadata = self.apply_patch_content(current_content, patch_content, file_path)
                 
                 if not success:
-                    self.logger.warning(f"Failed to apply patch to {file_path}: {metadata.get('error', 'Unknown error')}")
+                    error_msg = metadata.get('error', 'Unknown error')
+                    self.logger.warning(f"Failed to apply patch to {file_path}: {error_msg}")
                     continue
+                
+                # Track lines added/removed
+                if "lines_added" in metadata:
+                    total_lines_added += metadata["lines_added"]
+                if "lines_removed" in metadata:
+                    total_lines_removed += metadata["lines_removed"]
                 
                 # Commit the file
                 commit_success = self.commit_file(file_path, patched_content, commit_message, branch_name)
@@ -506,12 +663,6 @@ class GitHubClient:
                     patched_files.append(file_path)
                     if "checksums" in metadata:
                         file_checksums[file_path] = metadata["checksums"]["after"]
-                    
-                    # Count lines added/removed if available
-                    if "lines_added" in metadata:
-                        total_lines_added += metadata["lines_added"]
-                    if "lines_removed" in metadata:
-                        total_lines_removed += metadata["lines_removed"]
                 else:
                     self.logger.error(f"Failed to commit changes to {file_path}")
         

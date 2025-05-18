@@ -20,6 +20,9 @@ GITHUB_USE_DEFAULT_BRANCH_ONLY = os.getenv('GITHUB_USE_DEFAULT_BRANCH_ONLY', 'Fa
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
 TEST_MODE = os.getenv('TEST_MODE', 'False').lower() == 'true'
 
+# Patch processing configuration
+PATCH_MODE = os.getenv('PATCH_MODE', 'line-by-line')
+
 def verify_config():
     """Verify that all required environment variables are set."""
     required_vars = {
@@ -59,11 +62,13 @@ def verify_config():
         logger.error("GITHUB_REPO_NAME is an empty string. Please set a valid repository name in your .env file.")
         return False
 
+    # Log configuration values for debugging
     logger.info("GitHub configuration validated successfully")
     if DEBUG_MODE:
         logger.info(f"Owner: {GITHUB_REPO_OWNER}, Repo: {GITHUB_REPO_NAME}, Branch: {GITHUB_DEFAULT_BRANCH}")
         logger.info(f"Use default branch only: {GITHUB_USE_DEFAULT_BRANCH_ONLY}")
         logger.info(f"Test mode: {TEST_MODE}, Debug mode: {DEBUG_MODE}")
+        logger.info(f"Patch mode: {PATCH_MODE}")
     
     return True
 
@@ -73,7 +78,8 @@ def get_repo_info():
         "owner": GITHUB_REPO_OWNER,
         "name": GITHUB_REPO_NAME,
         "default_branch": GITHUB_DEFAULT_BRANCH,
-        "use_default_branch_only": GITHUB_USE_DEFAULT_BRANCH_ONLY
+        "use_default_branch_only": GITHUB_USE_DEFAULT_BRANCH_ONLY,
+        "patch_mode": PATCH_MODE
     }
 
 def is_test_mode():
@@ -91,3 +97,8 @@ def get_repo_string():
         logger.warning("Cannot create repo string - owner or name missing from environment")
         return None
     return f"{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+
+# Get patch mode configuration
+def get_patch_mode():
+    """Get the configured patch mode."""
+    return PATCH_MODE

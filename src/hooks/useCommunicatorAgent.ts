@@ -95,6 +95,9 @@ export function useCommunicatorAgent() {
       setPatchValidationResults(patchValidation);
     }
     
+    // Enhance communication updates for patch validation
+    let enhancedMockUpdates = [...mockUpdates]; // Create a copy to avoid mutation
+    
     // Add communication updates for retry attempts
     if (attemptCount && attemptCount > 0) {
       const retryUpdate: Update = {
@@ -104,25 +107,39 @@ export function useCommunicatorAgent() {
         confidenceScore: confidence
       };
       
-      mockUpdates = [retryUpdate, ...mockUpdates];
+      enhancedMockUpdates = [retryUpdate, ...enhancedMockUpdates];
     }
     
-    // Add patch validation update if applicable
+    // Add detailed patch validation update if applicable
     if (patchValidation) {
-      const validationMessage = patchValidation.isValid 
-        ? `✅ Patch validation passed - All file paths and diffs are valid ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`
-        : `❌ Patch validation failed: ${patchValidation.rejectionReason} ${patchValidation.validationScore ? `(Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`;
-      
-      // Include patch application details if available
       const patchDetailsMessage = patchValidation.patchesApplied !== undefined
-        ? ` (${patchValidation.patchesApplied} patches applied)`
+        ? ` (${patchValidation.patchesApplied} files affected)`
         : '';
         
-      // Include line changes if available
       const lineChangesMessage = patchValidation.linesChanged
         ? ` | +${patchValidation.linesChanged.added}/-${patchValidation.linesChanged.removed} lines`
         : '';
+      
+      // More detailed validation message with metrics
+      let validationMessage: string;
+      
+      if (patchValidation.isValid) {
+        validationMessage = `✅ Patch validation passed - All file paths found in diff${patchValidation.validationScore ? ` (Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`;
+      } else {
+        validationMessage = `❌ Patch validation failed: ${patchValidation.rejectionReason || 'Unknown reason'}${patchValidation.validationScore ? ` (Score: ${Math.round(patchValidation.validationScore)}%)` : ''}`;
         
+        // If we have metrics, add detailed failure reasons
+        if (patchValidation.validationMetrics?.rejectionReasons) {
+          const reasons = Object.entries(patchValidation.validationMetrics.rejectionReasons)
+            .map(([reason, count]) => `${reason.replace('_', ' ')}: ${count} files`)
+            .join(', ');
+          
+          if (reasons) {
+            validationMessage += ` (${reasons})`;
+          }
+        }
+      }
+      
       const validationUpdate: Update = {
         timestamp: new Date().toISOString(),
         message: validationMessage + patchDetailsMessage + lineChangesMessage,
@@ -140,7 +157,7 @@ export function useCommunicatorAgent() {
         }
       };
       
-      mockUpdates = [validationUpdate, ...mockUpdates];
+      enhancedMockUpdates = [validationUpdate, ...enhancedMockUpdates];
       
       // If we have file checksums, add a detailed separate update
       if (patchValidation.fileChecksums && Object.keys(patchValidation.fileChecksums).length > 3) {
@@ -154,7 +171,20 @@ export function useCommunicatorAgent() {
           }
         };
         
-        mockUpdates = [fileListUpdate, ...mockUpdates];
+        enhancedMockUpdates = [fileListUpdate, ...enhancedMockUpdates];
+      }
+      
+      // Add specific update for empty patch content or no file paths
+      if (patchValidation.rejectionReason?.includes('empty') || 
+          patchValidation.rejectionReason?.includes('No file paths')) {
+        const emptyPatchUpdate: Update = {
+          timestamp: new Date().toISOString(),
+          message: `⚠️ Warning: ${patchValidation.rejectionReason}. No changes to commit.`,
+          type: 'system',
+          confidenceScore: confidence
+        };
+        
+        enhancedMockUpdates = [emptyPatchUpdate, ...enhancedMockUpdates];
       }
     }
     
@@ -169,7 +199,7 @@ export function useCommunicatorAgent() {
         confidenceScore: confidence
       };
       
-      mockUpdates = [escalationUpdate, ...mockUpdates];
+      enhancedMockUpdates = [escalationUpdate, ...enhancedMockUpdates];
     }
     
     // Add confidence score update if available
@@ -183,7 +213,7 @@ export function useCommunicatorAgent() {
         confidenceScore: confidence
       };
       
-      mockUpdates = [confidenceUpdate, ...mockUpdates];
+      enhancedMockUpdates = [confidenceUpdate, ...enhancedMockUpdates];
     }
     
     // Add validation metrics if available
@@ -198,7 +228,7 @@ export function useCommunicatorAgent() {
         }
       };
       
-      mockUpdates = [metricsUpdate, ...mockUpdates];
+      enhancedMockUpdates = [metricsUpdate, ...enhancedMockUpdates];
     }
     
     const interval = setInterval(() => {
@@ -206,7 +236,7 @@ export function useCommunicatorAgent() {
         if (prev >= 100) {
           clearInterval(interval);
           setStatus(isEarlyEscalation || (attemptCount && maxAttempts && attemptCount >= maxAttempts) ? 'escalated' : 'success');
-          setUpdates(mockUpdates);
+          setUpdates(enhancedMockUpdates);
           if (mockResult && (!mockResult.prUrl || !mockResult.prUrl.includes('org/repo/pull') || mockResult.prUrl.match(/org\/repo\/pull\/\d+/))) {
             // Only set the result if it's a valid PR URL or doesn't contain placeholder values
             setResult(mockResult);
