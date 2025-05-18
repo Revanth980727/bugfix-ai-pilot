@@ -126,6 +126,37 @@ def verify_github_repo_settings():
     
     return False, "GITHUB_REPO_OWNER and GITHUB_REPO_NAME are required for GitHub operations"
 
+# New function to verify Jira configuration
+def verify_jira_settings():
+    """Verify that JIRA settings are properly configured."""
+    if not JIRA_API_TOKEN:
+        return False, "JIRA_API_TOKEN is missing"
+        
+    if not JIRA_USERNAME:
+        return False, "JIRA_USERNAME is missing"
+        
+    if not JIRA_URL:
+        return False, "JIRA_URL is missing"
+        
+    # Check for placeholder values
+    if JIRA_API_TOKEN == "your_jira_api_token_here" and not TEST_MODE:
+        return False, "JIRA_API_TOKEN contains a placeholder value"
+        
+    if JIRA_USERNAME == "your_jira_email_here" and not TEST_MODE:
+        return False, "JIRA_USERNAME contains a placeholder value"
+        
+    if JIRA_URL == "https://your-domain.atlassian.net" and not TEST_MODE:
+        return False, "JIRA_URL contains a placeholder value"
+        
+    # Validate URL format
+    if JIRA_URL.endswith('/'):
+        logger.warning("JIRA_URL ends with a slash, which may cause API path issues")
+        
+    if TEST_MODE:
+        return True, f"JIRA configured with URL={JIRA_URL}, User={JIRA_USERNAME} [TEST MODE]"
+    else:
+        return True, f"JIRA configured with URL={JIRA_URL}, User={JIRA_USERNAME}"
+
 # Debug function to print all environment variables (without secrets)
 def print_env_debug():
     """Print environment variables for debugging (without showing secrets)."""

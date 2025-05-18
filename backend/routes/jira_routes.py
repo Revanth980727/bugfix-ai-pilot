@@ -4,6 +4,7 @@ import json
 from flask import Blueprint, request, jsonify, current_app
 from ..jira_service.jira_service import JiraService
 from ..log_utils import log_operation_attempt, log_operation_result, get_error_metadata, GitHubOperationError
+import asyncio
 
 # Configure logging
 logger = logging.getLogger("jira-routes")
@@ -30,15 +31,15 @@ def get_tickets():
         ticket_id = request.args.get('ticket_id')
         status = request.args.get('status')
         
-        # Get tickets based on parameters
+        # Get tickets based on parameters - using async properly
         if ticket_id:
-            tickets = jira_service.get_ticket(ticket_id)
+            tickets = asyncio.run(jira_service.get_ticket(ticket_id))
             if not tickets:
                 return jsonify({'error': f'Ticket {ticket_id} not found'}), 404
         elif status:
-            tickets = jira_service.get_tickets_by_status(status)
+            tickets = asyncio.run(jira_service.get_tickets_by_status(status))
         else:
-            tickets = jira_service.get_all_tickets()
+            tickets = asyncio.run(jira_service.get_all_tickets())
             
         # Return tickets
         return jsonify({'tickets': tickets}), 200
@@ -74,15 +75,15 @@ def update_ticket_status():
                 "github_metadata": github_metadata
             })
         
-        # Update ticket
-        result = jira_service.update_ticket(
+        # Update ticket - properly awaiting the async operation
+        result = asyncio.run(jira_service.update_ticket(
             ticket_id,
             status=status,
             comment=comment,
             escalation=escalation,
             error_message=error_message,
             github_metadata=github_metadata
-        )
+        ))
         
         # Log a successful GitHub operation result
         if github_metadata:
@@ -144,8 +145,8 @@ def add_ticket_comment():
         if not comment:
             return jsonify({'error': 'Missing comment text'}), 400
             
-        # Add comment to ticket
-        result = jira_service.add_comment(ticket_id, comment)
+        # Add comment to ticket - properly awaiting the async operation
+        result = asyncio.run(jira_service.add_comment(ticket_id, comment))
         
         # Return result
         return jsonify({

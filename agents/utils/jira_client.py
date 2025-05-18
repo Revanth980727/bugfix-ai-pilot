@@ -3,6 +3,7 @@ import os
 import json
 import requests
 import time
+import asyncio
 from typing import Dict, Any, List, Optional, Union
 from .logger import Logger
 
@@ -344,8 +345,9 @@ class JiraClient:
         """
         self.logger.info("Fetching bug tickets from JIRA")
         try:
-            # Call the synchronous method - in real async code, this would be awaitable
-            tickets = self.get_open_bugs()
+            # Use asyncio.to_thread to properly run the synchronous method in a separate thread
+            # This prevents blocking the event loop
+            tickets = await asyncio.to_thread(self.get_open_bugs)
             self.logger.info(f"Found {len(tickets)} bug tickets to process")
             return tickets
         except Exception as e:

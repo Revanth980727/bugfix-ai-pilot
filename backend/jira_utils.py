@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import datetime
 import httpx
+import asyncio
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from env import JIRA_TOKEN, JIRA_USER, JIRA_URL
@@ -85,7 +86,6 @@ async def update_jira_ticket(ticket_id: str, status: str, comment: str, pr_url: 
             
             # If PR URL is provided, update the ticket with PR link
             if pr_url:
-                # Try to find the PR URL field - this might need customization based on your JIRA instance
                 try:
                     # First fetch available fields to find the PR URL field
                     fields_response = await client.get(
