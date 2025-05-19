@@ -1,4 +1,3 @@
-
 import os
 import base64
 import json
@@ -20,13 +19,20 @@ class GitHubClient:
         self.default_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
         self.use_default_branch_only = os.environ.get("GITHUB_USE_DEFAULT_BRANCH_ONLY", "False").lower() == "true"
         
-        # Check for test mode
-        self.test_mode = os.environ.get("TEST_MODE", "False").lower() == "true"
+        # Check for test mode - be explicit about boolean conversion
+        self.test_mode = os.environ.get("TEST_MODE", "False").lower() in ("true", "yes", "1", "t")
         
         # If force_real is True, we should not use test mode regardless of env setting
         if force_real:
             self.test_mode = False
             self.logger.info("Forcing real GitHub interaction (test mode disabled)")
+            
+        # Log the operating mode immediately for clarity
+        if self.test_mode:
+            self.logger.warning("⚠️ Initializing GitHub client in TEST MODE - GitHub operations will be simulated")
+            self.logger.warning("Set TEST_MODE=False in .env for real GitHub interactions")
+        else:
+            self.logger.info("Initializing GitHub client in PRODUCTION MODE - using real GitHub API")
         
         # Validate configuration before proceeding
         if not all([self.github_token, self.repo_owner, self.repo_name]):
@@ -80,9 +86,6 @@ class GitHubClient:
         self.logger.info(f"GitHub client initialized with repo {self.repo_owner}/{self.repo_name}")
         self.logger.info(f"Default branch: {self.default_branch}")
         self.logger.info(f"Use default branch only: {self.use_default_branch_only}")
-        
-        if self.test_mode:
-            self.logger.warning("⚠️ Running in TEST_MODE - all GitHub operations will be simulated!")
         
     def check_branch_exists(self, branch_name: str) -> bool:
         """
@@ -199,10 +202,10 @@ class GitHubClient:
             self.logger.info(f"Using default branch {self.default_branch} as head branch instead of {head_branch}")
             head_branch = self.default_branch
             
-        # If in test mode, return a mock PR URL and PR number
+        # If in test mode, return a mock PR URL and PR number, but make it clearly marked as test mode
         if self.test_mode:
             self.logger.warning("⚠️ TEST MODE: Creating mock PR instead of real GitHub PR")
-            mock_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/pull/999"
+            mock_url = f"https://github.com/{self.repo_owner}/{self.repo_name}/pull/999-TEST-MODE"
             mock_pr_number = 999
             return mock_url, mock_pr_number
             

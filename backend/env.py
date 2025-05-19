@@ -33,9 +33,9 @@ PROJECT_TEST_COMMAND = os.getenv('PROJECT_TEST_COMMAND', 'npm test')
 LOG_RETENTION_DAYS = int(os.getenv('LOG_RETENTION_DAYS', '30'))
 RETRY_DELAY_SECONDS = int(os.getenv('RETRY_DELAY_SECONDS', '5'))
 
-# Test mode and debug settings
-TEST_MODE = os.getenv('TEST_MODE', 'False').lower() == 'true'
-DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
+# Test mode and debug settings - explicitly handle string vs boolean
+TEST_MODE = os.getenv('TEST_MODE', 'False').lower() in ('true', 'yes', '1', 't')
+DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() in ('true', 'yes', '1', 't')
 
 # Log configuration
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -49,11 +49,15 @@ JIRA_TOKEN = JIRA_API_TOKEN
 if TEST_MODE:
     logger.warning("⚠️ TEST_MODE is enabled - using mock GitHub and JIRA integrations")
     logger.warning("To use real services, set TEST_MODE=False in .env")
+else:
+    logger.info("✅ Production mode enabled - using real GitHub and JIRA integrations")
 
 def verify_env_vars():
     """Verify that all required environment variables are set."""
     required_vars = {
         'GITHUB_TOKEN': GITHUB_TOKEN,
+        'GITHUB_REPO_OWNER': GITHUB_REPO_OWNER,
+        'GITHUB_REPO_NAME': GITHUB_REPO_NAME,
         'JIRA_API_TOKEN': JIRA_API_TOKEN,
         'JIRA_USERNAME': JIRA_USERNAME,
         'JIRA_URL': JIRA_URL,
@@ -105,6 +109,7 @@ def verify_github_repo_settings():
     if not GITHUB_TOKEN:
         return False, "GITHUB_TOKEN is missing"
     
+    # Explicit check for placeholder values, with a clear error message
     if GITHUB_TOKEN == "your_github_token_here" and not TEST_MODE:
         return False, "GITHUB_TOKEN contains a placeholder value"
     

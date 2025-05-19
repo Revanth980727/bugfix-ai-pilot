@@ -21,7 +21,7 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
       patch_mode: (process.env.PATCH_MODE || import.meta.env.VITE_PATCH_MODE as string || 'line-by-line') as 'intelligent' | 'line-by-line' | 'direct'
     };
     
-    // Get TEST_MODE setting
+    // Get TEST_MODE setting - more explicitly check for true values
     const isTestMode = process.env.TEST_MODE?.toLowerCase() === 'true' || 
                       import.meta.env.VITE_TEST_MODE === 'true';
     
@@ -29,6 +29,8 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
     if (isTestMode) {
       console.warn("⚠️ Running in TEST_MODE - using placeholder repo values and mock GitHub operations");
       console.warn("Set TEST_MODE=False in .env for real GitHub interactions");
+    } else {
+      console.log("Running in PRODUCTION MODE - using real GitHub values and operations");
     }
     
     // Validate configuration before returning
@@ -41,10 +43,14 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
         console.warn('Running in TEST_MODE - using placeholder repo values');
         config.repo_owner = config.repo_owner || 'example-org';
         config.repo_name = config.repo_name || 'example-repo';
+      } else {
+        // In production mode, reject the configuration if it's incomplete
+        console.error('Rejecting incomplete GitHub configuration in production mode');
+        return null;
       }
     }
     
-    // Detect placeholder values and warn if they shouldn't be used
+    // Detect placeholder values and fail in production mode
     if (config.repo_owner === 'your_github_username_or_org' || 
         config.repo_name === 'your_repository_name') {
       console.error('GitHub configuration contains placeholder values');
