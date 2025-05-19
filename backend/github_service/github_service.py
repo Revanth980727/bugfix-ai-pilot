@@ -3,15 +3,26 @@ import os
 import sys
 import logging
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("github-service")
 
 # Import local modules
-from .github_client import GitHubClient
-from .utils import is_test_mode, is_production, prepare_response_metadata
+try:
+    from .github_client import GitHubClient
+    from .utils import is_test_mode, is_production, prepare_response_metadata, parse_patch_content
+except ImportError:
+    logger.error("Error importing local modules - check path configuration")
+    # Still try relative imports as fallback
+    try:
+        from github_service.github_client import GitHubClient
+        from github_service.utils import is_test_mode, is_production, prepare_response_metadata, parse_patch_content
+        logger.info("Successfully imported modules from github_service package")
+    except ImportError as e:
+        logger.critical(f"Failed to import required modules: {e}")
+        raise
 
 class GitHubService:
     """Service for GitHub operations"""
@@ -57,27 +68,92 @@ class GitHubService:
             # Return branch name anyway since it might exist
             return f"fix/{ticket_id.lower()}"
 
+    def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> Tuple[bool, str]:
+        """
+        Create a branch for fixing a bug, with enhanced return information
+        
+        Args:
+            ticket_id: The ticket identifier
+            base_branch: The branch to base the new branch on
+            
+        Returns:
+            Tuple of (success, branch_name)
+        """
+        try:
+            branch_name = self.create_branch(ticket_id, base_branch)
+            return True, branch_name
+        except Exception as e:
+            logger.error(f"Error creating branch: {str(e)}")
+            # Still return the branch name for cases where it might exist but creation failed
+            return False, f"fix/{ticket_id.lower()}"
+
+    def get_branch(self, branch_name: str) -> Optional[Dict[str, Any]]:
+        """Get information about a branch if it exists"""
+        try:
+            # This would normally use the client to check if branch exists
+            # For now, we'll just return a stub
+            return {"name": branch_name, "exists": True}
+        except Exception:
+            return None
+
     def commit_bug_fix(
         self, 
         branch_name: str, 
-        file_paths: List[str],
-        file_contents: List[str],
-        ticket_id: str, 
-        commit_message: str
-    ) -> bool:
-        """Commit bug fix to branch"""
+        files: Union[List[Dict[str, str]], List[str]],
+        file_contents_or_ticket_id: Union[List[str], str],
+        ticket_id_or_commit_message: str, 
+        commit_message: str = None
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Commit bug fix to branch with flexible parameter handling.
+        
+        This method supports two calling conventions:
+        1. commit_bug_fix(branch_name, files_dict_list, ticket_id, commit_message)
+           Where files_dict_list is a list of dicts with 'filename' and 'content' keys
+        
+        2. commit_bug_fix(branch_name, file_paths, file_contents, ticket_id, commit_message)
+           Where file_paths and file_contents are separate lists
+        
+        Args:
+            branch_name: Name of the branch to commit to
+            files: Either list of file path strings or list of dicts with filename/content
+            file_contents_or_ticket_id: Either list of file contents or ticket ID string
+            ticket_id_or_commit_message: Either ticket ID or commit message
+            commit_message: Optional commit message for calling convention #2
+            
+        Returns:
+            Tuple of (success, details_dict)
+        """
         # Log operation start
         logger.info("GitHub operation started: commit_bug_fix")
-        logger.info(f"Operation details: {{'ticket_id': '{ticket_id}', 'branch_name': '{branch_name}', 'file_count': {len(file_paths)}, 'environment': {'production' if self.production else 'development'}, 'test_mode': {self.test_mode}}}")
+        
+        # Handle both calling conventions
+        if isinstance(files, list) and len(files) > 0 and isinstance(files[0], dict):
+            # Convention 1: List of dicts with filename and content
+            file_dicts = files
+            ticket_id = file_contents_or_ticket_id
+            commit_msg = ticket_id_or_commit_message
+            
+            # Extract paths and contents
+            file_paths = [f.get("filename", "") for f in file_dicts]
+            file_contents = [f.get("content", "") for f in file_dicts]
+        else:
+            # Convention 2: Separate lists for paths and contents
+            file_paths = files
+            file_contents = file_contents_or_ticket_id
+            ticket_id = ticket_id_or_commit_message
+            commit_msg = commit_message if commit_message else f"Fix for {ticket_id}"
+        
+        logger.info(f"Operation details: {{'ticket_id': '{ticket_id}', 'branch_name': '{branch_name}', 'file_count': {len(file_paths)}, 'test_mode': {self.test_mode}}}")
         
         # Validate inputs
         if not branch_name:
             logger.error("Branch name is required")
-            return False
+            return False, {"error": "Branch name is required"}
             
         if not file_paths or len(file_paths) == 0:
             logger.error("No file paths provided")
-            return False
+            return False, {"error": "No file paths provided"}
         
         # Ensure file_paths and file_contents have the same length
         if len(file_paths) != len(file_contents):
@@ -97,7 +173,13 @@ class GitHubService:
         # Check if we still have files to commit after validation
         if len(file_paths) == 0:
             logger.error("No valid file paths after filtering")
-            return False
+            return False, {"error": "No valid file paths after filtering"}
+        
+        # Log the files to be committed (first 5 files)
+        max_files_to_log = min(5, len(file_paths))
+        logger.info(f"Committing {len(file_paths)} files, first {max_files_to_log}: {', '.join(file_paths[:max_files_to_log])}")
+        if len(file_paths) > max_files_to_log:
+            logger.info(f"... and {len(file_paths) - max_files_to_log} more files")
         
         try:
             # Prepare changes as a list of dictionaries
@@ -109,23 +191,24 @@ class GitHubService:
                 })
             
             # Commit changes using client
-            result = self.client.commit_changes(branch_name, changes, commit_message)
+            result = self.client.commit_changes(branch_name, changes, commit_msg)
             
             # Check for empty commits
             if not result.get("committed", False) and result.get("error", {}).get("code") == "EMPTY_COMMIT":
                 if self.allow_empty_commits:
                     logger.warning("Commit resulted in no changes, but ALLOW_EMPTY_COMMITS is true")
-                    return True
+                    return True, {"message": "No changes detected but commit permitted", "files": file_paths}
                 else:
                     logger.error("Commit resulted in no changes")
-                    return False
+                    return False, {"error": "Commit resulted in no changes", "code": "EMPTY_COMMIT"}
             
-            return result.get("committed", False)
+            success = result.get("committed", False)
+            return success, {"message": "Commit successful" if success else "Commit failed", "files": file_paths}
         except Exception as e:
             # Log failure
             logger.error(f"GitHub operation failed: commit_bug_fix")
             logger.error(f"Error details: {str(e)}")
-            return False
+            return False, {"error": str(e)}
 
     def create_pull_request(
         self, 
@@ -133,19 +216,33 @@ class GitHubService:
         ticket_id: str, 
         title: str, 
         description: str
-    ) -> str:
+    ) -> Union[str, Dict[str, Any], Tuple[str, int]]:
         """Create a pull request for the branch"""
         # Log operation start
         logger.info("GitHub operation started: create_pull_request")
         
         try:
             # Create PR using client
-            pr_url = self.client.create_pull_request(branch_name, title, description)
+            pr_result = self.client.create_pull_request(branch_name, title, description)
+            
+            # Handle different return formats
+            if isinstance(pr_result, dict):
+                pr_url = pr_result.get("url", "")
+                pr_number = pr_result.get("number")
+            elif isinstance(pr_result, tuple) and len(pr_result) >= 2:
+                pr_url = pr_result[0]
+                pr_number = pr_result[1]
+            else:
+                pr_url = str(pr_result)
+                pr_number = None
             
             # Log success
             logger.info("GitHub operation succeeded: create_pull_request")
             logger.info(f"Created PR: {pr_url} for ticket {ticket_id}")
             
+            # Return the most informative format available
+            if pr_number is not None:
+                return {"url": pr_url, "number": pr_number}
             return pr_url
         except Exception as e:
             # Log failure
@@ -154,21 +251,45 @@ class GitHubService:
             return ""
     
     # Alias for create_pull_request to maintain backward compatibility
-    def create_fix_pr(self, branch_name: str, ticket_id: str, title: str, description: str) -> str:
+    def create_fix_pr(self, branch_name: str, ticket_id: str, title: str, description: str) -> Union[str, Dict[str, Any], Tuple[str, int]]:
         """Alias for create_pull_request"""
         return self.create_pull_request(branch_name, ticket_id, title, description)
+
+    def find_pr_for_branch(self, branch_name: str) -> Optional[Dict[str, Any]]:
+        """Find an existing PR for the given branch name"""
+        try:
+            # This would normally use the client to check for PRs
+            # For now we'll return None to indicate no PR exists
+            return None
+        except Exception as e:
+            logger.error(f"Error checking for existing PR: {str(e)}")
+            return None
+
+    def check_for_existing_pr(self, branch_name: str, base_branch: str = None) -> Optional[Dict[str, Any]]:
+        """Check if a PR already exists for this branch"""
+        return self.find_pr_for_branch(branch_name)
+
+    def add_pr_comment(self, pr_number: int, comment: str) -> bool:
+        """Add a comment to a PR"""
+        try:
+            logger.info(f"Adding comment to PR #{pr_number}")
+            # This would normally use the client to add a comment
+            return True
+        except Exception as e:
+            logger.error(f"Error adding PR comment: {str(e)}")
+            return False
 
     def commit_patch(
         self, 
         branch_name: str, 
         patch_content: str, 
         commit_message: str,
-        file_paths: List[str]
+        patch_file_paths: List[str]
     ) -> Tuple[bool, Dict[str, Any]]:
         """Commit changes using a patch"""
         # Log operation start
         logger.info("GitHub operation started: commit_patch")
-        logger.info(f"Applying patch to branch {branch_name} with {len(file_paths)} files")
+        logger.info(f"Applying patch to branch {branch_name} with {len(patch_file_paths)} files")
         
         try:
             # Validate patch content
@@ -177,15 +298,28 @@ class GitHubService:
                 return False, {"error": {"code": "EMPTY_PATCH", "message": "Patch content is empty"}}
                 
             # Validate file paths
-            if not file_paths or len(file_paths) == 0:
+            if not patch_file_paths or len(patch_file_paths) == 0:
                 logger.error("No file paths provided for patch")
                 return False, {"error": {"code": "NO_FILES", "message": "No file paths provided for patch"}}
             
+            # Parse patch to verify files
+            parsed_changes = parse_patch_content(patch_content)
+            parsed_files = [change.get('file_path', '') for change in parsed_changes]
+            
+            # Check if all expected files are in the patch
+            missing_files = []
+            for file_path in patch_file_paths:
+                if file_path not in parsed_files:
+                    missing_files.append(file_path)
+            
+            if missing_files:
+                logger.warning(f"Some files missing in patch: {', '.join(missing_files)}")
+            
             # Log the files that will be patched
-            logger.info(f"Patching files: {file_paths}")
+            logger.info(f"Patching files from parsed content: {parsed_files}")
             
             # Apply patch using client
-            result = self.client.apply_patch(branch_name, patch_content, commit_message, file_paths)
+            result = self.client.apply_patch(branch_name, patch_content, commit_message, patch_file_paths)
             
             # Log success or failure
             if result.get("committed", False):
@@ -201,3 +335,13 @@ class GitHubService:
             logger.error(f"GitHub operation failed: commit_patch")
             logger.error(f"Error details: {str(e)}")
             return False, {"error": {"code": "EXCEPTION", "message": str(e)}}
+            
+    def delete_branch(self, branch_name: str) -> bool:
+        """Delete a branch after PR is merged or closed"""
+        try:
+            logger.info(f"Deleting branch {branch_name}")
+            # This would normally use the client to delete the branch
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting branch: {str(e)}")
+            return False

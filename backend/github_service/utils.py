@@ -183,9 +183,85 @@ def parse_patch_content(patch_content: str) -> List[Dict[str, Any]]:
         logger.info(f"Successfully parsed patch content: {len(file_changes)} files modified")
         return file_changes
     except ImportError:
-        logger.error("Failed to import unidiff - patch parsing unavailable")
-        return []
+        logger.error("Failed to import unidiff - falling back to basic patch parsing")
+        return parse_patch_basic(patch_content)
     except Exception as e:
         logger.error(f"Error parsing patch content: {str(e)}")
         traceback.print_exc()
+        return parse_patch_basic(patch_content)
+
+def parse_patch_basic(patch_content: str) -> List[Dict[str, Any]]:
+    """
+    Basic parser for patch content when unidiff is not available.
+    Handles unified diff format to extract file paths and changes.
+    
+    Args:
+        patch_content: A string containing the patch data in unified diff format
+        
+    Returns:
+        A list of dictionaries with file_path and change info
+    """
+    if not patch_content:
         return []
+        
+    file_changes = []
+    current_file = None
+    current_lines_added = 0
+    current_lines_removed = 0
+    current_patch = []
+    
+    lines = patch_content.split('\n')
+    
+    for line in lines:
+        # Detect file header lines (simplified for common formats)
+        if line.startswith('--- a/') or line.startswith('diff --git a/'):
+            # Save previous file if exists
+            if current_file:
+                file_changes.append({
+                    "file_path": current_file,
+                    "line_changes": {
+                        "added": current_lines_added,
+                        "removed": current_lines_removed,
+                        "total": current_lines_added + current_lines_removed
+                    },
+                    "patch": '\n'.join(current_patch)
+                })
+                
+            # Extract new file name for git diff format
+            if line.startswith('diff --git'):
+                parts = line.split(' ')
+                if len(parts) >= 3:
+                    current_file = parts[2].strip().lstrip('b/')
+                current_lines_added = 0
+                current_lines_removed = 0
+                current_patch = [line]
+            
+        # Extract new file for unified diff format
+        elif line.startswith('+++ b/'):
+            current_file = line.split(' ', 1)[1].strip().lstrip('b/')
+            current_patch.append(line)
+            
+        # Handle diff content lines
+        elif current_file is not None:
+            current_patch.append(line)
+            
+            # Count changed lines
+            if line.startswith('+') and not line.startswith('+++'):
+                current_lines_added += 1
+            elif line.startswith('-') and not line.startswith('---'):
+                current_lines_removed += 1
+    
+    # Add the last file if exists
+    if current_file:
+        file_changes.append({
+            "file_path": current_file,
+            "line_changes": {
+                "added": current_lines_added,
+                "removed": current_lines_removed,
+                "total": current_lines_added + current_lines_removed
+            },
+            "patch": '\n'.join(current_patch)
+        })
+    
+    logger.info(f"Basic patch parsing found {len(file_changes)} files modified")
+    return file_changes

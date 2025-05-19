@@ -162,7 +162,7 @@ services:
       - SLACK_CHANNEL=${SLACK_CHANNEL:-""}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONPATH=/app:/app/github_service
+      - PYTHONPATH=/app:/app/backend
       - TEST_COMMAND=python -m pytest
       - TEST_MODE=${TEST_MODE:-false}
       - NO_FALLBACK_MOCK=${NO_FALLBACK_MOCK:-true}
@@ -171,8 +171,8 @@ services:
     volumes:
       - ./code_repo:/app/code_repo
       - ./logs:/app/logs
-      - ./backend/github_service:/app/github_service
-      - ./backend/github_utils.py:/app/github_utils.py
+      - ./backend/github_service:/app/backend/github_service
+      - ./backend/github_utils.py:/app/backend/github_utils.py
       - ./agents/utils:/app/utils
     networks:
       - bugfix_network
