@@ -16,6 +16,13 @@ except ImportError:
     logging.error("Failed to import PyGithub - make sure it's installed")
     raise
 
+# Try to import unidiff for proper patch parsing
+try:
+    import unidiff
+except ImportError:
+    logging.error("Failed to import unidiff - make sure it's installed")
+    unidiff = None
+
 # Configure logger
 logger = logging.getLogger("github-client")
 
@@ -110,18 +117,7 @@ class GitHubClient:
             logger.error(f"Error creating branch {branch_name}: {str(e)}")
             return ""
 
-    def _mock_create_branch(self, branch_name: str) -> str:
-        """Mock implementation of create_branch"""
-        # Check if branch exists in mock data
-        if branch_name in self.mock_branches:
-            logger.info(f"Mock: Branch {branch_name} already exists")
-            return branch_name
-            
-        # Add branch to mock data
-        self.mock_branches.append(branch_name)
-        logger.info(f"Mock: Created branch {branch_name}")
-        
-        return branch_name
+    # ... keep existing code (_mock_create_branch)
 
     def commit_changes(
         self, 
@@ -191,49 +187,7 @@ class GitHubClient:
             logger.error(f"Error committing changes: {str(e)}")
             return {"committed": False, "error": {"code": "COMMIT_ERROR", "message": str(e)}}
 
-    def _mock_commit_changes(
-        self, 
-        branch_name: str, 
-        changes: List[Dict[str, str]], 
-        commit_message: str
-    ) -> Dict[str, Any]:
-        """Mock implementation of commit_changes"""
-        # Check if branch exists
-        if branch_name not in self.mock_branches:
-            logger.error(f"Mock: Branch {branch_name} does not exist")
-            return {"committed": False, "error": {"code": "BRANCH_NOT_FOUND", "message": f"Branch {branch_name} not found"}}
-            
-        # Track changes
-        files_changed = 0
-        
-        # Process each file change
-        for change in changes:
-            file_path = change.get("path")
-            content = change.get("content")
-            
-            if not file_path or not content:
-                continue
-                
-            # Store in mock data
-            if branch_name not in self.mock_files:
-                self.mock_files[branch_name] = {}
-                
-            # Check if file exists and content is different
-            existing_content = self.mock_files[branch_name].get(file_path)
-            if existing_content != content:
-                self.mock_files[branch_name][file_path] = content
-                files_changed += 1
-                
-        # Return result
-        if files_changed > 0:
-            logger.info(f"Mock: Committed {files_changed} files to {branch_name}")
-            return {"committed": True, "files_changed": files_changed}
-        else:
-            logger.warning(f"Mock: No files were changed in this commit")
-            return {
-                "committed": False, 
-                "error": {"code": "EMPTY_COMMIT", "message": "No files were changed in this commit"}
-            }
+    # ... keep existing code (_mock_commit_changes)
 
     def create_pull_request(self, branch_name: str, title: str, description: str) -> str:
         """Create a pull request from branch to default branch"""
@@ -256,19 +210,7 @@ class GitHubClient:
             logger.error(f"Error creating PR for {branch_name}: {str(e)}")
             return ""
 
-    def _mock_create_pull_request(self, branch_name: str, title: str, description: str) -> str:
-        """Mock implementation of create_pull_request"""
-        # Check if branch exists
-        if branch_name not in self.mock_branches:
-            logger.error(f"Mock: Branch {branch_name} does not exist")
-            return ""
-            
-        # Generate mock PR URL
-        pr_number = int(datetime.now().timestamp()) % 1000  # Generate a "unique" number
-        pr_url = f"https://github.com/{GITHUB_REPO_OWNER or 'example-org'}/{GITHUB_REPO_NAME or 'example-repo'}/pull/{pr_number}"
-        
-        logger.info(f"Mock: Created PR: {pr_url}")
-        return pr_url
+    # ... keep existing code (_mock_create_pull_request)
 
     def apply_patch(
         self, 
@@ -282,12 +224,24 @@ class GitHubClient:
             return self._mock_apply_patch(branch_name, patch_content, commit_message, file_paths)
             
         try:
-            # This would typically use Git's patch application functionality
-            # For simplicity in this example, we'll extract content from the patch
-            # and update files individually
-            
+            # Verify patch content
+            if not patch_content or not patch_content.strip():
+                logger.error("Empty patch content provided")
+                return {
+                    "committed": False, 
+                    "error": {"code": "EMPTY_PATCH", "message": "No patch content provided"}
+                }
+                
+            # Verify file paths
+            if not file_paths or len(file_paths) == 0:
+                logger.error("No file paths provided for patch")
+                return {
+                    "committed": False, 
+                    "error": {"code": "NO_FILE_PATHS", "message": "No file paths provided for patch"}
+                }
+                
             # Parse the patch content to determine what files are being modified
-            modified_files = self._parse_patch_files(patch_content)
+            modified_files = self._parse_patch_files(patch_content, file_paths)
             
             # Check if any valid files were found
             if not modified_files:
@@ -297,29 +251,16 @@ class GitHubClient:
                     "error": {"code": "INVALID_PATCH", "message": "No valid files found in patch"}
                 }
                 
-            # Filter files to only those in file_paths
-            filtered_files = {}
-            for file_path, content in modified_files.items():
-                if file_path in file_paths:
-                    filtered_files[file_path] = content
-                else:
-                    logger.warning(f"File {file_path} not in allowed file_paths, ignoring")
-                    
-            # Check if any files remain after filtering
-            if not filtered_files:
-                logger.error(f"No files from file_paths found in patch")
-                return {
-                    "committed": False, 
-                    "error": {"code": "NO_MATCHING_FILES", "message": "No files from file_paths found in patch"}
-                }
-                
             # Convert to format expected by commit_changes
             changes = []
-            for file_path, content in filtered_files.items():
+            for file_path, content in modified_files.items():
                 changes.append({
                     "path": file_path,
                     "content": content
                 })
+                
+            # Log the planned changes
+            logger.info(f"Applying patch to {len(changes)} files: {[c['path'] for c in changes]}")
                 
             # Commit changes
             return self.commit_changes(branch_name, changes, commit_message)
@@ -327,36 +268,106 @@ class GitHubClient:
             logger.error(f"Error applying patch: {str(e)}")
             return {"committed": False, "error": {"code": "PATCH_ERROR", "message": str(e)}}
 
-    def _mock_apply_patch(
-        self, 
-        branch_name: str, 
-        patch_content: str, 
-        commit_message: str, 
-        file_paths: List[str]
-    ) -> Dict[str, Any]:
-        """Mock implementation of apply_patch"""
-        # Simulate parsing the patch content
-        mock_changes = []
-        
-        # Create a mock change for each file path
-        for file_path in file_paths:
-            mock_changes.append({
-                "path": file_path,
-                "content": f"Mock content for {file_path}\nPatched at {datetime.now()}\n\n{patch_content[:50]}...\n"
-            })
-            
-        # Use the mock commit changes function
-        return self._mock_commit_changes(branch_name, mock_changes, commit_message)
+    # ... keep existing code (_mock_apply_patch)
 
-    def _parse_patch_files(self, patch_content: str) -> Dict[str, str]:
+    def _parse_patch_files(self, patch_content: str, allowed_file_paths: List[str]) -> Dict[str, str]:
         """
-        Parse a patch to extract file content
-        This is a simplification - real implementation would use git apply
+        Parse a patch to extract file content using unidiff when available
         """
-        # For this example, we'll just extract file names from the patch
-        # and generate placeholder content
-        # In a real implementation, you'd parse the unified diff properly
+        logger.info(f"Parsing patch content for files: {allowed_file_paths}")
         
+        # If unidiff is available, use it for proper patch parsing
+        if unidiff:
+            return self._parse_patch_with_unidiff(patch_content, allowed_file_paths)
+        else:
+            # Fallback to basic parsing for backward compatibility
+            return self._parse_patch_basic(patch_content, allowed_file_paths)
+        
+    def _parse_patch_with_unidiff(self, patch_content: str, allowed_file_paths: List[str]) -> Dict[str, str]:
+        """Parse patch content using unidiff library"""
+        files = {}
+        try:
+            # Parse the patch using unidiff
+            patch_set = unidiff.PatchSet.from_string(patch_content)
+            
+            # Process each patched file
+            for patched_file in patch_set:
+                # Extract file path - remove 'a/' and 'b/' prefixes if present
+                file_path = patched_file.target_file
+                if file_path.startswith('b/'):
+                    file_path = file_path[2:]
+                
+                # Skip files not in allowed_file_paths
+                if file_path not in allowed_file_paths:
+                    logger.warning(f"File {file_path} not in allowed file paths, skipping")
+                    continue
+                
+                # Get the current content if file exists
+                current_content = None
+                if not TEST_MODE:
+                    try:
+                        file_obj = self.repo.get_contents(file_path, ref=self.default_branch_name)
+                        current_content = file_obj.decoded_content.decode('utf-8')
+                    except Exception as e:
+                        logger.warning(f"Couldn't get current content for {file_path}: {str(e)}")
+                        
+                # If we couldn't get current content, start with empty content
+                if current_content is None:
+                    current_content = ""
+                
+                # Apply the patch to the content
+                new_content = current_content
+                
+                # Process each hunk in the patch
+                for hunk in patched_file:
+                    # Convert the hunk to a string representation
+                    hunk_lines = str(hunk).splitlines()
+                    
+                    # Extract the line numbers
+                    source_start = hunk.source_start
+                    target_start = hunk.target_start
+                    
+                    # Split the content into lines
+                    content_lines = new_content.splitlines()
+                    
+                    # Apply the changes
+                    # This is a simplified version - for production, you'd want to handle more edge cases
+                    line_position = source_start - 1  # Adjust for 0-based indexing
+                    lines_removed = 0
+                    
+                    for line in hunk_lines:
+                        if line.startswith('-') and not line.startswith('---'):
+                            # Line removed
+                            if 0 <= line_position < len(content_lines):
+                                content_lines.pop(line_position)
+                                lines_removed += 1
+                        elif line.startswith('+') and not line.startswith('+++'):
+                            # Line added
+                            added_content = line[1:]
+                            content_lines.insert(line_position, added_content)
+                            line_position += 1
+                        elif not line.startswith('@@'):
+                            # Context line - move the position
+                            line_position += 1
+                    
+                    # Reconstruct the content
+                    new_content = '\n'.join(content_lines)
+                    if new_content and not new_content.endswith('\n'):
+                        new_content += '\n'
+                
+                # Add the modified content to the result
+                files[file_path] = new_content
+                logger.info(f"Successfully parsed patch for file: {file_path}")
+                
+        except Exception as e:
+            logger.error(f"Error parsing patch with unidiff: {str(e)}")
+            traceback.print_exc()
+        
+        return files
+        
+    def _parse_patch_basic(self, patch_content: str, allowed_file_paths: List[str]) -> Dict[str, str]:
+        """Basic fallback patch parser when unidiff is not available"""
+        logger.warning("Using basic patch parser - unidiff not available")
         files = {}
         current_file = None
         
@@ -367,11 +378,18 @@ class GitHubClient:
                 
                 if line.startswith('+++ b/'):
                     current_file = file_path
-                    files[current_file] = f"# Generated from patch\n# {datetime.now()}\n\n"
+                    # Only process files in the allowed list
+                    if current_file in allowed_file_paths:
+                        files[current_file] = f"# Generated from patch\n# {datetime.now()}\n\n"
+                    else:
+                        current_file = None
+                        logger.warning(f"File {file_path} not in allowed file paths, skipping")
             
             elif current_file and line.startswith('+') and not line.startswith('+++'):
                 # Add content from added lines
                 content_line = line[1:]  # Remove the '+' prefix
                 files[current_file] += content_line + '\n'
+            
+            # In basic mode we don't handle '-' lines (removed content)
                 
         return files

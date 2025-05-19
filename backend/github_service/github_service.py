@@ -168,15 +168,21 @@ class GitHubService:
         """Commit changes using a patch"""
         # Log operation start
         logger.info("GitHub operation started: commit_patch")
+        logger.info(f"Applying patch to branch {branch_name} with {len(file_paths)} files")
         
         try:
             # Validate patch content
             if not patch_content or not patch_content.strip():
+                logger.error("Empty patch content provided")
                 return False, {"error": {"code": "EMPTY_PATCH", "message": "Patch content is empty"}}
                 
             # Validate file paths
             if not file_paths or len(file_paths) == 0:
+                logger.error("No file paths provided for patch")
                 return False, {"error": {"code": "NO_FILES", "message": "No file paths provided for patch"}}
+            
+            # Log the files that will be patched
+            logger.info(f"Patching files: {file_paths}")
             
             # Apply patch using client
             result = self.client.apply_patch(branch_name, patch_content, commit_message, file_paths)
@@ -184,6 +190,7 @@ class GitHubService:
             # Log success or failure
             if result.get("committed", False):
                 logger.info("GitHub operation succeeded: commit_patch")
+                logger.info(f"Applied patch to {result.get('files_changed', 0)} files")
                 return True, result
             else:
                 logger.error(f"GitHub operation failed: commit_patch")

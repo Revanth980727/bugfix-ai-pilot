@@ -65,38 +65,19 @@ def test_github_service():
             logger.error("Failed to commit changes")
             return
         
-        # Test creating PR - check if method exists before calling
-        if hasattr(service, 'create_fix_pr'):
-            pr_url = service.create_fix_pr(
-                branch_name,
-                ticket_id,
-                "Test bug fix",
-                "This is a test PR created by the GitHub service test script"
-            )
-            
-            if not pr_url:
-                logger.error("Failed to create PR")
-                return
-            
-            logger.info(f"Created PR: {pr_url}")
-        elif hasattr(service, 'create_pull_request'):
-            # Try alternative method name
-            pr_url = service.create_pull_request(
-                branch_name,
-                ticket_id,
-                "Test bug fix",
-                "This is a test PR created by the GitHub service test script"
-            )
-            
-            if not pr_url:
-                logger.error("Failed to create PR")
-                return
-            
-            logger.info(f"Created PR: {pr_url}")
-        else:
-            logger.error("PR creation method not found in GitHubService")
+        # Test creating PR - use create_pull_request directly
+        pr_url = service.create_pull_request(
+            branch_name,
+            ticket_id,
+            "Test bug fix",
+            "This is a test PR created by the GitHub service test script"
+        )
+        
+        if not pr_url:
+            logger.error("Failed to create PR")
             return
         
+        logger.info(f"Created PR: {pr_url}")
         logger.info("All GitHub service tests passed successfully!")
     except Exception as e:
         logger.error(f"GitHub service test failed: {str(e)}")

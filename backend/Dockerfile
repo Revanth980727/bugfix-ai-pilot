@@ -20,9 +20,9 @@ COPY . .
 # Set up environment variables - ensure PYTHONPATH includes the current directory
 ENV PYTHONPATH=/app
 
-# Explicitly install unidiff if it's missing
-RUN pip install unidiff && \
-    python -c "import github; import jira; import unidiff; print('All required modules can be imported')"
+# Explicitly install PyGithub and unidiff
+RUN pip install --no-cache-dir PyGithub unidiff && \
+    python -c "import github; import unidiff; print('All required modules can be imported')"
 
 # Run the orchestrator with the correct Python module path
 CMD ["python", "-m", "orchestrator.start_orchestrator"]

@@ -8,6 +8,7 @@ RUN apt-get update && \
     apt-get install -y git curl && \
     rm -rf /var/lib/apt/lists/*
 
+# Copy requirements first for better layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -20,9 +21,10 @@ RUN mkdir -p /app/utils
 RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
-# Add PyGithub and jira packages explicitly
-RUN pip install PyGithub jira unidiff && \
-    python -c "import sys; print(sys.path); import github; import jira; import unidiff; print('All required modules can be imported')"
+# Add required packages explicitly with error handling
+RUN pip install --no-cache-dir PyGithub jira unidiff && \
+    echo "Verifying imports..." && \
+    python -c "import sys; print('Python path:', sys.path); import github; print('github imported'); import jira; print('jira imported'); import unidiff; print('unidiff imported'); print('All required modules can be imported')"
 
 # Make sure uvicorn is in the PATH
 ENV PATH="/usr/local/bin:${PATH}"
