@@ -2,6 +2,7 @@
 import os
 import logging
 import hashlib
+import traceback
 from typing import Dict, Optional, Any, Tuple, List
 
 # Configure logger
@@ -18,6 +19,8 @@ class GitHubError:
     ERR_TEST_MODE = "TEST_MODE_REQUIRED"
     ERR_PERMISSION_DENIED = "PERMISSION_DENIED"
     ERR_NO_CHANGES = "NO_CHANGES"
+    ERR_IMPORT_FAILED = "IMPORT_FAILED"
+    ERR_CONFIG_INVALID = "CONFIG_INVALID"
     
     def __init__(self, code: str, message: str, file_path: Optional[str] = None, 
                  suggested_action: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
@@ -59,14 +62,9 @@ class GitHubError:
 
 def is_test_mode() -> bool:
     """Centralized function to check if system is running in test mode"""
-    environment = os.environ.get("ENVIRONMENT", "development")
-    test_mode = os.environ.get("GITHUB_TEST_MODE", "false").lower() == "true"
-    
-    # In development, test mode defaults to True if not specified
-    if environment == "development" and "GITHUB_TEST_MODE" not in os.environ:
-        return True
-        
-    return test_mode
+    # Import directly here to avoid circular imports
+    from backend.github_service.config import TEST_MODE
+    return TEST_MODE
 
 
 def is_production() -> bool:
@@ -227,3 +225,41 @@ def has_meaningful_changes(file_results: List[Dict[str, Any]]) -> bool:
             if validation.get("hasMeaningfulChanges", False):
                 return True
     return False
+
+def verify_module_imports() -> bool:
+    """
+    Verify that all required modules can be imported.
+    This helps identify import issues early rather than falling back to mocks silently.
+    
+    Returns:
+        True if all required modules can be imported, False otherwise
+    """
+    required_modules = [
+        ('github', 'PyGithub'),
+        ('jira', 'jira'),
+        ('unidiff', 'unidiff')
+    ]
+    
+    missing_modules = []
+    
+    for module_name, package_name in required_modules:
+        try:
+            __import__(module_name)
+            logger.info(f"✅ Successfully imported {module_name}")
+        except ImportError:
+            missing_modules.append((module_name, package_name))
+            logger.error(f"❌ Failed to import {module_name} (from package {package_name})")
+    
+    if missing_modules:
+        modules_str = ", ".join([f"{m[0]} (pip install {m[1]})" for m in missing_modules])
+        logger.error(f"Missing required modules: {modules_str}")
+        logger.error("Please install the missing packages or check your PYTHONPATH")
+        return False
+    
+    return True
+
+def log_exception_with_traceback(e: Exception, context: str = ""):
+    """Log an exception with full traceback for better debugging"""
+    logger.error(f"Exception in {context or 'operation'}: {str(e)}")
+    logger.error(traceback.format_exc())
+

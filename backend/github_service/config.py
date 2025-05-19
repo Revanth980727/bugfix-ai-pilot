@@ -18,7 +18,7 @@ GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME')
 GITHUB_DEFAULT_BRANCH = os.getenv('GITHUB_DEFAULT_BRANCH', 'main')
 GITHUB_USE_DEFAULT_BRANCH_ONLY = os.getenv('GITHUB_USE_DEFAULT_BRANCH_ONLY', 'False').lower() == 'true'
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
-# Explicitly handle the TEST_MODE value as a boolean
+# Explicitly handle the TEST_MODE value as a boolean with safer default to False
 TEST_MODE = os.getenv('TEST_MODE', 'False').lower() in ('true', 'yes', '1', 't')
 # Add configuration for empty commit handling
 ALLOW_EMPTY_COMMITS = os.getenv('ALLOW_EMPTY_COMMITS', 'False').lower() in ('true', 'yes', '1', 't')
@@ -43,6 +43,7 @@ def verify_config():
         
         # Only allow missing vars in test mode
         if not TEST_MODE:
+            logger.error("Running in PRODUCTION mode with incomplete configuration - this will cause failures!")
             return False
         else:
             logger.warning("Running in TEST_MODE with incomplete configuration (this is not recommended)")
@@ -53,6 +54,7 @@ def verify_config():
     if GITHUB_TOKEN == "your_github_token_here":
         logger.error("GITHUB_TOKEN contains a placeholder value. Please set a valid GitHub token in your .env file.")
         if not TEST_MODE:
+            logger.error("Using placeholder token value in PRODUCTION mode will cause failures!")
             return False
         logger.warning("Using placeholder token value only allowed in TEST_MODE")
         
@@ -60,12 +62,14 @@ def verify_config():
     if GITHUB_REPO_OWNER == "your_github_username_or_org":
         logger.error("GITHUB_REPO_OWNER contains a placeholder value. Please set a valid GitHub username or organization in your .env file.")
         if not TEST_MODE:
+            logger.error("Using placeholder repo owner in PRODUCTION mode will cause failures!")
             return False
         logger.warning("Using placeholder repo owner only allowed in TEST_MODE")
         
     if GITHUB_REPO_NAME == "your_repository_name":
         logger.error("GITHUB_REPO_NAME contains a placeholder value. Please set a valid repository name in your .env file.")
         if not TEST_MODE:
+            logger.error("Using placeholder repo name in PRODUCTION mode will cause failures!")
             return False
         logger.warning("Using placeholder repo name only allowed in TEST_MODE")
 
@@ -73,11 +77,13 @@ def verify_config():
     if GITHUB_REPO_OWNER == "":
         logger.error("GITHUB_REPO_OWNER is an empty string. Please set a valid GitHub username or organization in your .env file.")
         if not TEST_MODE:
+            logger.error("Empty repo owner in PRODUCTION mode will cause failures!")
             return False
     
     if GITHUB_REPO_NAME == "":
         logger.error("GITHUB_REPO_NAME is an empty string. Please set a valid repository name in your .env file.")
         if not TEST_MODE:
+            logger.error("Empty repo name in PRODUCTION mode will cause failures!")
             return False
 
     # Explicitly check if we're in test mode and warn about it
@@ -134,3 +140,4 @@ def get_patch_mode():
 def allow_empty_commits():
     """Check if empty commits are allowed."""
     return ALLOW_EMPTY_COMMITS
+

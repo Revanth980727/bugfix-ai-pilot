@@ -20,5 +20,8 @@ COPY . .
 # Set up environment variables
 ENV PYTHONPATH=/app
 
+# Verify modules can be imported before starting
+RUN python -c "import github; import jira; import unidiff; print('All required modules can be imported')"
+
 # Run the orchestrator with the correct Python module path
 CMD ["python", "-m", "orchestrator.start_orchestrator"]

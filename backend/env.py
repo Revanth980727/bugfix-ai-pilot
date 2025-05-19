@@ -1,6 +1,7 @@
 
 import os
 import logging
+import traceback
 from dotenv import load_dotenv
 
 # Load environment variables from root .env file
@@ -185,3 +186,63 @@ def print_env_debug():
     print(f"MAX_RETRIES: {MAX_RETRIES}")
     print(f"LOG_LEVEL: {LOG_LEVEL}")
     print("================================\n")
+
+# New function to verify Python modules are installed
+def verify_python_modules():
+    """Verify that required Python modules are installed."""
+    required_modules = {
+        'github': 'PyGithub',
+        'jira': 'jira',
+        'unidiff': 'unidiff',
+        'dotenv': 'python-dotenv',
+        'requests': 'requests',
+    }
+    
+    missing_modules = []
+    
+    for module_name, package_name in required_modules.items():
+        try:
+            __import__(module_name)
+            logger.debug(f"Module {module_name} is installed")
+        except ImportError:
+            missing_modules.append(f"{module_name} (pip install {package_name})")
+            logger.error(f"Required module {module_name} is not installed")
+    
+    if missing_modules:
+        error_msg = f"Missing Python modules: {', '.join(missing_modules)}"
+        logger.error(error_msg)
+        
+        if not TEST_MODE:
+            raise ImportError(error_msg)
+        else:
+            logger.warning("Running in TEST_MODE with missing modules (mock implementations will be used)")
+    
+    return len(missing_modules) == 0
+
+# Function to check Python path
+def check_python_path():
+    """Check if PYTHONPATH is correctly set for imports."""
+    import sys
+    
+    logger.info("Python path:")
+    for path in sys.path:
+        logger.info(f"  - {path}")
+    
+    # Check if current directory or parent is in path
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    
+    if current_dir not in sys.path and parent_dir not in sys.path:
+        logger.warning(f"Neither current directory {current_dir} nor parent directory {parent_dir} is in PYTHONPATH")
+        logger.warning("This may cause import issues")
+        
+        # Add parent directory to path if it exists and contains backend package
+        if os.path.exists(os.path.join(parent_dir, 'backend')):
+            logger.info(f"Adding {parent_dir} to Python path")
+            sys.path.append(parent_dir)
+            return True
+            
+        return False
+    
+    return True
+
