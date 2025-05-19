@@ -62,9 +62,20 @@ class GitHubError:
 
 def is_test_mode() -> bool:
     """Centralized function to check if system is running in test mode"""
-    # Import directly here to avoid circular imports
-    from backend.github_service.config import TEST_MODE
-    return TEST_MODE
+    # Import directly here to avoid circular imports - fixed path to work within container
+    try:
+        from github_service.config import TEST_MODE
+        return TEST_MODE
+    except ImportError:
+        # Fall back to local import if module structure is different
+        try:
+            from config import TEST_MODE
+            return TEST_MODE
+        except ImportError:
+            # Last resort - check environment variable directly
+            logger.warning("Could not import TEST_MODE from config, checking env var directly")
+            import os
+            return os.environ.get('TEST_MODE', 'False').lower() in ('true', 'yes', '1', 't')
 
 
 def is_production() -> bool:
@@ -262,4 +273,3 @@ def log_exception_with_traceback(e: Exception, context: str = ""):
     """Log an exception with full traceback for better debugging"""
     logger.error(f"Exception in {context or 'operation'}: {str(e)}")
     logger.error(traceback.format_exc())
-

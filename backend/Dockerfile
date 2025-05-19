@@ -17,7 +17,7 @@ RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 
 COPY . .
 
-# Set up environment variables
+# Set up environment variables - ensure PYTHONPATH includes the current directory
 ENV PYTHONPATH=/app
 
 # Explicitly install unidiff if it's missing
