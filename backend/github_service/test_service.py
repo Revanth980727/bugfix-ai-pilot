@@ -134,6 +134,20 @@ def test_github_service():
         logger.info("Created modification patch content")
         logger.info(f"Patch preview: {modified_patch[:200]}...")
         
+        # Test intelligent patch application using different methods
+        logger.info("Testing intelligent patch application")
+        
+        # Test 1: Using unidiff library (should be installed)
+        import importlib
+        has_unidiff = importlib.util.find_spec("unidiff") is not None
+        logger.info(f"unidiff library available: {has_unidiff}")
+        
+        # Test 2: Test validation of current content vs patched content
+        for file_path in file_paths:
+            current_content = service._github_client._get_file_content(file_path, branch_name)
+            logger.info(f"Current content for {file_path} exists: {bool(current_content)}")
+            logger.info(f"Content preview: {current_content[:30]}..." if current_content else "No content")
+        
         # Test committing with the patch content
         logger.info("Testing commit with modification patch")
         commit_patch_success = service.commit_patch(
@@ -147,6 +161,23 @@ def test_github_service():
             logger.warning("Modified patch-based commit failed, falling back to direct file commits")
         else:
             logger.info("Modified patch-based commit succeeded")
+            
+            # Verify the files were actually modified correctly
+            for file_path in file_paths:
+                updated_content = service._github_client._get_file_content(file_path, branch_name)
+                logger.info(f"Verifying {file_path} after patch:")
+                if file_path == "GraphRAG.py":
+                    if "import matplotlib.pyplot as plt" in updated_content and "G.add_node(1)" in updated_content:
+                        logger.info("✅ GraphRAG.py was correctly patched!")
+                    else:
+                        logger.error("❌ GraphRAG.py was not correctly patched!")
+                        logger.error(f"Content after patch: {updated_content}")
+                elif file_path == "test.md":
+                    if "This line was added in the middle of the file" in updated_content:
+                        logger.info("✅ test.md was correctly patched!")
+                    else:
+                        logger.error("❌ test.md was not correctly patched!")
+                        logger.error(f"Content after patch: {updated_content}")
         
         # Test creating PR - use create_pull_request directly
         pr_url = service.create_pull_request(

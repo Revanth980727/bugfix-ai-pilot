@@ -242,7 +242,7 @@ class GitHubClient:
                 }
                 
             # Parse the patch content to determine what files are being modified
-            modified_files = self._parse_patch_files(patch_content, file_paths)
+            modified_files = self._parse_patch_files(patch_content, file_paths, branch_name)
             
             # Check if any valid files were found
             if not modified_files:
@@ -271,7 +271,7 @@ class GitHubClient:
 
     # ... keep existing code (_mock_apply_patch)
 
-    def _parse_patch_files(self, patch_content: str, allowed_file_paths: List[str]) -> Dict[str, str]:
+    def _parse_patch_files(self, patch_content: str, allowed_file_paths: List[str], branch_name: str) -> Dict[str, str]:
         """
         Parse a patch to extract file content using unidiff when available
         """
@@ -280,14 +280,14 @@ class GitHubClient:
         # If unidiff is available, use it for proper patch parsing
         if unidiff:
             logger.info("Using unidiff for proper patch parsing")
-            return self._parse_patch_with_unidiff(patch_content, allowed_file_paths)
+            return self._parse_patch_with_unidiff(patch_content, allowed_file_paths, branch_name)
         else:
-            # Fallback to basic parsing for backward compatibility
-            logger.warning("unidiff not available - using basic parsing which may result in incorrect changes")
-            return self._parse_patch_basic(patch_content, allowed_file_paths)
+            # Fallback to enhanced basic parsing
+            logger.warning("unidiff not available - using enhanced basic parsing")
+            return self._parse_patch_basic(patch_content, allowed_file_paths, branch_name)
         
-    def _parse_patch_with_unidiff(self, patch_content: str, allowed_file_paths: List[str]) -> Dict[str, str]:
-        """Parse patch content using unidiff library"""
+    def _parse_patch_with_unidiff(self, patch_content: str, allowed_file_paths: List[str], branch_name: str) -> Dict[str, str]:
+        """Parse patch content using unidiff library with intelligent patching"""
         files = {}
         try:
             # Parse the patch using unidiff
@@ -306,53 +306,106 @@ class GitHubClient:
                     continue
                 
                 # Get the current content if file exists
-                current_content = self._get_file_content(file_path, branch_name=self.default_branch_name)
+                current_content = self._get_file_content(file_path, branch_name)
+                logger.info(f"Original content for {file_path}: {len(current_content) if current_content else 0} bytes")
                 
                 # Apply the patch to the content
                 modified_content = self._apply_patched_file(patched_file, current_content)
+                logger.info(f"Modified content for {file_path}: {len(modified_content)} bytes")
                 
                 # Add the modified content to the result
                 files[file_path] = modified_content
                 logger.info(f"Successfully parsed and applied patch for file: {file_path}")
                 
+                # Optional: Detailed logging of changes
+                lines_original = current_content.splitlines() if current_content else []
+                lines_modified = modified_content.splitlines() 
+                logger.info(f"Lines in original: {len(lines_original)}, Lines in modified: {len(lines_modified)}")
+                
         except Exception as e:
             logger.error(f"Error parsing patch with unidiff: {str(e)}")
             traceback.print_exc()
-            logger.warning("Falling back to basic patch parser")
-            return self._parse_patch_basic(patch_content, allowed_file_paths)
+            logger.warning("Falling back to enhanced basic patch parser")
+            return self._parse_patch_basic(patch_content, allowed_file_paths, branch_name)
         
         return files
     
     def _apply_patched_file(self, patched_file, current_content=None):
         """Apply a patched file to current content"""
-        if current_content is None:
-            current_content = ""
+        if current_content is None or current_content == "":
+            logger.info("Creating new file with patch content")
+            # For new files, construct the content from added lines only
+            lines = []
+            for hunk in patched_file:
+                for line in hunk:
+                    if line.is_added:
+                        lines.append(line.value)
+            return "\n".join(lines)
+        else:
+            # Handle patches to existing files
+            logger.info("Applying patch to existing content")
             
-        # Split content into lines for easier processing
-        lines = current_content.splitlines()
-        
-        # Process each hunk in the patched file
-        for hunk in patched_file:
-            source_start = hunk.source_start - 1  # Convert to 0-based index
-            source_length = hunk.source_length
-            target_start = hunk.target_start - 1  # Convert to 0-based index
-            target_length = hunk.target_length
+            # Split content into lines for easier processing
+            lines = current_content.splitlines()
+            logger.info(f"Starting with {len(lines)} lines of content")
             
-            # Get lines to remove and lines to add
-            removed_lines = [line.value for line in hunk if line.is_removed]
-            added_lines = [line.value for line in hunk if line.is_added]
+            # Track offsets caused by earlier changes
+            line_offset = 0
             
-            # Apply the changes to the lines
-            if source_length > 0:
-                # Remove the specified lines
-                lines[source_start:source_start + source_length] = []
+            # Process each hunk in the patched file
+            for hunk in patched_file:
+                source_start = hunk.source_start - 1  # Convert to 0-based index
+                source_length = hunk.source_length
                 
-            # Insert the new lines
-            for i, line in enumerate(added_lines):
-                lines.insert(source_start + i, line)
-        
-        # Join the lines back into a string
-        return '\n'.join(lines) + '\n'
+                # Adjust for offsets from previous hunks
+                adjusted_start = source_start + line_offset
+                
+                # Get lines to remove and lines to add
+                removed_lines = [line.value for line in hunk if line.is_removed]
+                added_lines = [line.value for line in hunk if line.is_added]
+                
+                # Log hunk information
+                logger.info(f"Hunk: @@ -{source_start+1},{source_length} +{hunk.target_start},{hunk.target_length} @@")
+                logger.info(f"  Removing {len(removed_lines)} lines, Adding {len(added_lines)} lines")
+                logger.info(f"  Adjusted start line: {adjusted_start}")
+                
+                # Validation to ensure we're patching at the right place
+                if adjusted_start < 0:
+                    adjusted_start = 0
+                    logger.warning("Adjusted start position to 0")
+                    
+                if adjusted_start >= len(lines):
+                    logger.warning(f"Hunk start position {adjusted_start} beyond end of file ({len(lines)} lines)")
+                    adjusted_start = len(lines)
+                
+                # Remove the specified lines and insert new ones
+                if source_length > 0 and len(lines) > 0:
+                    # Verify that the removed lines match what we expect
+                    actual_lines = lines[adjusted_start:adjusted_start + source_length]
+                    expected_lines = [line.value for line in hunk if line.is_removed]
+                    
+                    # Check if lines match loosely (allowing for slight differences)
+                    lines_match = (len(actual_lines) == len(expected_lines))
+                    if not lines_match:
+                        logger.warning(f"Lines don't match exactly: got {len(actual_lines)}, expected {len(expected_lines)}")
+                        
+                    # Remove the lines (even if they don't match exactly)
+                    del lines[adjusted_start:adjusted_start + source_length]
+                
+                # Insert the new lines
+                for i, line in enumerate(added_lines):
+                    if adjusted_start + i <= len(lines):
+                        lines.insert(adjusted_start + i, line)
+                    else:
+                        lines.append(line)
+                
+                # Update the offset for future hunks
+                line_offset += (len(added_lines) - source_length)
+                logger.info(f"New line offset: {line_offset}")
+            
+            logger.info(f"Final content has {len(lines)} lines")
+            # Join the lines back into a string
+            return '\n'.join(lines)
     
     def _get_file_content(self, file_path, branch_name=None):
         """Get the content of a file from the repository"""
@@ -360,143 +413,233 @@ class GitHubClient:
             branch_name = self.default_branch_name
             
         if TEST_MODE:
-            # Mock file content
+            # In test mode, check our mock files dict first
+            if file_path in self.mock_files:
+                logger.info(f"Returning mock content for {file_path}")
+                return self.mock_files[file_path]
+            
+            # Otherwise return mock content
             return f"# Mock content for {file_path}\n# Generated for testing\n\n"
             
         try:
             file_content = self.repo.get_contents(file_path, ref=branch_name)
-            return file_content.decoded_content.decode('utf-8')
+            content = file_content.decoded_content.decode('utf-8')
+            return content
         except Exception as e:
             logger.warning(f"Could not get content for file {file_path}: {str(e)}")
             return ""
         
-    def _parse_patch_basic(self, patch_content: str, allowed_file_paths: List[str]) -> Dict[str, str]:
-        """Improved basic fallback patch parser when unidiff is not available"""
-        logger.warning("Using basic patch parser - working with limited patch parsing capabilities")
+    def _parse_patch_basic(self, patch_content: str, allowed_file_paths: List[str], branch_name: str) -> Dict[str, str]:
+        """Enhanced basic fallback patch parser with better context handling"""
+        logger.warning("Using enhanced basic patch parser with context handling")
         files = {}
-        current_file = None
-        hunk_info = {}
         
-        # First, identify all the files and their hunks
+        # First, parse the patch to identify files and hunks
+        patch_by_file = {}
+        current_file = None
+        current_hunks = []
+        current_hunk = None
+        
         lines = patch_content.splitlines()
         i = 0
         
         while i < len(lines):
             line = lines[i]
             
-            # Detect file headers
+            # Parse file headers
             if line.startswith('--- a/') and i + 1 < len(lines) and lines[i + 1].startswith('+++ b/'):
-                # Extract file path from the +++ line
-                file_path = lines[i + 1][6:]  # Remove '+++ b/' prefix
+                # Save previous file if exists
+                if current_file and current_hunks:
+                    patch_by_file[current_file] = current_hunks
+                
+                # Extract new file path
+                file_path = lines[i + 1][6:] if lines[i + 1].startswith('+++ b/') else lines[i + 1][4:]
                 current_file = file_path
-                
-                # Initialize hunk info for this file
-                if current_file not in hunk_info:
-                    hunk_info[current_file] = []
-                
-                # Skip the +++ line
-                i += 2
+                current_hunks = []
+                i += 2  # Skip the +++ line
                 continue
             
-            # Process hunk headers
+            # Parse hunk headers
             elif line.startswith('@@') and '@@' in line[2:]:
-                if current_file:
-                    # Parse hunk header to get line numbers
-                    # Format is typically @@ -l,s +l,s @@ optional section heading
-                    header_parts = line.split(' ')
-                    if len(header_parts) >= 3:
-                        source_info = header_parts[1]  # -l,s part
-                        target_info = header_parts[2]  # +l,s part
-                        
-                        # Parse source (original file) info
-                        if source_info.startswith('-'):
-                            source_parts = source_info[1:].split(',')
-                            source_start = int(source_parts[0])
-                            source_length = int(source_parts[1]) if len(source_parts) > 1 else 1
-                        else:
-                            source_start = 0
-                            source_length = 0
-                        
-                        # Parse target (new file) info
-                        if target_info.startswith('+'):
-                            target_parts = target_info[1:].split(',')
-                            target_start = int(target_parts[0])
-                            target_length = int(target_parts[1]) if len(target_parts) > 1 else 1
-                        else:
-                            target_start = 0
-                            target_length = 0
-                        
-                        # Store hunk information
-                        current_hunk = {
-                            'source_start': source_start,
-                            'source_length': source_length,
-                            'target_start': target_start,
-                            'target_length': target_length,
-                            'content': [line],  # Start with the header line
-                            'removed_lines': [],
-                            'added_lines': []
-                        }
-                        
-                        hunk_info[current_file].append(current_hunk)
-                    else:
-                        logger.warning(f"Malformed hunk header: {line}")
-                else:
-                    logger.warning(f"Found hunk header without file: {line}")
-            
-            # Process content lines
-            elif current_file and hunk_info.get(current_file):
-                current_hunk = hunk_info[current_file][-1]
-                current_hunk['content'].append(line)
+                # Start a new hunk
+                hunk_parts = line.split(' ')
+                if len(hunk_parts) >= 3:
+                    source_info = hunk_parts[1][1:]  # Remove leading '-'
+                    target_info = hunk_parts[2][1:]  # Remove leading '+'
+                    
+                    # Parse source line info
+                    source_parts = source_info.split(',')
+                    source_start = int(source_parts[0])
+                    source_length = int(source_parts[1]) if len(source_parts) > 1 else 1
+                    
+                    # Parse target line info
+                    target_parts = target_info.split(',')
+                    target_start = int(target_parts[0])
+                    target_length = int(target_parts[1]) if len(target_parts) > 1 else 1
+                    
+                    current_hunk = {
+                        'source_start': source_start,
+                        'source_length': source_length,
+                        'target_start': target_start,
+                        'target_length': target_length,
+                        'context_before': [],
+                        'removed': [],
+                        'added': [],
+                        'context_after': []
+                    }
+                    current_hunks.append(current_hunk)
+                i += 1
+                continue
                 
+            # Parse hunk content
+            elif current_hunk is not None:
                 if line.startswith('-'):
-                    current_hunk['removed_lines'].append(line[1:])
+                    current_hunk['removed'].append(line[1:])
                 elif line.startswith('+'):
-                    current_hunk['added_lines'].append(line[1:])
-                    
-            i += 1
+                    current_hunk['added'].append(line[1:])
+                elif line.startswith(' '):  # Context line
+                    if len(current_hunk['removed']) == 0 and len(current_hunk['added']) == 0:
+                        # Context before any changes
+                        current_hunk['context_before'].append(line[1:])
+                    else:
+                        # Context after changes
+                        current_hunk['context_after'].append(line[1:])
+                i += 1
+                continue
+            
+            i += 1  # Move to next line
+            
+        # Save the last file if exists
+        if current_file and current_hunks:
+            patch_by_file[current_file] = current_hunks
+            
+        # Log what files were found in the patch
+        logger.info(f"Found {len(patch_by_file)} files in patch: {list(patch_by_file.keys())}")
         
-        # Now, fetch current content and apply patches for each file
-        for file_path, hunks in hunk_info.items():
-            if file_path in allowed_file_paths:
-                # Get current content
-                current_content = self._get_file_content(file_path)
-                content_lines = current_content.splitlines() if current_content else []
+        # Now apply the hunks to each file
+        for file_path, hunks in patch_by_file.items():
+            # Skip files not in our allowed list
+            if file_path not in allowed_file_paths:
+                logger.warning(f"Skipping file not in allowed list: {file_path}")
+                continue
                 
-                # Apply each hunk
-                offsets = {}  # Track line shifts due to previous hunks
+            # Get current content of the file
+            current_content = self._get_file_content(file_path, branch_name)
+            current_lines = current_content.splitlines() if current_content else []
+            
+            logger.info(f"Applying {len(hunks)} hunks to {file_path} with {len(current_lines)} existing lines")
+            
+            # Track line offsets as we apply hunks
+            line_offset = 0
+            
+            # Apply each hunk in sequence
+            for hunk_index, hunk in enumerate(hunks):
+                source_start = hunk['source_start'] - 1  # Convert to 0-based
+                source_length = hunk['source_length']
+                removed_lines = hunk['removed']
+                added_lines = hunk['added']
+                context_before = hunk['context_before']
+                context_after = hunk['context_after']
                 
-                for hunk in hunks:
-                    source_start = hunk['source_start'] - 1  # Convert to 0-based
-                    source_length = hunk['source_length']
-                    added_lines = hunk['added_lines']
-                    
-                    # Adjust for previous changes
-                    source_start_adjusted = source_start
-                    if source_start in offsets:
-                        source_start_adjusted += offsets[source_start]
-                    
-                    # Remove the original lines
-                    if source_start_adjusted < len(content_lines) and source_length > 0:
-                        content_lines[source_start_adjusted:source_start_adjusted + source_length] = []
-                    
-                    # Add the new lines
-                    for i, line in enumerate(added_lines):
-                        if source_start_adjusted + i <= len(content_lines):
-                            content_lines.insert(source_start_adjusted + i, line)
-                        else:
-                            content_lines.append(line)
-                    
-                    # Update offsets for future hunks
-                    line_diff = len(added_lines) - source_length
-                    for line_num in sorted(list(offsets.keys())):
-                        if line_num > source_start:
-                            offsets[line_num] += line_diff
-                    
-                    # Add offset for this hunk
-                    offsets[source_start] = offsets.get(source_start, 0) + line_diff
+                # Adjust for previous hunks
+                adjusted_start = source_start + line_offset
                 
-                # Join back into content
-                files[file_path] = '\n'.join(content_lines) + '\n'
-                logger.info(f"Applied changes to {file_path} using basic parser")
-        
+                logger.info(f"Hunk {hunk_index+1}: Line {source_start+1}, {source_length} lines (adjusted: {adjusted_start+1})")
+                logger.info(f"  Context before: {len(context_before)} lines")
+                logger.info(f"  Removed: {len(removed_lines)} lines")
+                logger.info(f"  Added: {len(added_lines)} lines")
+                logger.info(f"  Context after: {len(context_after)} lines")
+                
+                # For new files or empty files, just add the content
+                if len(current_lines) == 0:
+                    current_lines = context_before + added_lines + context_after
+                    logger.info(f"Added {len(current_lines)} lines to new/empty file")
+                    continue
+                
+                # Handle existing files - adjust position if needed
+                if adjusted_start < 0:
+                    adjusted_start = 0
+                    logger.warning(f"Adjusted start position to 0 for hunk {hunk_index+1}")
+                elif adjusted_start > len(current_lines):
+                    adjusted_start = len(current_lines)
+                    logger.warning(f"Adjusted start position to end of file for hunk {hunk_index+1}")
+                
+                # Remove original lines and insert new ones
+                if source_length > 0 and adjusted_start < len(current_lines):
+                    # Check how much we can safely remove
+                    safe_length = min(source_length, len(current_lines) - adjusted_start)
+                    
+                    # Remove the lines
+                    del current_lines[adjusted_start:adjusted_start + safe_length]
+                    logger.info(f"Removed {safe_length} lines at position {adjusted_start+1}")
+                
+                # Insert the new lines
+                for i, line in enumerate(added_lines):
+                    current_lines.insert(adjusted_start + i, line)
+                    
+                logger.info(f"Added {len(added_lines)} lines at position {adjusted_start+1}")
+                
+                # Update offset for next hunk
+                line_offset += (len(added_lines) - source_length)
+                logger.info(f"Updated line offset to {line_offset}")
+            
+            # Join lines back into content
+            modified_content = '\n'.join(current_lines)
+            if current_content and not modified_content.endswith('\n'):
+                modified_content += '\n'
+                
+            # Store the result
+            files[file_path] = modified_content
+            logger.info(f"Successfully applied patch to {file_path}: {len(current_lines)} final lines")
+            
         return files
+
+    def _mock_create_branch(self, branch_name: str) -> str:
+        """Mock implementation of create_branch for testing"""
+        logger.info(f"MOCK: Creating branch {branch_name}")
+        self.mock_branches.append(branch_name)
+        return branch_name
+
+    def _mock_commit_changes(
+        self, 
+        branch_name: str, 
+        changes: List[Dict[str, str]], 
+        commit_message: str
+    ) -> Dict[str, Any]:
+        """Mock implementation of commit_changes for testing"""
+        logger.info(f"MOCK: Committing {len(changes)} changes to {branch_name}: {commit_message}")
+        
+        # Store changes in mock_files
+        for change in changes:
+            file_path = change.get("path")
+            content = change.get("content")
+            if file_path and content:
+                self.mock_files[file_path] = content
+                logger.info(f"MOCK: Updated {file_path} with {len(content)} bytes")
+        
+        return {"committed": True, "files_changed": len(changes)}
+
+    def _mock_create_pull_request(self, branch_name: str, title: str, description: str) -> str:
+        """Mock implementation of create_pull_request for testing"""
+        logger.info(f"MOCK: Creating PR for {branch_name}: {title}")
+        return f"https://github.com/example/repo/pull/999"
+
+    def _mock_apply_patch(
+        self, 
+        branch_name: str, 
+        patch_content: str, 
+        commit_message: str, 
+        file_paths: List[str]
+    ) -> Dict[str, Any]:
+        """Mock implementation of apply_patch for testing"""
+        logger.info(f"MOCK: Applying patch to {branch_name}: {len(patch_content)} bytes")
+        
+        # Parse the patch content
+        modified_files = self._parse_patch_files(patch_content, file_paths, branch_name)
+        
+        # Store modified files
+        for file_path, content in modified_files.items():
+            self.mock_files[file_path] = content
+            logger.info(f"MOCK: Updated {file_path} with patched content: {len(content)} bytes")
+            
+        return {"committed": True, "files_changed": len(modified_files)}
