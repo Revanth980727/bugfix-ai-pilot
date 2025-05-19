@@ -21,7 +21,8 @@ RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
 # Verify modules can be imported before starting
-RUN python -c "import sys; print(sys.path); import github; import jira; print('All required modules can be imported')"
+RUN pip install PyGithub jira && \
+    python -c "import sys; print(sys.path); import github; import jira; print('All required modules can be imported')"
 
 # Make sure uvicorn is in the PATH
 ENV PATH="/usr/local/bin:${PATH}"
