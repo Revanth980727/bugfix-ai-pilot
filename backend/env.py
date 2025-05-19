@@ -15,6 +15,7 @@ GITHUB_REPO_OWNER = os.getenv('GITHUB_REPO_OWNER')
 GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME')
 GITHUB_DEFAULT_BRANCH = os.getenv('GITHUB_DEFAULT_BRANCH', 'main')
 GITHUB_USE_DEFAULT_BRANCH_ONLY = os.getenv('GITHUB_USE_DEFAULT_BRANCH_ONLY', 'False').lower() == 'true'
+ALLOW_EMPTY_COMMITS = os.getenv('ALLOW_EMPTY_COMMITS', 'False').lower() in ('true', 'yes', '1', 't')
 
 # JIRA configuration - standardize naming
 JIRA_API_TOKEN = os.getenv('JIRA_API_TOKEN') or os.getenv('JIRA_TOKEN')
@@ -101,6 +102,7 @@ def verify_env_vars():
     logger.info(f"JIRA configuration: URL={JIRA_URL}, User={JIRA_USERNAME}, Project={JIRA_PROJECT_KEY}")
     logger.info(f"JIRA poll interval: {JIRA_POLL_INTERVAL} seconds")
     logger.info(f"GitHub configuration: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
+    logger.info(f"GitHub empty commits allowed: {ALLOW_EMPTY_COMMITS}")
     logger.info(f"Test mode: {'Enabled' if TEST_MODE else 'Disabled'}")
 
 # Added GitHub repo verification function
@@ -123,11 +125,12 @@ def verify_github_repo_settings():
             return False, "GITHUB_REPO_NAME contains a placeholder value"
         
         use_default_only = "only using default branch" if GITHUB_USE_DEFAULT_BRANCH_ONLY else "allowing branch creation"
+        empty_commits = "allowing empty commits" if ALLOW_EMPTY_COMMITS else "requiring meaningful changes"
         
         if TEST_MODE:
-            return True, f"GitHub repository configured as {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME} ({use_default_only}) [TEST MODE]"
+            return True, f"GitHub repository configured as {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME} ({use_default_only}, {empty_commits}) [TEST MODE]"
         else:
-            return True, f"GitHub repository configured as {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME} ({use_default_only})"
+            return True, f"GitHub repository configured as {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME} ({use_default_only}, {empty_commits})"
     
     return False, "GITHUB_REPO_OWNER and GITHUB_REPO_NAME are required for GitHub operations"
 
@@ -175,6 +178,7 @@ def print_env_debug():
     print(f"GITHUB_REPO_NAME: {GITHUB_REPO_NAME}")
     print(f"GITHUB_DEFAULT_BRANCH: {GITHUB_DEFAULT_BRANCH}")
     print(f"GITHUB_USE_DEFAULT_BRANCH_ONLY: {GITHUB_USE_DEFAULT_BRANCH_ONLY}")
+    print(f"ALLOW_EMPTY_COMMITS: {ALLOW_EMPTY_COMMITS}")
     print(f"TEST_MODE: {TEST_MODE}")
     print(f"DEBUG_MODE: {DEBUG_MODE}")
     print(f"OPENAI_MODEL: {OPENAI_MODEL}")

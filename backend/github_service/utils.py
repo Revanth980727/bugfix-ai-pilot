@@ -17,6 +17,7 @@ class GitHubError:
     ERR_FILE_NOT_FOUND = "FILE_NOT_FOUND"
     ERR_TEST_MODE = "TEST_MODE_REQUIRED"
     ERR_PERMISSION_DENIED = "PERMISSION_DENIED"
+    ERR_NO_CHANGES = "NO_CHANGES"
     
     def __init__(self, code: str, message: str, file_path: Optional[str] = None, 
                  suggested_action: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
@@ -127,11 +128,19 @@ def validate_file_changes(before_content: str, after_content: str) -> Tuple[bool
     new_content_valid = True
     if before_content and not after_content.strip():
         new_content_valid = False
-    
-    # Count line changes
-    before_lines = before_content.splitlines()
-    after_lines = after_content.splitlines()
-    lines_added = len(after_lines) - len(before_lines)
+
+    # Compare content for more detailed difference analysis
+    has_meaningful_changes = False
+    if content_changed:
+        # Count line changes
+        before_lines = before_content.splitlines()
+        after_lines = after_content.splitlines()
+        lines_added = len(after_lines) - len(before_lines)
+        
+        # Check for whitespace-only changes
+        before_normalized = '\n'.join(line.strip() for line in before_lines if line.strip())
+        after_normalized = '\n'.join(line.strip() for line in after_lines if line.strip())
+        has_meaningful_changes = before_normalized != after_normalized
     
     # Create validation metadata
     validation_metadata = {
@@ -139,13 +148,14 @@ def validate_file_changes(before_content: str, after_content: str) -> Tuple[bool
         "afterChecksum": after_checksum,
         "contentChanged": content_changed,
         "contentValid": new_content_valid,
-        "beforeLines": len(before_lines),
-        "afterLines": len(after_lines),
-        "lineChange": lines_added
+        "hasMeaningfulChanges": has_meaningful_changes,
+        "beforeLines": len(before_content.splitlines()),
+        "afterLines": len(after_content.splitlines()),
+        "lineChange": len(after_content.splitlines()) - len(before_content.splitlines())
     }
     
-    # Changes are valid if content changed and is valid
-    is_valid = content_changed and new_content_valid
+    # Changes are valid if content changed meaningfully and is valid
+    is_valid = content_changed and new_content_valid and has_meaningful_changes
     
     return is_valid, validation_metadata
 
@@ -162,10 +172,15 @@ def prepare_response_metadata(file_results: List[Dict[str, Any]]) -> Dict[str, A
     """
     valid_files = [result for result in file_results if result.get("success", False)]
     
+    # Check if any files had meaningful changes
+    files_with_changes = [result for result in valid_files if 
+                         result.get("validation", {}).get("hasMeaningfulChanges", False)]
+    
     metadata = {
         "fileList": [result.get("file_path") for result in valid_files],
         "totalFiles": len(file_results),
         "validFiles": len(valid_files),
+        "filesWithChanges": len(files_with_changes),
         "fileChecksums": {},
         "fileValidation": {},
         "validationDetails": {
@@ -195,3 +210,20 @@ def prepare_response_metadata(file_results: List[Dict[str, Any]]) -> Dict[str, A
                 metadata["validationDetails"]["rejectionReasons"][reason] += 1
     
     return metadata
+
+def has_meaningful_changes(file_results: List[Dict[str, Any]]) -> bool:
+    """
+    Check if any files have meaningful changes based on validation results
+    
+    Args:
+        file_results: List of file operation results
+        
+    Returns:
+        True if at least one file has meaningful changes, False otherwise
+    """
+    for result in file_results:
+        if result.get("success", False):
+            validation = result.get("validation", {})
+            if validation.get("hasMeaningfulChanges", False):
+                return True
+    return False

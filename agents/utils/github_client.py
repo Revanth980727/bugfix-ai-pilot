@@ -25,6 +25,7 @@ class GitHubClient:
         self.test_mode = os.environ.get("TEST_MODE", "False").lower() == "true"
         self.debug_mode = os.environ.get("DEBUG_MODE", "False").lower() == "true"
         self.patch_mode = os.environ.get("PATCH_MODE", "line-by-line")
+        self.allow_empty_commits = os.environ.get("ALLOW_EMPTY_COMMITS", "False").lower() == "true"
         
         if not all([self.github_token, self.repo_owner, self.repo_name]):
             self.logger.error("Missing required GitHub environment variables")
@@ -60,6 +61,7 @@ class GitHubClient:
         self.logger.info(f"Test mode: {self.test_mode}")
         self.logger.info(f"Debug mode: {self.debug_mode}")
         self.logger.info(f"Patch mode: {self.patch_mode}")
+        self.logger.info(f"Allow empty commits: {self.allow_empty_commits}")
         
     def check_branch_exists(self, branch_name: str) -> bool:
         """
@@ -221,6 +223,12 @@ class GitHubClient:
                     
                 return None, None  # PR exists but we couldn't get its details
             
+            # Check if we get a specific error about no commits
+            if response.status_code == 422 and "No commits between" in response.text:
+                self.logger.error(f"Failed to create PR: No commits between {base_branch} and {head_branch}")
+                self.logger.error("This indicates that no changes were made or the changes were not properly committed")
+                return None, None
+                
             self.logger.error(f"Failed to create PR: {response.status_code}, {response.text}")
             
             # If in test mode, return a mock PR URL to make tests pass
@@ -340,6 +348,20 @@ class GitHubClient:
             if isinstance(result, tuple) and len(result) == 3 and isinstance(result[2], dict):
                 result[2]["lines_added"] = added_lines
                 result[2]["lines_removed"] = removed_lines
+                
+                # Check if there are actually meaningful changes (not just whitespace)
+                if result[1]:  # If patching was successful
+                    patched_content = result[0]
+                    
+                    # Check if changes are just whitespace
+                    original_normalized = re.sub(r'\s+', '', file_content)
+                    patched_normalized = re.sub(r'\s+', '', patched_content)
+                    
+                    has_meaningful_changes = original_normalized != patched_normalized
+                    result[2]["has_meaningful_changes"] = has_meaningful_changes
+                    
+                    if not has_meaningful_changes:
+                        self.logger.warning(f"Changes to {file_path} are whitespace-only")
             
             return result
             
@@ -421,8 +443,14 @@ class GitHubClient:
                             "before": original_checksum,
                             "after": patched_checksum
                         },
+                        "has_meaningful_changes": False,
                         "file_path": file_path
                     }
+                
+                # Check if changes are meaningful (not just whitespace)
+                original_normalized = re.sub(r'\s+', '', file_content)
+                patched_normalized = re.sub(r'\s+', '', patched_content)
+                has_meaningful_changes = original_normalized != patched_normalized
                 
                 self.logger.info(f"Successfully applied patch to {file_path}")
                 return patched_content, True, {
@@ -431,6 +459,7 @@ class GitHubClient:
                         "before": original_checksum,
                         "after": patched_checksum
                     },
+                    "has_meaningful_changes": has_meaningful_changes,
                     "file_path": file_path
                 }
                 
@@ -552,8 +581,14 @@ class GitHubClient:
                     "after": patched_checksum
                 },
                 "operations_attempted": changes_applied,
+                "has_meaningful_changes": False,
                 "file_path": file_path
             }
+            
+        # Check if changes are meaningful (not just whitespace)
+        original_normalized = re.sub(r'\s+', '', file_content)
+        patched_normalized = re.sub(r'\s+', '', patched_content)
+        has_meaningful_changes = original_normalized != patched_normalized
         
         self.logger.info(f"Successfully applied patch to {file_path} with {changes_applied} changes")
         return patched_content, True, {
@@ -563,6 +598,7 @@ class GitHubClient:
                 "after": patched_checksum
             },
             "operations_applied": changes_applied,
+            "has_meaningful_changes": has_meaningful_changes,
             "file_path": file_path
         }
 
@@ -628,9 +664,11 @@ class GitHubClient:
         
         # Track files that were successfully patched
         patched_files = []
+        file_results = []
         file_checksums = {}
         total_lines_added = 0
         total_lines_removed = 0
+        has_meaningful_changes = False
         
         # Apply and commit patches
         if patch_file_paths and len(patch_file_paths) > 0:
@@ -645,10 +683,22 @@ class GitHubClient:
                 # Apply the patch
                 patched_content, success, metadata = self.apply_patch_content(current_content, patch_content, file_path)
                 
+                # Keep track of file results
+                file_result = {
+                    "file_path": file_path,
+                    "success": success,
+                    "validation": metadata
+                }
+                file_results.append(file_result)
+                
                 if not success:
                     error_msg = metadata.get('error', 'Unknown error')
                     self.logger.warning(f"Failed to apply patch to {file_path}: {error_msg}")
                     continue
+                
+                # Track meaningful changes
+                if metadata.get("has_meaningful_changes", False):
+                    has_meaningful_changes = True
                 
                 # Track lines added/removed
                 if "lines_added" in metadata:
@@ -656,19 +706,29 @@ class GitHubClient:
                 if "lines_removed" in metadata:
                     total_lines_removed += metadata["lines_removed"]
                 
-                # Commit the file
-                commit_success = self.commit_file(file_path, patched_content, commit_message, branch_name)
-                
-                if commit_success:
-                    patched_files.append(file_path)
-                    if "checksums" in metadata:
-                        file_checksums[file_path] = metadata["checksums"]["after"]
+                # Only commit file if we allow empty commits or there are meaningful changes
+                if self.allow_empty_commits or metadata.get("has_meaningful_changes", False):
+                    # Commit the file
+                    commit_success = self.commit_file(file_path, patched_content, commit_message, branch_name)
+                    
+                    if commit_success:
+                        patched_files.append(file_path)
+                        if "checksums" in metadata:
+                            file_checksums[file_path] = metadata["checksums"]["after"]
+                    else:
+                        self.logger.error(f"Failed to commit changes to {file_path}")
                 else:
-                    self.logger.error(f"Failed to commit changes to {file_path}")
+                    self.logger.warning(f"Skipping commit for {file_path} - no meaningful changes detected")
         
         # Check if any files were successfully patched
         if not patched_files:
             self.logger.warning("No files were successfully patched")
+            if not has_meaningful_changes:
+                self.logger.error("No meaningful changes were detected in any files")
+                return False, {
+                    "error": "No meaningful changes detected in any files",
+                    "code": "NO_CHANGES"
+                }
             return False, {
                 "error": "No files were successfully patched",
                 "code": "PATCH_FAILED"
@@ -679,6 +739,7 @@ class GitHubClient:
             "patched_files": patched_files,
             "file_count": len(patched_files),
             "fileChecksums": file_checksums,
+            "has_meaningful_changes": has_meaningful_changes,
             "lines_changed": {
                 "added": total_lines_added,
                 "removed": total_lines_removed
@@ -755,6 +816,14 @@ class GitHubClient:
                 self.logger.info(f"File {file_path} not changed, skipping commit")
                 return True  # Not an error, just no changes
             
+            # Check for meaningful changes (not just whitespace)
+            current_normalized = re.sub(r'\s+', '', current_content)
+            content_normalized = re.sub(r'\s+', '', content)
+            
+            if current_normalized == content_normalized and not self.allow_empty_commits:
+                self.logger.warning(f"Only whitespace changes detected in {file_path}, skipping commit")
+                return True  # Not considered a failure, but no commit was made
+            
             # File changed, update it
             update_data = {
                 "message": commit_message,
@@ -792,3 +861,4 @@ class GitHubClient:
         else:
             self.logger.error(f"Failed to check file {file_path}: {response.status_code}, {response.text}")
             return False
+

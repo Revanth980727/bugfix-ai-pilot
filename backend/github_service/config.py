@@ -20,6 +20,8 @@ GITHUB_USE_DEFAULT_BRANCH_ONLY = os.getenv('GITHUB_USE_DEFAULT_BRANCH_ONLY', 'Fa
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
 # Explicitly handle the TEST_MODE value as a boolean
 TEST_MODE = os.getenv('TEST_MODE', 'False').lower() in ('true', 'yes', '1', 't')
+# Add configuration for empty commit handling
+ALLOW_EMPTY_COMMITS = os.getenv('ALLOW_EMPTY_COMMITS', 'False').lower() in ('true', 'yes', '1', 't')
 
 # Patch processing configuration
 PATCH_MODE = os.getenv('PATCH_MODE', 'line-by-line')
@@ -92,6 +94,7 @@ def verify_config():
         logger.info(f"Use default branch only: {GITHUB_USE_DEFAULT_BRANCH_ONLY}")
         logger.info(f"Test mode: {TEST_MODE}, Debug mode: {DEBUG_MODE}")
         logger.info(f"Patch mode: {PATCH_MODE}")
+        logger.info(f"Allow empty commits: {ALLOW_EMPTY_COMMITS}")
     
     return True
 
@@ -102,7 +105,8 @@ def get_repo_info():
         "name": GITHUB_REPO_NAME,
         "default_branch": GITHUB_DEFAULT_BRANCH,
         "use_default_branch_only": GITHUB_USE_DEFAULT_BRANCH_ONLY,
-        "patch_mode": PATCH_MODE
+        "patch_mode": PATCH_MODE,
+        "allow_empty_commits": ALLOW_EMPTY_COMMITS
     }
 
 def is_test_mode():
@@ -125,3 +129,8 @@ def get_repo_string():
 def get_patch_mode():
     """Get the configured patch mode."""
     return PATCH_MODE
+
+# Check if empty commits are allowed
+def allow_empty_commits():
+    """Check if empty commits are allowed."""
+    return ALLOW_EMPTY_COMMITS

@@ -116,6 +116,15 @@ export const generateDiff = (originalContent: string, modifiedContent: string, f
     return '';
   }
   
+  // Check for meaningful changes beyond whitespace
+  const normalizedOriginal = originalContent.replace(/\s+/g, ' ').trim();
+  const normalizedModified = modifiedContent.replace(/\s+/g, ' ').trim();
+  
+  if (normalizedOriginal === normalizedModified) {
+    console.warn(`Only whitespace changes detected for ${filename}`);
+    // Continue anyway to generate the diff, but log a warning
+  }
+  
   // Use a better diff generation approach
   const originalLines = originalContent.split('\n');
   const modifiedLines = modifiedContent.split('\n');
@@ -592,6 +601,7 @@ export const validatePatch = (
   fileChecksums: Record<string, string>;
   patchesApplied: number;
   linesChanged: { added: number; removed: number };
+  hasMeaningfulChanges: boolean;
 } => {
   console.log(`Validating patch with ${filePaths ? filePaths.length : 0} files`);
   console.log(`Patch content length: ${patchContent ? patchContent.length : 0} bytes`);
@@ -621,6 +631,9 @@ export const validatePatch = (
   // Track file checksums (for change validation)
   const fileChecksums: Record<string, string> = {};
   
+  // Check for meaningful changes (not just whitespace)
+  let hasMeaningfulChanges = false;
+  
   // Simple check for empty patch content
   if (!patchContent || patchContent.trim() === '') {
     validationMetrics.rejectedPatches = validationMetrics.totalPatches;
@@ -632,7 +645,8 @@ export const validatePatch = (
       validationMetrics,
       fileChecksums,
       patchesApplied: 0,
-      linesChanged
+      linesChanged,
+      hasMeaningfulChanges: false
     };
   }
   
@@ -650,7 +664,8 @@ export const validatePatch = (
       },
       fileChecksums,
       patchesApplied: 0,
-      linesChanged
+      linesChanged,
+      hasMeaningfulChanges: false
     };
   }
   
@@ -666,7 +681,8 @@ export const validatePatch = (
       validationMetrics,
       fileChecksums,
       patchesApplied: 0,
-      linesChanged
+      linesChanged,
+      hasMeaningfulChanges: false
     };
   }
   
@@ -697,6 +713,31 @@ export const validatePatch = (
   linesChanged.removed = removedLines;
   
   console.log(`Lines changed in patch: +${addedLines}/-${removedLines}`);
+  
+  // Check for meaningful changes
+  // Look for non-whitespace changes in added/removed lines
+  const addedContent = [];
+  const removedContent = [];
+  
+  // Extract the content of added/removed lines
+  const addedMatches = patchContent.match(/^\+(?!\+\+)(.*)$/gm) || [];
+  const removedMatches = patchContent.match(/^-(?!--)(.*)$/gm) || [];
+  
+  for (const match of addedMatches) {
+    addedContent.push(match.substring(1).trim());  // Remove the '+' and trim
+  }
+  
+  for (const match of removedMatches) {
+    removedContent.push(match.substring(1).trim());  // Remove the '-' and trim
+  }
+  
+  // Join and normalize content
+  const addedNormalized = addedContent.join(' ').replace(/\s+/g, ' ').trim();
+  const removedNormalized = removedContent.join(' ').replace(/\s+/g, ' ').trim();
+  
+  // Check if there are significant differences
+  hasMeaningfulChanges = addedNormalized !== removedNormalized;
+  console.log(`Patch contains meaningful changes: ${hasMeaningfulChanges}`);
   
   for (const filePath of filePaths) {
     // Enhanced validation logic to detect if a file is actually in the patch
@@ -731,6 +772,10 @@ export const validatePatch = (
     if (validationMetrics.rejectedPatches > 0) {
       console.warn(`Note: ${validationMetrics.rejectedPatches} files will be skipped (not found in patch)`);
     }
+    
+    if (!hasMeaningfulChanges) {
+      console.warn("⚠️ Patch appears to contain only whitespace changes - may result in empty commits");
+    }
   } else {
     console.error(`Patch validation failed: No valid files found in patch`);
   }
@@ -741,7 +786,8 @@ export const validatePatch = (
     validationMetrics,
     fileChecksums,
     patchesApplied,
-    linesChanged
+    linesChanged,
+    hasMeaningfulChanges
   };
 };
 
