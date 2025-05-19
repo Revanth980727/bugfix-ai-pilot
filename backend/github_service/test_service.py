@@ -36,7 +36,7 @@ def test_github_service():
         
         # Test creating a branch
         ticket_id = "TEST-123"
-        branch_name = service.create_fix_branch(ticket_id)
+        branch_name = service.create_branch(ticket_id)
         if not branch_name:
             logger.error("Failed to create branch")
             return
@@ -49,9 +49,14 @@ def test_github_service():
             }
         ]
         
+        # Extract file paths and contents correctly
+        file_paths = [change["filename"] for change in test_changes]
+        file_contents = [change["content"] for change in test_changes]
+        
         commit_success = service.commit_bug_fix(
             branch_name,
-            test_changes,
+            file_paths,
+            file_contents,
             ticket_id,
             "Test commit for automated testing"
         )
@@ -60,20 +65,39 @@ def test_github_service():
             logger.error("Failed to commit changes")
             return
         
-        # Test creating PR
-        pr_url = service.create_fix_pr(
-            branch_name,
-            ticket_id,
-            "Test bug fix",
-            "This is a test PR created by the GitHub service test script"
-        )
-        
-        if not pr_url:
-            logger.error("Failed to create PR")
+        # Test creating PR - check if method exists before calling
+        if hasattr(service, 'create_fix_pr'):
+            pr_url = service.create_fix_pr(
+                branch_name,
+                ticket_id,
+                "Test bug fix",
+                "This is a test PR created by the GitHub service test script"
+            )
+            
+            if not pr_url:
+                logger.error("Failed to create PR")
+                return
+            
+            logger.info(f"Created PR: {pr_url}")
+        elif hasattr(service, 'create_pull_request'):
+            # Try alternative method name
+            pr_url = service.create_pull_request(
+                branch_name,
+                ticket_id,
+                "Test bug fix",
+                "This is a test PR created by the GitHub service test script"
+            )
+            
+            if not pr_url:
+                logger.error("Failed to create PR")
+                return
+            
+            logger.info(f"Created PR: {pr_url}")
+        else:
+            logger.error("PR creation method not found in GitHubService")
             return
         
         logger.info("All GitHub service tests passed successfully!")
-        logger.info(f"Created PR: {pr_url}")
     except Exception as e:
         logger.error(f"GitHub service test failed: {str(e)}")
         logger.info("GitHub integration tests were skipped due to configuration issues.")
