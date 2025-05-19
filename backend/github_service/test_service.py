@@ -99,32 +99,54 @@ def test_github_service():
             if file_path not in parsed_files:
                 logger.error(f"File {file_path} was not correctly parsed from the patch content!")
         
-        # First try committing with the patch content for more realistic testing
-        logger.info("Testing commit with patch content")
+        # Now test a more complex patch with modifications to existing files
+        logger.info("Testing patch with modifications to existing files")
+        
+        # First create the initial files
+        commit_success = service.commit_bug_fix(
+            branch_name,
+            file_paths,
+            file_contents,
+            ticket_id,
+            "Initial commit for testing"
+        )
+        
+        if not commit_success:
+            logger.error("Failed to commit initial files")
+            return
+            
+        # Now create a patch that modifies these files
+        modified_patch = ""
+        modified_patch += f"--- a/test.md\n+++ b/test.md\n@@ -1,3 +1,4 @@\n"
+        modified_patch += f" # Test File\n \n"
+        modified_patch += f" Created by GitHub service test at {datetime.now()}\n"
+        modified_patch += f"+This line was added in the middle of the file\n"
+        
+        modified_patch += f"\n--- a/GraphRAG.py\n+++ b/GraphRAG.py\n@@ -1,5 +1,7 @@\n"
+        modified_patch += f" import networkx as nx\n \n"
+        modified_patch += f"+# Added import\n+import matplotlib.pyplot as plt\n"
+        modified_patch += f" # Test Graph RAG implementation\n"
+        modified_patch += f" def graph_function():\n"
+        modified_patch += f"     G = nx.Graph()\n"
+        modified_patch += f"+    G.add_node(1)\n"
+        modified_patch += f"     return G\n"
+        
+        logger.info("Created modification patch content")
+        logger.info(f"Patch preview: {modified_patch[:200]}...")
+        
+        # Test committing with the patch content
+        logger.info("Testing commit with modification patch")
         commit_patch_success = service.commit_patch(
             branch_name=branch_name,
-            patch_content=patch_content,
-            commit_message=f"Test patch-based commit for {ticket_id}",
+            patch_content=modified_patch,
+            commit_message=f"Test modified patch commit for {ticket_id}",
             patch_file_paths=file_paths
         )
         
         if not commit_patch_success:
-            logger.warning("Patch-based commit failed, falling back to direct file commits")
-            
-            # Test direct file commits as fallback
-            commit_success = service.commit_bug_fix(
-                branch_name,
-                file_paths,
-                file_contents,
-                ticket_id,
-                "Test commit for automated testing"
-            )
-            
-            if not commit_success:
-                logger.error("Failed to commit changes")
-                return
+            logger.warning("Modified patch-based commit failed, falling back to direct file commits")
         else:
-            logger.info("Patch-based commit succeeded")
+            logger.info("Modified patch-based commit succeeded")
         
         # Test creating PR - use create_pull_request directly
         pr_url = service.create_pull_request(

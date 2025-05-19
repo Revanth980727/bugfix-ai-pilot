@@ -152,6 +152,9 @@ def parse_patch_content(patch_content: str) -> List[Dict[str, Any]]:
         import unidiff
         from io import StringIO
         
+        # Log that we're using unidiff for proper parsing
+        logger.info("Using unidiff library for patch parsing")
+        
         # Parse the patch using unidiff
         patch_set = unidiff.PatchSet(StringIO(patch_content))
         
@@ -186,7 +189,7 @@ def parse_patch_content(patch_content: str) -> List[Dict[str, Any]]:
         logger.error("Failed to import unidiff - falling back to basic patch parsing")
         return parse_patch_basic(patch_content)
     except Exception as e:
-        logger.error(f"Error parsing patch content: {str(e)}")
+        logger.error(f"Error parsing patch content with unidiff: {str(e)}")
         traceback.print_exc()
         return parse_patch_basic(patch_content)
 
@@ -201,6 +204,8 @@ def parse_patch_basic(patch_content: str) -> List[Dict[str, Any]]:
     Returns:
         A list of dictionaries with file_path and change info
     """
+    logger.warning("Using basic patch parser - this may result in incorrect file modifications")
+    
     if not patch_content:
         return []
         
@@ -209,6 +214,7 @@ def parse_patch_basic(patch_content: str) -> List[Dict[str, Any]]:
     current_lines_added = 0
     current_lines_removed = 0
     current_patch = []
+    current_hunk_header = None
     
     lines = patch_content.split('\n')
     
@@ -235,10 +241,16 @@ def parse_patch_basic(patch_content: str) -> List[Dict[str, Any]]:
                 current_lines_added = 0
                 current_lines_removed = 0
                 current_patch = [line]
+                current_hunk_header = None
             
         # Extract new file for unified diff format
         elif line.startswith('+++ b/'):
             current_file = line.split(' ', 1)[1].strip().lstrip('b/')
+            current_patch.append(line)
+            
+        # Store hunk header to extract line numbers
+        elif line.startswith('@@'):
+            current_hunk_header = line
             current_patch.append(line)
             
         # Handle diff content lines
