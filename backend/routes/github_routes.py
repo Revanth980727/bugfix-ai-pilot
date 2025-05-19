@@ -11,7 +11,7 @@ import subprocess
 from flask import Blueprint, request, jsonify
 from ..github_utils import get_file_content, generate_diff
 from ..github_service.github_service import GitHubService
-from ..github_service.utils import prepare_response_metadata, is_test_mode, is_production
+from ..github_service.utils import prepare_response_metadata, is_test_mode, is_production, verify_module_imports
 from ..github_service.config import verify_config, get_repo_info
 from ..log_utils import log_diff_summary, format_validation_result, create_structured_error
 
@@ -25,8 +25,12 @@ github_bp = Blueprint('github', __name__, url_prefix='/api/github')
 # Initialize GitHub service
 github_service = None
 try:
-    github_service = GitHubService()
-    logger.info("GitHub service initialized for routes")
+    # First verify required modules can be imported
+    if not verify_module_imports():
+        logger.error("Failed to verify required modules - GitHub service will be unavailable")
+    else:
+        github_service = GitHubService()
+        logger.info("GitHub service initialized for routes")
 except Exception as e:
     logger.error(f"Failed to initialize GitHub service: {str(e)}")
 
@@ -382,6 +386,16 @@ def commit_changes():
             return jsonify({
                 'success': False,
                 'error': 'No valid files to commit after filtering',
+                'metadata': metadata
+            }), 400
+        
+        # Ensure file_paths and modified_contents have the same length
+        if len(file_paths) != len(modified_contents):
+            logger.error(f"Mismatch in file paths ({len(file_paths)}) and contents ({len(modified_contents)})")
+            return jsonify({
+                'success': False,
+                'error': 'Mismatch between file paths and contents counts',
+                'errorCode': 'VALIDATION_FAILED',
                 'metadata': metadata
             }), 400
         

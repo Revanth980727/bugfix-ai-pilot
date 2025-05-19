@@ -245,4 +245,3 @@ def check_python_path():
         return False
     
     return True
-
