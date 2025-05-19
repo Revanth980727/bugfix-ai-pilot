@@ -20,6 +20,7 @@ COPY ./utils /app/utils/
 RUN mkdir -p /app/utils
 RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 RUN mkdir -p /app/logs && chmod 777 /app/logs
+RUN mkdir -p /app/github_service && chmod 777 /app/github_service
 
 # Add required packages explicitly with error handling
 RUN pip install --no-cache-dir PyGithub jira unidiff && \
@@ -28,6 +29,6 @@ RUN pip install --no-cache-dir PyGithub jira unidiff && \
 
 # Make sure uvicorn is in the PATH
 ENV PATH="/usr/local/bin:${PATH}"
-ENV PYTHONPATH="/app:${PYTHONPATH}"
+ENV PYTHONPATH="/app:/app/github_service:${PYTHONPATH}"
 
 CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8004"]

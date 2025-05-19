@@ -128,3 +128,64 @@ def ensure_required_modules():
         logger.error(f"Error ensuring required modules: {str(e)}")
         traceback.print_exc()
         return False
+
+def is_fallback_disabled() -> bool:
+    """Check if fallback to mock mode is disabled"""
+    no_fallback = os.environ.get('NO_FALLBACK_MOCK', 'False').lower()
+    return no_fallback in ('true', 'yes', '1', 't')
+
+def parse_patch_content(patch_content: str) -> List[Dict[str, Any]]:
+    """
+    Parse patch content to extract file paths and their changes.
+    
+    Args:
+        patch_content: A string containing the patch data in unified diff format
+        
+    Returns:
+        A list of dictionaries with file_path and content info
+    """
+    if not patch_content:
+        logger.warning("Empty patch content provided")
+        return []
+    
+    try:
+        import unidiff
+        from io import StringIO
+        
+        # Parse the patch using unidiff
+        patch_set = unidiff.PatchSet(StringIO(patch_content))
+        
+        file_changes = []
+        for patched_file in patch_set:
+            file_path = patched_file.target_file.strip('b/')
+            
+            # Skip /dev/null or non-existent files
+            if file_path == '/dev/null' or not file_path:
+                continue
+                
+            # Count line changes
+            added_lines = 0
+            removed_lines = 0
+            for hunk in patched_file:
+                added_lines += len([l for l in hunk if l.is_added])
+                removed_lines += len([l for l in hunk if l.is_removed])
+            
+            file_changes.append({
+                "file_path": file_path,
+                "line_changes": {
+                    "added": added_lines,
+                    "removed": removed_lines,
+                    "total": added_lines + removed_lines
+                },
+                "patch": str(patched_file)
+            })
+            
+        logger.info(f"Successfully parsed patch content: {len(file_changes)} files modified")
+        return file_changes
+    except ImportError:
+        logger.error("Failed to import unidiff - patch parsing unavailable")
+        return []
+    except Exception as e:
+        logger.error(f"Error parsing patch content: {str(e)}")
+        traceback.print_exc()
+        return []

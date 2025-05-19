@@ -19,6 +19,9 @@ COPY ./utils /app/utils/
 RUN mkdir -p /app/code_repo && chmod 777 /app/code_repo
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
+# Install the unidiff package for diff parsing
+RUN pip install --no-cache-dir unidiff
+
 # Make sure uvicorn is in the PATH
 ENV PATH="/usr/local/bin:${PATH}"
 
