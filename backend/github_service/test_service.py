@@ -16,6 +16,7 @@ def test_github_service():
     """Test the GitHub service functionality"""
     from github_service.github_service import GitHubService
     from github_service.utils import parse_patch_content, parse_patch_basic
+    from github_service.patch_engine import apply_patch_to_content, validate_patch
     
     # Verify environment variables
     token = os.environ.get('GITHUB_TOKEN')
@@ -134,28 +135,74 @@ def test_github_service():
         logger.info("Created modification patch content")
         logger.info(f"Patch preview: {modified_patch[:200]}...")
         
-        # Test intelligent patch application using different methods
-        logger.info("Testing intelligent patch application")
+        # Test our new patch engine
+        logger.info("Testing new patch engine with validation")
         
-        # Test 1: Using unidiff library (should be installed)
-        import importlib
-        has_unidiff = importlib.util.find_spec("unidiff") is not None
-        logger.info(f"unidiff library available: {has_unidiff}")
+        # Test 1: First test with empty original content (new files)
+        logger.info("Test 1: Testing patch engine with new files")
+        for file_path in file_paths:
+            result = apply_patch_to_content(
+                original_content="",
+                patch_content=patch_content,
+                file_path=file_path
+            )
+            logger.info(f"Patch engine result for new file {file_path}: {result[0]}, method: {result[2]}")
+            
+        # Test 2: Now test the patch engine with modifications to existing files
+        logger.info("Test 2: Testing patch engine with modified files")
+        original_contents = {}
+        expected_contents = {}
         
-        # Test 2: Test validation of current content vs patched content
         for file_path in file_paths:
             current_content = service._github_client._get_file_content(file_path, branch_name)
             logger.info(f"Current content for {file_path} exists: {bool(current_content)}")
-            logger.info(f"Content preview: {current_content[:30]}..." if current_content else "No content")
-        
-        # Test committing with the patch content
-        logger.info("Testing commit with modification patch")
-        
-        # For testing validation of patch results:
-        expected_content = {
+            if current_content:
+                logger.info(f"Content preview: {current_content[:30]}...")
+                original_contents[file_path] = current_content
+                
+        # Create expected content for validation
+        expected_contents = {
             "test.md": f"# Test File\n\nCreated by GitHub service test at {datetime.now()}\nThis line was added in the middle of the file",
             "GraphRAG.py": "import networkx as nx\n\n# Added import\nimport matplotlib.pyplot as plt\n# Test Graph RAG implementation\ndef graph_function():\n    G = nx.Graph()\n    G.add_node(1)\n    return G"
         }
+        
+        # Test applying the patch with validation
+        for file_path in file_paths:
+            if file_path in original_contents:
+                result = apply_patch_to_content(
+                    original_content=original_contents[file_path],
+                    patch_content=modified_patch,
+                    file_path=file_path,
+                    expected_content=expected_contents.get(file_path)
+                )
+                logger.info(f"Patch engine result for modified file {file_path}: {result[0]}, method: {result[2]}")
+                
+                # Log if the patch resulted in the expected content
+                if result[0] and file_path in expected_contents:
+                    if result[1].strip() == expected_contents[file_path].strip():
+                        logger.info(f"✓ Patched content matches expected content for {file_path}")
+                    else:
+                        logger.warning(f"✗ Patched content does NOT match expected content for {file_path}")
+                        logger.warning(f"Expected: {expected_contents[file_path][:50]}...")
+                        logger.warning(f"Actual: {result[1][:50]}...")
+        
+        # Test the validator
+        logger.info("Testing patch validator")
+        validation_result = validate_patch(
+            patch_content=modified_patch,
+            file_paths=file_paths,
+            original_contents=original_contents,
+            expected_contents=expected_contents
+        )
+        logger.info(f"Validation result: Valid={validation_result['valid']}")
+        for file_path, file_result in validation_result['file_results'].items():
+            if file_result.get('valid', False):
+                logger.info(f"✓ Validation passed for {file_path} using {file_result.get('method', 'unknown')}")
+            else:
+                logger.warning(f"✗ Validation failed for {file_path}: {file_result.get('error', 'unknown error')}")
+        
+        # Test committing with the patch content
+        logger.info("Testing commit with modification patch")
         
         # Include expected_content for validation in the commit_patch call
         commit_patch_success = service.commit_patch(
@@ -163,7 +210,7 @@ def test_github_service():
             patch_content=modified_patch,
             commit_message=f"Test modified patch commit for {ticket_id}",
             patch_file_paths=file_paths,
-            expected_content=expected_content # Pass expected content for validation
+            expected_content=expected_contents # Pass expected content for validation
         )
         
         if not commit_patch_success:

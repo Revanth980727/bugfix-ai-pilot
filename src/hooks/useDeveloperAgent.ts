@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { CodeDiff } from '../types/ticket';
 import { AgentStatus } from './useDashboardState';
@@ -349,7 +348,7 @@ export function useDeveloperAgent() {
     // If we have expected code, validate the patch
     if (options?.expectedCode && mockDiffs && mockDiffs.length > 0) {
       const patchContent = mockDiffs.map(diff => diff.diff).join('\n');
-      const patchedFiles = mockDiffs.map(diff => diff.file);
+      const patchedFiles = mockDiffs.map(diff => diff.filename); // Fixed: Use 'filename' instead of 'file'
       
       // Run validation asynchronously
       validatePatch(patchContent, patchedFiles, options.expectedCode).then(({ isValid, errors }) => {

@@ -1,279 +1,242 @@
 
+"""
+Utilities for the GitHub service
+"""
+
 import os
+import re
 import sys
 import logging
-import traceback
-from typing import Dict, Any, List, Optional, Callable
+import tempfile
+import subprocess
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
+import hashlib
+import functools
 
 # Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("github-service-utils")
 
-def is_test_mode() -> bool:
-    """Check if running in test mode"""
-    # Check for TEST_MODE in environment
-    test_mode_var = os.environ.get('TEST_MODE', 'False').lower()
-    test_mode = test_mode_var in ('true', 'yes', '1', 't')
-    
-    # Log test mode status
-    if test_mode:
-        logger.warning("TEST_MODE is enabled - using mock implementations")
-        
-    return test_mode
+# Optional imports
+try:
+    import unidiff
+    UNIDIFF_AVAILABLE = True
+except ImportError:
+    UNIDIFF_AVAILABLE = False
+    logger.warning("unidiff library not available, falling back to basic patch parser")
 
-def is_production() -> bool:
-    """Check if running in production mode"""
-    # Check for ENVIRONMENT in environment
-    env = os.environ.get('ENVIRONMENT', 'development').lower()
-    is_prod = env == 'production' or env == 'prod'
-    
-    # Log production status
-    if is_prod:
-        logger.info("Running in PRODUCTION mode")
-        
-    return is_prod
+# Import our enhanced patch engine
+from github_service.patch_engine import apply_patch_to_content, validate_patch
 
-def prepare_response_metadata(file_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Prepare metadata for API responses"""
-    # Extract file validation information
-    file_validations = []
-    file_checksums = {}
-    
-    for result in file_results:
-        file_path = result.get("file_path", "unknown")
-        success = result.get("success", False)
-        
-        file_validations.append({
-            "path": file_path,
-            "valid": success,
-            "error": result.get("error") if not success else None
-        })
-        
-        # Track checksums for verified files
-        if success and "checksum" in result:
-            file_checksums[file_path] = result["checksum"]
-    
-    # Create metadata object
-    metadata = {
-        "fileValidation": file_validations,
-        "fileChecksums": file_checksums,
-        "timestamp": os.environ.get('REQUEST_TIME', ''),
-        "testMode": is_test_mode()
-    }
-    
-    return metadata
-
-def verify_module_imports() -> bool:
-    """Verify that all required modules are imported correctly"""
-    required_modules = {
-        'github': 'PyGithub',
-        'unidiff': 'unidiff',
-    }
-    
-    all_modules_available = True
-    missing_modules = []
-    
-    for module_name, package_name in required_modules.items():
-        try:
-            __import__(module_name)
-            logger.debug(f"Successfully imported {module_name}")
-        except ImportError:
-            logger.error(f"Failed to import {module_name} - please install {package_name}")
-            missing_modules.append(f"{module_name} ({package_name})")
-            all_modules_available = False
-    
-    if missing_modules:
-        logger.error(f"Missing required modules: {', '.join(missing_modules)}")
-        logger.error("Some functionality may be limited or unavailable")
-        
-    return all_modules_available
-
-def safe_import(module_name: str, fail_message: str = None) -> Optional[Any]:
-    """Safely import a module, returning None if it fails"""
-    try:
-        module = __import__(module_name)
-        logger.debug(f"Successfully imported {module_name}")
-        return module
-    except ImportError:
-        if fail_message:
-            logger.warning(fail_message)
-        else:
-            logger.warning(f"Failed to import {module_name}")
-        return None
-
-def ensure_required_modules():
-    """Ensure all required modules are available, installing if possible"""
-    try:
-        # Check for PyGithub
-        try:
-            import github
-            logger.info("PyGithub is installed")
-        except ImportError:
-            logger.warning("PyGithub not found, attempting to install")
-            import subprocess
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "PyGithub"])
-            logger.info("PyGithub has been installed")
-        
-        # Check for unidiff
-        try:
-            import unidiff
-            logger.info("unidiff is installed")
-        except ImportError:
-            logger.warning("unidiff not found, attempting to install")
-            import subprocess
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "unidiff"])
-            logger.info("unidiff has been installed")
-            
-        return True
-    except Exception as e:
-        logger.error(f"Error ensuring required modules: {str(e)}")
-        traceback.print_exc()
-        return False
-
-def is_fallback_disabled() -> bool:
-    """Check if fallback to mock mode is disabled"""
-    no_fallback = os.environ.get('NO_FALLBACK_MOCK', 'False').lower()
-    return no_fallback in ('true', 'yes', '1', 't')
 
 def parse_patch_content(patch_content: str) -> List[Dict[str, Any]]:
     """
-    Parse patch content to extract file paths and their changes.
+    Parse unified diff patch content to extract file paths and changes
     
     Args:
-        patch_content: A string containing the patch data in unified diff format
+        patch_content: Unified diff patch content
         
     Returns:
-        A list of dictionaries with file_path and content info
+        List of dicts with file path and changes
     """
-    if not patch_content:
-        logger.warning("Empty patch content provided")
+    if not patch_content or not patch_content.strip():
         return []
     
-    try:
-        import unidiff
-        from io import StringIO
+    # Try using unidiff if available for more accurate parsing
+    if UNIDIFF_AVAILABLE:
+        try:
+            return parse_with_unidiff(patch_content)
+        except Exception as e:
+            logger.warning(f"unidiff parser failed: {str(e)}")
+            logger.warning("Falling back to basic patch parser")
+    
+    # Fall back to basic parser if unidiff fails or isn't available
+    return parse_patch_basic(patch_content)
+
+
+def parse_with_unidiff(patch_content: str) -> List[Dict[str, Any]]:
+    """
+    Parse patch content using unidiff library
+    
+    Args:
+        patch_content: Unified diff patch content
         
-        # Log that we're using unidiff for proper parsing
-        logger.info("Using unidiff library for patch parsing")
+    Returns:
+        List of parsed changes
+    """
+    patch_set = unidiff.PatchSet.from_string(patch_content)
+    
+    results = []
+    for patched_file in patch_set:
+        # Extract file path, removing a/ or b/ prefix if present
+        source_file = patched_file.source_file
+        if source_file.startswith('a/'):
+            source_file = source_file[2:]
+        elif source_file.startswith('b/'):
+            source_file = source_file[2:]
+            
+        # Count line changes
+        added = 0
+        removed = 0
         
-        # Parse the patch using unidiff
-        patch_set = unidiff.PatchSet(StringIO(patch_content))
+        for hunk in patched_file:
+            added += hunk.added
+            removed += hunk.removed
+            
+        results.append({
+            'file_path': source_file,
+            'line_changes': {
+                'added': added,
+                'removed': removed
+            },
+            'parsed_by': 'unidiff'
+        })
         
-        file_changes = []
-        for patched_file in patch_set:
-            file_path = patched_file.target_file.strip('b/')
-            
-            # Skip /dev/null or non-existent files
-            if file_path == '/dev/null' or not file_path:
-                continue
-                
-            # Count line changes
-            added_lines = 0
-            removed_lines = 0
-            for hunk in patched_file:
-                added_lines += len([l for l in hunk if l.is_added])
-                removed_lines += len([l for l in hunk if l.is_removed])
-            
-            file_changes.append({
-                "file_path": file_path,
-                "line_changes": {
-                    "added": added_lines,
-                    "removed": removed_lines,
-                    "total": added_lines + removed_lines
-                },
-                "patch": str(patched_file)
-            })
-            
-        logger.info(f"Successfully parsed patch content: {len(file_changes)} files modified")
-        return file_changes
-    except ImportError:
-        logger.error("Failed to import unidiff - falling back to basic patch parsing")
-        return parse_patch_basic(patch_content)
-    except Exception as e:
-        logger.error(f"Error parsing patch content with unidiff: {str(e)}")
-        traceback.print_exc()
-        return parse_patch_basic(patch_content)
+    return results
+
 
 def parse_patch_basic(patch_content: str) -> List[Dict[str, Any]]:
     """
-    Basic parser for patch content when unidiff is not available.
-    Handles unified diff format to extract file paths and changes.
+    Basic parser for patch content when unidiff is not available
     
     Args:
-        patch_content: A string containing the patch data in unified diff format
+        patch_content: Unified diff patch content
         
     Returns:
-        A list of dictionaries with file_path and change info
+        List of parsed changes
     """
-    logger.warning("Using basic patch parser - this may result in incorrect file modifications")
-    
-    if not patch_content:
-        return []
-        
-    file_changes = []
+    results = []
     current_file = None
-    current_lines_added = 0
-    current_lines_removed = 0
-    current_patch = []
-    current_hunk_header = None
+    added_lines = 0
+    removed_lines = 0
     
-    lines = patch_content.split('\n')
+    # Enhanced regex patterns for file headers
+    file_header_patterns = [
+        r'^--- a/(.*?)$',  # --- a/file.txt
+        r'^--- (.*?)$',    # --- file.txt
+        r'^diff --git a/(.*?) b/.*?$',  # diff --git a/file.txt b/file.txt
+    ]
     
-    for line in lines:
-        # Detect file header lines (simplified for common formats)
-        if line.startswith('--- a/') or line.startswith('diff --git a/'):
-            # Save previous file if exists
+    for line in patch_content.splitlines():
+        # Check for file headers using different patterns
+        file_match = None
+        for pattern in file_header_patterns:
+            match = re.match(pattern, line)
+            if match:
+                file_match = match
+                break
+                
+        if file_match:
+            # If we were processing a file, save its results
             if current_file:
-                file_changes.append({
-                    "file_path": current_file,
-                    "line_changes": {
-                        "added": current_lines_added,
-                        "removed": current_lines_removed,
-                        "total": current_lines_added + current_lines_removed
+                results.append({
+                    'file_path': current_file,
+                    'line_changes': {
+                        'added': added_lines,
+                        'removed': removed_lines
                     },
-                    "patch": '\n'.join(current_patch)
+                    'parsed_by': 'basic'
                 })
                 
-            # Extract new file name for git diff format
-            if line.startswith('diff --git'):
-                parts = line.split(' ')
-                if len(parts) >= 3:
-                    current_file = parts[2].strip().lstrip('b/')
-                current_lines_added = 0
-                current_lines_removed = 0
-                current_patch = [line]
-                current_hunk_header = None
+            # Start tracking a new file
+            current_file = file_match.group(1)
+            added_lines = 0
+            removed_lines = 0
+        elif line.startswith('+') and not line.startswith('+++'):
+            # Added line
+            added_lines += 1
+        elif line.startswith('-') and not line.startswith('---'):
+            # Removed line
+            removed_lines += 1
             
-        # Extract new file for unified diff format
-        elif line.startswith('+++ b/'):
-            current_file = line.split(' ', 1)[1].strip().lstrip('b/')
-            current_patch.append(line)
-            
-        # Store hunk header to extract line numbers
-        elif line.startswith('@@'):
-            current_hunk_header = line
-            current_patch.append(line)
-            
-        # Handle diff content lines
-        elif current_file is not None:
-            current_patch.append(line)
-            
-            # Count changed lines
-            if line.startswith('+') and not line.startswith('+++'):
-                current_lines_added += 1
-            elif line.startswith('-') and not line.startswith('---'):
-                current_lines_removed += 1
-    
-    # Add the last file if exists
+    # Add the last file if we were processing one
     if current_file:
-        file_changes.append({
-            "file_path": current_file,
-            "line_changes": {
-                "added": current_lines_added,
-                "removed": current_lines_removed,
-                "total": current_lines_added + current_lines_removed
+        results.append({
+            'file_path': current_file,
+            'line_changes': {
+                'added': added_lines,
+                'removed': removed_lines
             },
-            "patch": '\n'.join(current_patch)
+            'parsed_by': 'basic'
         })
+        
+    return results
+
+
+def prepare_response_metadata(file_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Prepare metadata for API responses
     
-    logger.info(f"Basic patch parsing found {len(file_changes)} files modified")
-    return file_changes
+    Args:
+        file_results: List of file operation results
+        
+    Returns:
+        Dict with metadata
+    """
+    valid_files = [r for r in file_results if r.get('success', False)]
+    failed_files = [r for r in file_results if not r.get('success', False)]
+    
+    file_checksums = {}
+    for result in valid_files:
+        if 'checksum' in result:
+            file_checksums[result['file_path']] = result['checksum']
+            
+    return {
+        'timestamp': datetime.now().isoformat(),
+        'filesProcessed': len(file_results),
+        'filesSucceeded': len(valid_files),
+        'filesFailed': len(failed_files),
+        'fileChecksums': file_checksums
+    }
+
+
+def is_test_mode() -> bool:
+    """Check if running in test mode"""
+    return os.environ.get('TEST_MODE', 'false').lower() in ('true', '1', 't')
+
+
+def is_production() -> bool:
+    """Check if running in production mode"""
+    env = os.environ.get('ENVIRONMENT', '').lower()
+    return env in ('production', 'prod')
+
+
+def verify_module_imports() -> bool:
+    """Verify that required modules can be imported"""
+    try:
+        # Check for required modules
+        import requests
+        import json
+        
+        return True
+    except ImportError as e:
+        logger.error(f"Failed to import required module: {str(e)}")
+        return False
+
+
+def calculate_checksum(content: str) -> str:
+    """Calculate a checksum for file content"""
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+
+@functools.lru_cache(maxsize=32)
+def detect_file_format(file_path: str) -> str:
+    """Detect file format based on extension"""
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    code_extensions = {
+        '.py': 'python',
+        '.js': 'javascript',
+        '.ts': 'typescript',
+        '.tsx': 'typescript',
+        '.jsx': 'javascript',
+        '.html': 'html',
+        '.css': 'css',
+        '.md': 'markdown',
+        '.json': 'json',
+        '.yml': 'yaml',
+        '.yaml': 'yaml'
+    }
+    
+    return code_extensions.get(ext, 'text')
