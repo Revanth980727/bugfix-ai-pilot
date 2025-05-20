@@ -1,4 +1,3 @@
-
 import os
 import sys
 import logging
@@ -13,12 +12,14 @@ logger = logging.getLogger("github-service")
 try:
     from .github_client import GitHubClient
     from .utils import is_test_mode, is_production, prepare_response_metadata, parse_patch_content
+    from .patch_engine import apply_patch_to_content, validate_patch
 except ImportError:
     logger.error("Error importing local modules - check path configuration")
     # Still try relative imports as fallback
     try:
         from github_service.github_client import GitHubClient
         from github_service.utils import is_test_mode, is_production, prepare_response_metadata, parse_patch_content
+        from github_service.patch_engine import apply_patch_to_content, validate_patch
         logger.info("Successfully imported modules from github_service package")
     except ImportError as e:
         logger.critical(f"Failed to import required modules: {e}")
@@ -284,7 +285,8 @@ class GitHubService:
         branch_name: str, 
         patch_content: str, 
         commit_message: str,
-        patch_file_paths: List[str]
+        patch_file_paths: List[str],
+        expected_content: Dict[str, str] = None
     ) -> Tuple[bool, Dict[str, Any]]:
         """Commit changes using a patch"""
         # Log operation start
@@ -318,8 +320,8 @@ class GitHubService:
             # Log the files that will be patched
             logger.info(f"Patching files from parsed content: {parsed_files}")
             
-            # Apply patch using client
-            result = self.client.apply_patch(branch_name, patch_content, commit_message, patch_file_paths)
+            # Apply patch using client with expected content for validation
+            result = self.client.apply_patch(branch_name, patch_content, commit_message, patch_file_paths, expected_content)
             
             # Log success or failure
             if result.get("committed", False):
