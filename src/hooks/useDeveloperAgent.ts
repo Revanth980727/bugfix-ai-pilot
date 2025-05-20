@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from 'react';
 import { CodeDiff } from '../types/ticket';
 import { AgentStatus } from './useDashboardState';
@@ -21,6 +22,11 @@ export function useDeveloperAgent() {
   const [fileRetrievalErrors, setFileRetrievalErrors] = useState<Record<string, string>>({});
   const [diagnosisLogs, setDiagnosisLogs] = useState<string[]>([]);
   const [fileAccessAttempts, setFileAccessAttempts] = useState<{file: string, success: boolean, error?: string}[]>([]);
+  const [patchValidation, setPatchValidation] = useState<{validated: boolean, valid: boolean, errors: string[]}>({
+    validated: false,
+    valid: false,
+    errors: []
+  });
   const maxAttempts = 4;
 
   // Get GitHub configuration on component mount
@@ -240,6 +246,64 @@ export function useDeveloperAgent() {
       };
     }
   };
+  
+  /**
+   * Validate a patch against expected changes
+   */
+  const validatePatch = async (patch: string, patchedFiles: string[], expectedCode: Record<string, string>) => {
+    try {
+      setDiagnosisLogs(prev => [...prev, `Validating patch for ${patchedFiles.length} files`]);
+      
+      const errors: string[] = [];
+      let isValid = true;
+      
+      // For each file in the patch, check if the expected code matches
+      for (const file of patchedFiles) {
+        // Get the original content
+        const originalContent = fileContext[file];
+        if (!originalContent) {
+          setDiagnosisLogs(prev => [...prev, `Warning: No original content available for ${file}, can't validate`]);
+          continue;
+        }
+        
+        // Get the expected content
+        const expected = expectedCode[file];
+        if (!expected) {
+          setDiagnosisLogs(prev => [...prev, `Warning: No expected content provided for ${file}, can't validate`]);
+          continue;
+        }
+        
+        // Simple comparison for now - normalize both to account for line ending differences
+        const normalizeContent = (content: string) => 
+          content.replace(/\r\n/g, '\n').trim();
+        
+        if (normalizeContent(originalContent) !== normalizeContent(expected)) {
+          // We would need to extract file-specific patches and apply them, but for now
+          // just check if the file is mentioned in the patch
+          if (!patch.includes(file)) {
+            errors.push(`File ${file} is expected to change but not included in the patch`);
+            isValid = false;
+          }
+        }
+      }
+      
+      setPatchValidation({
+        validated: true,
+        valid: isValid,
+        errors
+      });
+      
+      return { isValid, errors };
+    } catch (error) {
+      setDiagnosisLogs(prev => [...prev, `Error validating patch: ${error}`]);
+      setPatchValidation({
+        validated: true,
+        valid: false,
+        errors: [`Error validating patch: ${error}`]
+      });
+      return { isValid: false, errors: [`${error}`] };
+    }
+  };
 
   /**
    * Simulate developer agent work
@@ -254,6 +318,7 @@ export function useDeveloperAgent() {
       responseQuality?: 'good' | 'generic' | 'invalid';
       rawResponse?: string;
       patchMode?: 'intelligent' | 'line-by-line' | 'direct';
+      expectedCode?: Record<string, string>; // New: Expected code after patch
     }
   ) => {
     setStatus('working');
@@ -279,6 +344,23 @@ export function useDeveloperAgent() {
     
     if (options?.patchMode) {
       setPatchMode(options.patchMode);
+    }
+    
+    // If we have expected code, validate the patch
+    if (options?.expectedCode && mockDiffs && mockDiffs.length > 0) {
+      const patchContent = mockDiffs.map(diff => diff.diff).join('\n');
+      const patchedFiles = mockDiffs.map(diff => diff.file);
+      
+      // Run validation asynchronously
+      validatePatch(patchContent, patchedFiles, options.expectedCode).then(({ isValid, errors }) => {
+        if (!isValid) {
+          console.warn("Patch validation failed:", errors);
+          setDiagnosisLogs(prev => [...prev, `Patch validation failed: ${errors.join(', ')}`]);
+        } else {
+          console.log("Patch validation succeeded");
+          setDiagnosisLogs(prev => [...prev, "Patch validation succeeded"]);
+        }
+      });
     }
 
     // If GitHub source isn't set yet from config, try from env
@@ -322,44 +404,6 @@ export function useDeveloperAgent() {
   };
 
   /**
-   * Simulate a failure in the developer agent
-   */
-  const simulateFailure = (reason?: string, responseQuality?: 'good' | 'generic' | 'invalid') => {
-    setStatus('error');
-    if (reason) {
-      setEscalationReason(reason);
-    }
-    if (responseQuality) {
-      setResponseQuality(responseQuality);
-    }
-  };
-  
-  /**
-   * Simulate an early escalation due to low confidence or complexity
-   */
-  const simulateEarlyEscalation = (
-    reason: string, 
-    confidence?: number, 
-    options?: {
-      responseQuality?: 'good' | 'generic' | 'invalid';
-      rawResponse?: string;
-    }
-  ) => {
-    setStatus('escalated');
-    setEarlyEscalation(true);
-    setEscalationReason(reason);
-    if (confidence !== undefined) {
-      setConfidenceScore(confidence);
-    }
-    if (options?.responseQuality) {
-      setResponseQuality(options.responseQuality);
-    }
-    if (options?.rawResponse) {
-      setRawOpenAIResponse(options.rawResponse);
-    }
-  };
-
-  /**
    * Reset the agent state
    */
   const reset = () => {
@@ -373,6 +417,11 @@ export function useDeveloperAgent() {
     setPatchAnalytics(null);
     setRawOpenAIResponse(null);
     setResponseQuality(undefined);
+    setPatchValidation({
+      validated: false,
+      valid: false,
+      errors: []
+    });
     setGitHubSource(null);
     setFileContext({});
   };
@@ -395,8 +444,10 @@ export function useDeveloperAgent() {
     fileRetrievalErrors,
     diagnosisLogs,
     fileAccessAttempts,
+    patchValidation,
     simulateWork,
     tryAccessFile,
+    validatePatch,
     simulateFailure: (reason?: string, responseQuality?: 'good' | 'generic' | 'invalid') => {
       setStatus('error');
       if (reason) {

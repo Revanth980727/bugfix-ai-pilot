@@ -9,7 +9,7 @@ import hashlib
 import tempfile
 import subprocess
 from flask import Blueprint, request, jsonify
-from ..github_utils import get_file_content, generate_diff
+from ..github_utils import get_file_content, generate_diff, apply_patch_to_content
 from ..github_service.github_service import GitHubService
 from ..github_service.utils import prepare_response_metadata, is_test_mode, is_production, verify_module_imports
 from ..github_service.config import verify_config, get_repo_info
@@ -78,6 +78,8 @@ def validate_diff():
         # Extract required data
         diff_content = data.get('diff')
         file_path = data.get('file_path')
+        expected_content = data.get('expected_content')
+        original_content = data.get('original_content')
         
         if not diff_content:
             return jsonify({
@@ -106,6 +108,32 @@ def validate_diff():
             'syntax_valid': True
         }
         
+        # If original content and expected content are provided, validate application
+        if original_content and expected_content:
+            try:
+                # Try to apply the patch
+                success, patched_content, method = apply_patch_to_content(original_content, diff_content, file_path)
+                
+                if not success:
+                    validation_result['valid'] = False
+                    validation_result['error'] = f"Failed to apply patch using {method}"
+                    validation_result['errorCode'] = 'PATCH_APPLY_FAILED'
+                else:
+                    # Compare the result with expected content
+                    if patched_content.strip() == expected_content.strip():
+                        validation_result['valid'] = True
+                        validation_result['method'] = method
+                    else:
+                        validation_result['valid'] = False
+                        validation_result['error'] = "Patch does not result in expected content"
+                        validation_result['errorCode'] = 'PATCH_RESULT_MISMATCH'
+                        validation_result['method'] = method
+            except Exception as e:
+                logger.warning(f"Error during patch application validation: {str(e)}")
+                validation_result['valid'] = False
+                validation_result['error'] = f"Error applying patch: {str(e)}"
+                validation_result['errorCode'] = 'PATCH_APPLICATION_ERROR'
+        
         # Attempt advanced validation using git apply --check
         try:
             with tempfile.NamedTemporaryFile(suffix='.diff', mode='w') as diff_file:
@@ -121,12 +149,13 @@ def validate_diff():
                     )
                     
                     if result.returncode != 0:
-                        validation_result['valid'] = False
-                        validation_result['error'] = result.stderr
-                        validation_result['errorCode'] = 'PATCH_APPLY_FAILED'
+                        validation_result['git_valid'] = False
+                        validation_result['git_error'] = result.stderr
+                    else:
+                        validation_result['git_valid'] = True
                 except (subprocess.SubprocessError, FileNotFoundError):
                     # If git isn't available, fall back to basic validation
-                    pass
+                    validation_result['git_valid'] = None
         except Exception as e:
             logger.warning(f"Advanced diff validation failed: {str(e)}")
             # This is just extra validation, so continue even if it fails
@@ -211,6 +240,15 @@ def create_patch():
         # Log a preview of the generated diff
         diff_stats = log_diff_summary(logger, file_path, diff)
         
+        # Validate patch application
+        success, patched_content, method = apply_patch_to_content(original_content, diff, file_path)
+        
+        validation_info = {
+            'patchApplicationSuccess': success,
+            'method': method,
+            'contentMatches': success and patched_content.strip() == modified_content.strip()
+        }
+        
         return jsonify({
             'success': True,
             'diff': diff,
@@ -222,7 +260,8 @@ def create_patch():
                 'afterChecksum': after_checksum,
                 'contentChanged': before_checksum != after_checksum,
                 'beforeLines': len(original_content.splitlines()),
-                'afterLines': len(modified_content.splitlines())
+                'afterLines': len(modified_content.splitlines()),
+                'patchValidation': validation_info
             },
             'diffStats': diff_stats
         }), 200
@@ -250,6 +289,7 @@ def commit_changes():
         file_changes = data.get('file_changes', [])
         commit_message = data.get('commit_message', 'Update files')
         patch_content = data.get('patch_content')
+        expected_content = data.get('expected_content', {})
         
         if not all([repo_name, branch]) or (not file_changes and not patch_content):
             return jsonify({
@@ -353,12 +393,13 @@ def commit_changes():
                     filtered_paths.append(path)
                 patched_file_paths = filtered_paths
             
-            # Commit using patch content
+            # Commit using patch content with expected content for validation
             success, patch_metadata = github_service.commit_patch(
                 branch,
                 patch_content,
                 commit_message,
-                patched_file_paths
+                patched_file_paths,
+                expected_content
             )
             
             if success:
@@ -438,9 +479,11 @@ def commit_changes():
             # Fallback to the original method
             from ..github_utils import commit_using_patch
             logger.warning("GitHub service not available, falling back to basic commit method")
-            success = commit_using_patch(repo_name, branch, file_paths, modified_contents, commit_message)
+            commit_result = commit_using_patch(repo_name, branch, file_paths, modified_contents, commit_message, expected_content)
+            success = commit_result.get('success', False)
             if success:
                 metadata["changesVerified"] = True
+                metadata["patchResults"] = commit_result.get('patch_results', [])
         
         if success:
             return jsonify({

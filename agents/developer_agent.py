@@ -1,8 +1,12 @@
+
 import os
 import time
 import json
 import re
-from typing import Dict, Any, List, Optional
+import difflib
+import tempfile
+import subprocess
+from typing import Dict, Any, List, Optional, Tuple, Union
 import openai
 from .utils.logger import Logger
 from .utils.openai_client import OpenAIClient
@@ -32,6 +36,21 @@ class DeveloperAgent:
         # Get patch mode from environment (intelligent, line-by-line, direct)
         self.patch_mode = os.environ.get("PATCH_MODE", "line-by-line")
         self.logger.info(f"Using patch mode: {self.patch_mode}")
+        
+        # Check if required libraries are available
+        self.has_unidiff = self._check_module_available("unidiff")
+        self.has_diff_match_patch = self._check_module_available("diff_match_patch")
+        
+        if not self.has_unidiff:
+            self.logger.warning("unidiff module not available, patch parsing will use fallback method")
+        
+    def _check_module_available(self, module_name: str) -> bool:
+        """Check if a Python module is available"""
+        try:
+            __import__(module_name)
+            return True
+        except ImportError:
+            return False
     
     def run(self, task_plan: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -46,6 +65,7 @@ class DeveloperAgent:
             {
                 "patch_content": "unified diff content",
                 "patched_files": ["list", "of", "patched", "files"],
+                "patched_code": {"file_path": "content", ...},
                 "commit_message": "Description of changes",
                 "attempt": 1,
                 "success": true
@@ -58,6 +78,7 @@ class DeveloperAgent:
                 "error": "Invalid task plan provided",
                 "patch_content": "",
                 "patched_files": [],
+                "patched_code": {},
                 "commit_message": "",
                 "attempt": 1,
                 "ticket_id": "unknown",
@@ -83,6 +104,22 @@ class DeveloperAgent:
             patch_data["ticket_id"] = ticket_id
             patch_data["patch_mode"] = self.patch_mode
             
+            # Validate that patched_files match the ones in patch_content
+            patch_files_from_diff = self._extract_files_from_patch(patch_data.get("patch_content", ""))
+            patch_files_declared = patch_data.get("patched_files", [])
+            
+            # Add any missing files from the diff to the patched_files list
+            for file in patch_files_from_diff:
+                if file not in patch_files_declared:
+                    self.logger.warning(f"File {file} found in patch but not declared in patched_files, adding it")
+                    patch_data["patched_files"].append(file)
+            
+            # Validate that all declared patched files have corresponding code
+            patched_code = patch_data.get("patched_code", {})
+            for file in patch_data["patched_files"]:
+                if file not in patched_code:
+                    self.logger.warning(f"File {file} declared in patched_files but no patched code provided")
+            
             # Save patch to file
             patch_file_path = f"logs/patch_{ticket_id}_attempt_{attempt}.patch"
             os.makedirs("logs", exist_ok=True)
@@ -93,6 +130,24 @@ class DeveloperAgent:
             
             # Set success status (actual verification happens in QA agent)
             patch_data["success"] = True
+            
+            # Add validation analytics if the patch contains at least one file
+            validation_results = {}
+            if patch_data.get("patch_content") and patch_data.get("patched_files") and patch_data.get("patched_code"):
+                validation_results = self._validate_patch(
+                    patch_data["patch_content"], 
+                    patch_data["patched_files"],
+                    patch_data["patched_code"]
+                )
+                patch_data["validation_results"] = validation_results
+                
+                if not validation_results.get("valid"):
+                    self.logger.warning("Patch validation found issues, applying adaptations may be needed")
+                    patch_data["warnings"] = [
+                        "Patch validation detected potential issues that may require intelligent patching"
+                    ]
+                else:
+                    self.logger.info("Patch validation successful")
             
             self.logger.end_task(f"Code generation for ticket {ticket_id}", success=True)
             return patch_data
@@ -106,6 +161,7 @@ class DeveloperAgent:
                 "error": str(e),
                 "patch_content": "",
                 "patched_files": [],
+                "patched_code": {},
                 "commit_message": "",
                 "attempt": attempt,
                 "ticket_id": ticket_id,
@@ -168,14 +224,24 @@ def test_example_function():
     assert example_function() == 'Bug fixed'
 """
         
-        # Apply the changes
+        # Extract the expected patched code for each file
+        patched_code = {}
+        for file_change in file_changes:
+            file_path = file_change["file_path"]
+            diff = file_change["diff"]
+            # In a real system, we'd read the original file and apply the patch
+            # For now, just extract the added lines as the expected content
+            patched_content = self._mock_extract_patched_content(diff)
+            patched_code[file_path] = patched_content
+        
+        # Apply the changes (but in production code, we'd let the patching system do this)
         results = self._apply_patch(file_changes)
         
         # Create response
         patch_data = {
             "patch_content": "\n".join(fc["diff"] for fc in file_changes),
             "patched_files": [fc["file_path"] for fc in file_changes],
-            "patched_code": results["patched_code"],
+            "patched_code": patched_code,
             "test_code": test_files,  # Add generated tests
             "commit_message": f"Fix {ticket_id}: {summary[:50]}",
             "confidence_score": 80,  # Mock confidence score
@@ -183,6 +249,480 @@ def test_example_function():
         
         return patch_data
     
+    def _mock_extract_patched_content(self, diff: str) -> str:
+        """Extract patched content from a diff for mocking purposes"""
+        # This is a very simplified implementation for the mock system
+        # In real code, we'd actually apply the diff to the original content
+        lines = []
+        for line in diff.splitlines():
+            if line.startswith('+') and not line.startswith('+++'):
+                lines.append(line[1:])  # Remove the + prefix
+            elif not line.startswith('-') and not line.startswith('---') and not line.startswith('@@'):
+                lines.append(line)
+                
+        return "\n".join(lines)
+        
+    def _extract_files_from_patch(self, patch_content: str) -> List[str]:
+        """Extract file paths from a patch"""
+        files = []
+        lines = patch_content.splitlines()
+        
+        for line in lines:
+            if line.startswith("+++ b/") or line.startswith("+++ "):
+                # Extract file path
+                if line.startswith("+++ b/"):
+                    file_path = line[6:]
+                else:
+                    file_path = line[4:]
+                    
+                if file_path and file_path not in files:
+                    files.append(file_path)
+                    
+        return files
+            
+    def _validate_patch(
+        self, 
+        patch_content: str, 
+        patched_files: List[str],
+        patched_code: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """
+        Validate that a patch matches the expected patched code
+        
+        Args:
+            patch_content: The unified diff patch content
+            patched_files: List of files that are expected to be patched
+            patched_code: Dictionary mapping file paths to their expected content after patching
+            
+        Returns:
+            Dictionary with validation results
+        """
+        results = {
+            "valid": True,
+            "errors": [],
+            "files_validated": 0,
+            "files_with_issues": 0,
+            "file_results": {}
+        }
+        
+        # First check if patch_content is empty
+        if not patch_content or patch_content.isspace():
+            results["valid"] = False
+            results["errors"].append("Patch content is empty")
+            return results
+            
+        # Check if all patched_files are in patch_content
+        files_in_patch = self._extract_files_from_patch(patch_content)
+        for file in patched_files:
+            if file not in files_in_patch:
+                results["valid"] = False
+                results["errors"].append(f"File {file} is in patched_files but not in patch_content")
+                results["files_with_issues"] += 1
+                results["file_results"][file] = {
+                    "valid": False,
+                    "error": "File missing from patch content"
+                }
+            
+        # For each file in the patch content, try applying the patch to empty content
+        # and see if it matches the expected patched_code
+        for file in files_in_patch:
+            if file not in patched_code:
+                results["valid"] = False
+                results["errors"].append(f"File {file} is in patch_content but has no corresponding patched_code")
+                results["files_with_issues"] += 1
+                results["file_results"][file] = {
+                    "valid": False,
+                    "error": "No expected patched code provided"
+                }
+                continue
+                
+            # Extract file-specific patch
+            file_patch = self._extract_file_patch(patch_content, file)
+            if not file_patch:
+                results["valid"] = False
+                results["errors"].append(f"Failed to extract patch for {file}")
+                results["files_with_issues"] += 1
+                results["file_results"][file] = {
+                    "valid": False,
+                    "error": "Failed to extract patch"
+                }
+                continue
+                
+            # Try to read the original file
+            try:
+                file_path = os.path.join(self.repo_path, file.lstrip('/'))
+                if os.path.exists(file_path):
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        original_content = f.read()
+                else:
+                    # For new files, use empty string as original content
+                    original_content = ""
+            except Exception as e:
+                self.logger.warning(f"Error reading original file {file}: {str(e)}")
+                original_content = ""
+                
+            # Apply patch with various strategies and check the result
+            try:
+                patch_success, patched_content, method = self._apply_patch_to_content(original_content, file_patch, file)
+                
+                # Compare patched_content with expected content
+                expected_content = patched_code[file]
+                
+                # Normalize both contents to account for line ending differences
+                expected_normalized = self._normalize_content(expected_content)
+                patched_normalized = self._normalize_content(patched_content)
+                
+                if expected_normalized == patched_normalized:
+                    results["files_validated"] += 1
+                    results["file_results"][file] = {
+                        "valid": True,
+                        "method": method
+                    }
+                else:
+                    results["valid"] = False
+                    results["files_with_issues"] += 1
+                    results["errors"].append(f"File {file}: Patched content doesn't match expected content")
+                    results["file_results"][file] = {
+                        "valid": False,
+                        "error": "Content mismatch",
+                        "method": method,
+                        "patch_success": patch_success
+                    }
+            except Exception as e:
+                results["valid"] = False
+                results["files_with_issues"] += 1
+                results["errors"].append(f"File {file}: Error validating patch: {str(e)}")
+                results["file_results"][file] = {
+                    "valid": False,
+                    "error": f"Validation error: {str(e)}"
+                }
+                
+        return results
+    
+    def _normalize_content(self, content: str) -> str:
+        """Normalize content for comparison by removing whitespace and empty lines"""
+        if not content:
+            return ""
+            
+        # Convert all line endings to \n
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # Remove leading and trailing whitespace from each line
+        lines = [line.strip() for line in content.splitlines()]
+        
+        # Remove empty lines
+        lines = [line for line in lines if line]
+        
+        return '\n'.join(lines)
+        
+    def _extract_file_patch(self, patch_content: str, file_path: str) -> str:
+        """Extract patch content for a specific file from a multi-file patch"""
+        file_patch = ""
+        in_target_file = False
+        next_file_marker = re.compile(r'^--- a/[^\n]+$', re.MULTILINE)
+        
+        lines = patch_content.splitlines(True)  # keep line endings
+        
+        for i, line in enumerate(lines):
+            # Look for the start of our target file's patch
+            if line.startswith(f"--- a/{file_path}") or line.startswith(f"--- {file_path}"):
+                in_target_file = True
+                file_patch += line
+                
+                # Add the +++ line that should follow
+                if i+1 < len(lines) and (lines[i+1].startswith(f"+++ b/{file_path}") or lines[i+1].startswith(f"+++ {file_path}")):
+                    file_patch += lines[i+1]
+                    
+            # If we're in the target file's patch, keep adding lines until we hit the next file
+            elif in_target_file:
+                # Check if this is the start of the next file's patch
+                if next_file_marker.match(line) and not line.startswith(f"--- a/{file_path}") and not line.startswith(f"--- {file_path}"):
+                    break
+                file_patch += line
+                
+        return file_patch
+    
+    def _apply_patch_to_content(self, original_content: str, patch_content: str, file_path: str) -> Tuple[bool, str, str]:
+        """
+        Apply a patch to file content using multiple strategies
+        
+        Args:
+            original_content: Original file content as string
+            patch_content: Unified diff patch content
+            file_path: Path of the file being patched
+            
+        Returns:
+            Tuple of (success, result_content, method_used)
+        """
+        self.logger.info(f"Applying patch to {file_path} using layered strategies")
+        
+        if not patch_content or patch_content.isspace():
+            self.logger.warning(f"Empty patch for {file_path}, returning original content")
+            return False, original_content, "no_patch_content"
+        
+        # Strategy 1: Try using unidiff if available
+        if self.has_unidiff:
+            try:
+                import unidiff
+                from io import StringIO
+                
+                # Parse the patch
+                patch_set = unidiff.PatchSet(StringIO(patch_content))
+                
+                # For validation purposes, apply the patch in memory
+                original_lines = original_content.splitlines()
+                patched_lines = original_lines.copy()
+                
+                for patched_file in patch_set:
+                    for hunk in patched_file:
+                        hunk_start = hunk.target_start - 1  # 0-indexed
+                        
+                        # Apply the hunk changes
+                        target_lines = []
+                        for line in hunk:
+                            if line.is_context:
+                                target_lines.append(line.value)
+                            elif line.is_added:
+                                target_lines.append(line.value)
+                                
+                        # Replace the hunk in the patched lines
+                        hunk_end = hunk_start + hunk.target_length
+                        patched_lines[hunk_start:hunk_end] = target_lines
+                
+                patched_content = '\n'.join(patched_lines)
+                self.logger.info(f"Successfully applied patch to {file_path} using unidiff")
+                return True, patched_content, "unidiff"
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to apply patch using unidiff: {str(e)}")
+                # Continue to next strategy
+        
+        # Strategy 2: Try using enhanced basic parser with context
+        try:
+            # Parse the patch into hunks
+            hunks = self._parse_patch_hunks(patch_content)
+            if not hunks:
+                self.logger.warning(f"No valid hunks found in patch for {file_path}")
+            else:
+                # Apply each hunk to the content
+                result_content = original_content
+                for hunk in hunks:
+                    result_content = self._apply_hunk_with_context(result_content, hunk)
+                    
+                # Check if content actually changed
+                if result_content != original_content:
+                    self.logger.info(f"Successfully applied patch to {file_path} using enhanced parser")
+                    return True, result_content, "enhanced_parser"
+                else:
+                    self.logger.warning(f"Enhanced parser did not modify content for {file_path}")
+        except Exception as e:
+            self.logger.warning(f"Error during enhanced patch parsing: {str(e)}")
+        
+        # Strategy 3: Try using diff-match-patch if available
+        if self.has_diff_match_patch:
+            try:
+                from diff_match_patch import diff_match_patch
+                dmp = diff_match_patch()
+                
+                # Simplify patch to create patches usable by diff-match-patch
+                # This is a very simplified approach - a real implementation should
+                # properly convert unified diffs to diff-match-patch format
+                patch_lines = patch_content.splitlines()
+                
+                # Extract just the content changes
+                lines_to_remove = []
+                lines_to_add = []
+                for line in patch_lines:
+                    if line.startswith('-') and not line.startswith('---'):
+                        lines_to_remove.append(line[1:])
+                    elif line.startswith('+') and not line.startswith('+++'):
+                        lines_to_add.append(line[1:])
+                
+                # Try to apply fuzzy patching
+                # This is a very basic implementation - a real one would be more sophisticated
+                if lines_to_remove or lines_to_add:
+                    # Create a simplistic patch text
+                    patch_text = ""
+                    if lines_to_remove:
+                        patch_text += "".join(lines_to_remove)
+                    if lines_to_add:
+                        patch_text = "".join(lines_to_add)
+                        
+                    # Use diff-match-patch to create patches
+                    patches = dmp.patch_make(original_content, patch_text)
+                    patched_content, results = dmp.patch_apply(patches, original_content)
+                    
+                    # Check if any patches were applied
+                    if patched_content != original_content:
+                        self.logger.info(f"Successfully applied patches to {file_path} using diff-match-patch")
+                        return True, patched_content, "diff_match_patch"
+                    else:
+                        self.logger.warning(f"diff-match-patch did not modify content for {file_path}")
+            except Exception as e:
+                self.logger.warning(f"Error during diff-match-patch: {str(e)}")
+        
+        # Strategy 4: Try line by line patching
+        try:
+            result_content = self._apply_line_by_line_changes(original_content, patch_content)
+            if result_content != original_content:
+                self.logger.info(f"Successfully applied patch to {file_path} using line-by-line strategy")
+                return True, result_content, "line_by_line"
+            else:
+                self.logger.warning(f"Line-by-line patching did not modify content for {file_path}")
+        except Exception as e:
+            self.logger.warning(f"Error during line-by-line patching: {str(e)}")
+        
+        # Fallback strategy: Extract content from patch (for new files)
+        try:
+            clean_content = self._clean_diff_markers(patch_content)
+            if clean_content and not clean_content.isspace() and clean_content != original_content:
+                self.logger.info(f"Applied patch to {file_path} using clean content extraction")
+                return True, clean_content, "clean_extraction"
+            else:
+                self.logger.warning(f"Clean content extraction yielded empty or unchanged result for {file_path}")
+        except Exception as e:
+            self.logger.warning(f"Error during clean content extraction: {str(e)}")
+        
+        # If all strategies failed
+        self.logger.error(f"All patch strategies failed for {file_path}")
+        return False, original_content, "all_failed"
+        
+    def _parse_patch_hunks(self, patch_content: str) -> List[Dict[str, Any]]:
+        """
+        Parse a unified diff patch into structured hunks
+        """
+        hunks = []
+        current_hunk = None
+        
+        # Regular expression to match hunk header
+        hunk_header_pattern = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$')
+        
+        for line in patch_content.splitlines():
+            # Skip file headers
+            if line.startswith('---') or line.startswith('+++'):
+                continue
+                
+            # Parse hunk header
+            match = hunk_header_pattern.match(line)
+            if match:
+                # Start a new hunk
+                start_line = int(match.group(1))
+                line_count = int(match.group(2) or 1)
+                new_start = int(match.group(3))
+                new_count = int(match.group(4) or 1)
+                hunk_desc = match.group(5).strip() if match.group(5) else ""
+                
+                current_hunk = {
+                    'start_line': start_line,
+                    'line_count': line_count,
+                    'new_start': new_start,
+                    'new_count': new_count,
+                    'description': hunk_desc,
+                    'context_before': [],
+                    'context_after': [],
+                    'lines_removed': [],
+                    'lines_added': []
+                }
+                hunks.append(current_hunk)
+                
+            elif current_hunk is not None:
+                # Add lines to the current hunk
+                if line.startswith(' '):
+                    # Context line
+                    if not current_hunk['lines_removed'] and not current_hunk['lines_added']:
+                        # Context before changes
+                        current_hunk['context_before'].append(line[1:])
+                    else:
+                        # Context after changes
+                        current_hunk['context_after'].append(line[1:])
+                        
+                elif line.startswith('-'):
+                    # Line removed
+                    current_hunk['lines_removed'].append(line[1:])
+                    
+                elif line.startswith('+'):
+                    # Line added
+                    current_hunk['lines_added'].append(line[1:])
+        
+        return hunks
+        
+    def _apply_hunk_with_context(self, content: str, hunk: Dict[str, Any]) -> str:
+        """
+        Apply a parsed hunk to content with context matching
+        """
+        lines = content.splitlines()
+        result_lines = []
+        
+        # Try to find the correct location for the hunk
+        context_before = hunk['context_before']
+        context_after = hunk['context_after']
+        lines_removed = hunk['lines_removed']
+        lines_added = hunk['lines_added']
+        target_line = hunk['start_line'] - 1  # 0-indexed
+        
+        # If we have context before, try to find exact match for better positioning
+        best_position = None
+        max_context_matched = -1
+        
+        # Try to find the best position based on context matching
+        for i in range(len(lines)):
+            # Skip if we don't have enough lines left
+            if i + len(context_before) + len(lines_removed) > len(lines):
+                continue
+                
+            # Check if context before matches at this position
+            context_matches = sum(1 for j, ctx_line in enumerate(context_before) 
+                               if i + j < len(lines) and lines[i + j] == ctx_line)
+                               
+            # Check if removed lines match after context
+            removed_matches = sum(1 for j, rm_line in enumerate(lines_removed) 
+                               if i + len(context_before) + j < len(lines) 
+                               and lines[i + len(context_before) + j] == rm_line)
+            
+            # Calculate total match score
+            match_score = (context_matches / max(1, len(context_before))) * 0.7 + \
+                          (removed_matches / max(1, len(lines_removed))) * 0.3
+                          
+            # If this is the best match so far and it's reasonable
+            if match_score > max_context_matched and match_score > 0.5:
+                max_context_matched = match_score
+                best_position = i
+                
+        # If we couldn't find a good match, try just near the target line
+        if best_position is None:
+            target_area_start = max(0, min(target_line, len(lines) - 1))
+            search_radius = 10  # Look 10 lines before and after target
+            
+            for i in range(max(0, target_area_start - search_radius), 
+                           min(len(lines), target_area_start + search_radius)):
+                # Check if any context line matches at this position
+                for ctx_line in context_before:
+                    if i < len(lines) and lines[i] == ctx_line:
+                        best_position = i
+                        break
+                if best_position is not None:
+                    break
+                    
+        # If still no match, use the target line from the patch
+        if best_position is None:
+            best_position = min(target_line, len(lines))
+            
+        # Apply the hunk
+        # Copy lines up to the hunk position
+        result_lines.extend(lines[:best_position])
+        
+        # Skip context before (already verified it matches)
+        skip_lines = len(context_before) + len(lines_removed)
+        
+        # Add the new lines
+        result_lines.extend(lines_added)
+        
+        # Continue with the rest of the file
+        if best_position + skip_lines < len(lines):
+            result_lines.extend(lines[best_position + skip_lines:])
+            
+        return '\n'.join(result_lines)
+
     def _apply_patch(self, file_changes: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Apply patches to the repository files with precise line-by-line changes"""
         results = {
@@ -241,42 +781,35 @@ def test_example_function():
                     original_content = f.read()
                 
                 # Apply patch based on selected mode
-                if self.patch_mode == "line-by-line":
-                    modified_content = self._apply_line_by_line_changes(original_content, diff)
-                    self.logger.info(f"Applied line-by-line patching for {file_path}")
-                elif self.patch_mode == "intelligent":
-                    modified_content = self._apply_intelligent_patching(original_content, diff)
-                    self.logger.info(f"Applied intelligent patching for {file_path}")
-                else:
-                    # Direct mode - use clean diff content if available, otherwise keep original
-                    clean_content = self._clean_diff_markers(diff)
-                    if clean_content and clean_content.strip():
-                        modified_content = clean_content
-                        self.logger.info(f"Applied direct content replacement for {file_path}")
-                    else:
-                        modified_content = original_content
-                        self.logger.warning(f"Direct mode failed to extract content for {file_path}")
+                success, patched_content, method = self._apply_patch_to_content(original_content, diff, file_path)
                 
-                # Skip if no changes were made
-                if modified_content == original_content:
-                    self.logger.warning(f"No changes were applied to {file_path}")
+                if success:
+                    # Skip if no changes were made
+                    if patched_content == original_content:
+                        self.logger.warning(f"No changes were applied to {file_path} using {method}")
+                        results["files_failed"].append({
+                            "file": file_path,
+                            "reason": "No changes could be applied"
+                        })
+                        continue
+                        
+                    # Write the modified content back
+                    with open(full_path, 'w', encoding='utf-8') as f:
+                        f.write(patched_content)
+                    
+                    # Store original and patched code
+                    results["patched_code"][file_path] = patched_content
+                    
+                    # Log success
+                    self.logger.info(f"Successfully patched file: {file_path} using {method}")
+                    results["files_modified"].append(file_path)
+                    results["patches_applied"] += 1
+                else:
+                    self.logger.error(f"Failed to patch {file_path} using any method")
                     results["files_failed"].append({
                         "file": file_path,
-                        "reason": "No changes could be applied"
+                        "reason": f"All patch methods failed"
                     })
-                    continue
-                    
-                # Write the modified content back
-                with open(full_path, 'w', encoding='utf-8') as f:
-                    f.write(modified_content)
-                
-                # Store original and patched code
-                results["patched_code"][file_path] = modified_content
-                
-                # Log success
-                self.logger.info(f"Successfully patched file: {file_path}")
-                results["files_modified"].append(file_path)
-                results["patches_applied"] += 1
                 
             except Exception as e:
                 error_msg = f"Failed to patch {file_path}: {str(e)}"
@@ -298,7 +831,7 @@ def test_example_function():
         clean_lines = []
         for line in content.splitlines():
             # Skip diff metadata lines and removal lines
-            if line.startswith('@@') or line.startswith('-'):
+            if line.startswith('@@') or line.startswith('-') or line.startswith('---') or line.startswith('+++'):
                 continue
             # Include added lines (without the + marker)
             elif line.startswith('+'):
@@ -344,7 +877,7 @@ def test_example_function():
         
         # First, identify the lines we need to remove
         for i, line in enumerate(diff_lines):
-            if line.startswith('-'):
+            if line.startswith('-') and not line.startswith('---'):
                 line_content = line[1:]  # Remove the - marker
                 # Try to find this line in the original content
                 found = False
@@ -374,14 +907,14 @@ def test_example_function():
         
         # Now identify the lines we need to add
         for i, line in enumerate(diff_lines):
-            if line.startswith('+'):
+            if line.startswith('+') and not line.startswith('+++'):
                 line_content = line[1:]  # Remove the + marker
                 
                 # Try to find the best position for this addition
                 insert_position = line_idx
                 
                 # If this addition follows a removal, insert at the position of the removal
-                if i > 0 and diff_lines[i-1].startswith('-'):
+                if i > 0 and diff_lines[i-1].startswith('-') and not diff_lines[i-1].startswith('---'):
                     removal_content = diff_lines[i-1][1:]
                     
                     # Find the corresponding removal in our tracked removals
@@ -421,244 +954,3 @@ def test_example_function():
                 return clean_content
         
         return '\n'.join(result_lines)
-        
-    def _apply_intelligent_patching(self, original_content: str, diff: str) -> str:
-        """
-        Apply intelligent patching that uses multiple strategies based on diff content
-        
-        Args:
-            original_content: The original file content
-            diff: The diff content
-            
-        Returns:
-            Modified content with changes applied
-        """
-        self.logger.info("Applying changes using intelligent patching strategy")
-        
-        # First try standard line-by-line patching
-        modified_content = self._apply_line_by_line_changes(original_content, diff)
-        
-        # If no changes were applied, check if we have a complete file replacement
-        if modified_content == original_content:
-            # Clean the diff and check if it looks like a complete file
-            clean_content = self._clean_diff_markers(diff)
-            
-            # Heuristic: If the clean content has imports or class/function definitions, 
-            # and is reasonably long, it might be a full file replacement
-            looks_like_full_file = False
-            if clean_content:
-                lines = clean_content.splitlines()
-                if len(lines) > 10:  # Reasonably sized file
-                    code_markers = ['import ', 'class ', 'def ', 'function ', 'const ', 'let ', 'var ']
-                    if any(marker in line for line in lines[:20] for marker in code_markers):
-                        looks_like_full_file = True
-                        
-            if looks_like_full_file:
-                self.logger.info("Intelligent patching: Detected full file replacement")
-                return clean_content
-                
-            # If not a full file, try a chunk-based approach
-            self.logger.info("Intelligent patching: Trying chunk-based approach")
-            return self._apply_chunk_based_patching(original_content, diff)
-            
-        return modified_content
-    
-    def _apply_chunk_based_patching(self, original_content: str, diff: str) -> str:
-        """
-        Apply patching by identifying code chunks with logical boundaries
-        
-        Args:
-            original_content: The original file content
-            diff: The diff content
-            
-        Returns:
-            Modified content with changes applied
-        """
-        # Identify logical chunks in the original content
-        # (functions, classes, blocks, etc)
-        original_lines = original_content.splitlines()
-        chunks = []
-        
-        current_chunk = []
-        current_indent = 0
-        in_block = False
-        
-        # Simple chunk detection based on indentation and block markers
-        for i, line in enumerate(original_lines):
-            stripped_line = line.lstrip()
-            
-            # Skip empty lines
-            if not stripped_line:
-                current_chunk.append(line)
-                continue
-                
-            # Calculate line indentation
-            indent = len(line) - len(stripped_line)
-            
-            # Block start indicators
-            if stripped_line.endswith('{') or stripped_line.endswith(':'):
-                in_block = True
-                current_indent = indent
-                current_chunk.append(line)
-            # End of block indicators
-            elif in_block and indent <= current_indent and (stripped_line.startswith('}') or stripped_line.startswith(')')):
-                current_chunk.append(line)
-                # End of chunk
-                if current_chunk:
-                    chunks.append((i - len(current_chunk) + 1, '\n'.join(current_chunk)))
-                current_chunk = []
-                in_block = False
-            # Block content or standalone line
-            else:
-                current_chunk.append(line)
-                
-                # If not in a block and line appears to be a complete statement, 
-                # consider it as a chunk
-                if not in_block and stripped_line.endswith(';'):
-                    if current_chunk:
-                        chunks.append((i - len(current_chunk) + 1, '\n'.join(current_chunk)))
-                    current_chunk = []
-        
-        # Add any remaining chunk
-        if current_chunk:
-            chunks.append((len(original_lines) - len(current_chunk), '\n'.join(current_chunk)))
-            
-        # Find chunks in the diff that match or are similar to original chunks
-        diff_lines = diff.splitlines()
-        clean_diff_lines = []
-        
-        # Process only content lines in diff (ignore metadata)
-        for line in diff_lines:
-            if line.startswith('-'):
-                continue
-            elif line.startswith('+'):
-                clean_diff_lines.append(line[1:])
-            elif not line.startswith(('@', '---', '+++')):
-                clean_diff_lines.append(line)
-        
-        clean_diff_content = '\n'.join(clean_diff_lines)
-        
-        # Try to find complete replacement chunks in the clean diff
-        # This uses a similarity metric to identify chunks that correspond
-        # to original chunks but have been modified
-        modified_chunks = {}
-        
-        for i, (chunk_line, chunk_text) in enumerate(chunks):
-            # Skip small chunks (likely not meaningful units)
-            if len(chunk_text.splitlines()) < 3:
-                continue
-                
-            # Look for similar chunks in the diff
-            chunk_signatures = self._extract_chunk_signatures(chunk_text)
-            
-            for sig in chunk_signatures:
-                if sig in clean_diff_content:
-                    # Found a potential modified chunk in the diff
-                    # Extract the surrounding context to get the full modified chunk
-                    sig_pos = clean_diff_content.find(sig)
-                    start_pos = max(0, sig_pos - 100)
-                    end_pos = min(len(clean_diff_content), sig_pos + len(sig) + 300)
-                    
-                    modified_chunk = clean_diff_content[start_pos:end_pos]
-                    
-                    # Try to clean up the chunk to get proper boundaries
-                    modified_chunk = self._clean_chunk_boundaries(modified_chunk)
-                    
-                    modified_chunks[chunk_line] = modified_chunk
-                    break
-        
-        # Apply modified chunks to the original content
-        if modified_chunks:
-            result_lines = original_content.splitlines()
-            
-            # Apply changes from the highest line number to the lowest
-            # to avoid index shifting
-            for chunk_line in sorted(modified_chunks.keys(), reverse=True):
-                modified_chunk = modified_chunks[chunk_line]
-                
-                # Find the end of the original chunk
-                chunk_end = chunk_line
-                for i, (next_chunk_line, _) in enumerate(chunks):
-                    if next_chunk_line > chunk_line:
-                        chunk_end = next_chunk_line - 1
-                        break
-                else:
-                    chunk_end = len(result_lines)
-                
-                # Replace chunk
-                chunk_length = chunk_end - chunk_line + 1
-                result_lines[chunk_line:chunk_end+1] = modified_chunk.splitlines()
-                
-                self.logger.info(f"Replaced chunk at line {chunk_line}-{chunk_end}")
-            
-            return '\n'.join(result_lines)
-            
-        # If no chunks were modified, return the original content
-        return original_content
-    
-    def _extract_chunk_signatures(self, chunk_text: str) -> List[str]:
-        """Extract unique signatures that can identify a code chunk"""
-        signatures = []
-        
-        # Get function/class names
-        lines = chunk_text.splitlines()
-        for line in lines:
-            stripped = line.strip()
-            
-            # Look for function/method definitions
-            if stripped.startswith(('def ', 'function ')):
-                parts = stripped.split('(')[0].split()
-                if len(parts) > 1:
-                    signatures.append(parts[1])
-                    
-            # Look for class definitions
-            elif stripped.startswith(('class ', 'interface ')):
-                parts = stripped.split('(')[0].split()
-                if len(parts) > 1:
-                    class_name = parts[1].split(':')[0]
-                    signatures.append(class_name)
-        
-        # If no specific identifiers found, use distinctive lines
-        if not signatures:
-            # Use the first few non-empty lines
-            non_empty_lines = [line.strip() for line in lines if line.strip()]
-            if non_empty_lines:
-                signatures.append(non_empty_lines[0])
-                if len(non_empty_lines) > 2:
-                    signatures.append(non_empty_lines[2])
-                    
-        return signatures
-    
-    def _clean_chunk_boundaries(self, chunk: str) -> str:
-        """Clean up chunk boundaries to ensure proper formatting"""
-        lines = chunk.splitlines()
-        
-        # Find the first non-empty line
-        start_idx = 0
-        for i, line in enumerate(lines):
-            if line.strip():
-                start_idx = i
-                break
-                
-        # Find the last non-empty line
-        end_idx = len(lines) - 1
-        for i in range(len(lines) - 1, -1, -1):
-            if lines[i].strip():
-                end_idx = i
-                break
-                
-        # Extract the clean chunk
-        clean_lines = lines[start_idx:end_idx+1]
-        
-        # Try to identify and fix indentation
-        min_indent = float('inf')
-        for line in clean_lines:
-            if line.strip():
-                indent = len(line) - len(line.lstrip())
-                min_indent = min(min_indent, indent)
-                
-        if min_indent < float('inf'):
-            # Adjust indentation
-            clean_lines = [line[min_indent:] if line.strip() else line for line in clean_lines]
-            
-        return '\n'.join(clean_lines)

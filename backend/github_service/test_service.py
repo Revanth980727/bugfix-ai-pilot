@@ -150,11 +150,20 @@ def test_github_service():
         
         # Test committing with the patch content
         logger.info("Testing commit with modification patch")
+        
+        # For testing validation of patch results:
+        expected_content = {
+            "test.md": f"# Test File\n\nCreated by GitHub service test at {datetime.now()}\nThis line was added in the middle of the file",
+            "GraphRAG.py": "import networkx as nx\n\n# Added import\nimport matplotlib.pyplot as plt\n# Test Graph RAG implementation\ndef graph_function():\n    G = nx.Graph()\n    G.add_node(1)\n    return G"
+        }
+        
+        # Include expected_content for validation in the commit_patch call
         commit_patch_success = service.commit_patch(
             branch_name=branch_name,
             patch_content=modified_patch,
             commit_message=f"Test modified patch commit for {ticket_id}",
-            patch_file_paths=file_paths
+            patch_file_paths=file_paths,
+            expected_content=expected_content # Pass expected content for validation
         )
         
         if not commit_patch_success:
