@@ -1,4 +1,3 @@
-
 import os
 import json
 import difflib
@@ -12,7 +11,7 @@ from flask import Blueprint, request, jsonify
 from ..github_utils import get_file_content, generate_diff, apply_patch_to_content
 from ..github_service.github_service import GitHubService
 from ..github_service.utils import prepare_response_metadata, is_test_mode, is_production, verify_module_imports
-from ..github_service.config import verify_config, get_repo_info
+from ..github_service.config import verify_config, get_repo_info, preserve_branch_case, include_test_files
 from ..log_utils import log_diff_summary, format_validation_result, create_structured_error
 
 # Configure logging
@@ -50,7 +49,9 @@ def get_github_config():
         config.update({
             'patch_mode': os.environ.get('PATCH_MODE', 'line-by-line'),
             'test_mode': is_test_mode(),
-            'environment': os.environ.get('ENVIRONMENT', 'development')
+            'environment': os.environ.get('ENVIRONMENT', 'development'),
+            'preserve_branch_case': preserve_branch_case(),
+            'include_test_files': include_test_files()
         })
         
         return jsonify({

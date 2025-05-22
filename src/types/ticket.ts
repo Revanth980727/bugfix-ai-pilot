@@ -101,4 +101,6 @@ export interface GitHubConfig {
   default_branch: string;
   branch: string;
   patch_mode: 'intelligent' | 'line-by-line' | 'direct';
+  preserve_branch_case?: boolean;
+  include_test_files?: boolean;
 }

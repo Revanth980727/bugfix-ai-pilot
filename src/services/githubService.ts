@@ -18,7 +18,9 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
       repo_name: process.env.GITHUB_REPO_NAME || import.meta.env.VITE_GITHUB_REPO_NAME as string || '',
       default_branch: process.env.GITHUB_DEFAULT_BRANCH || import.meta.env.VITE_GITHUB_DEFAULT_BRANCH as string || 'main',
       branch: process.env.GITHUB_BRANCH || import.meta.env.VITE_GITHUB_BRANCH as string || '',
-      patch_mode: (process.env.PATCH_MODE || import.meta.env.VITE_PATCH_MODE as string || 'line-by-line') as 'intelligent' | 'line-by-line' | 'direct'
+      patch_mode: (process.env.PATCH_MODE || import.meta.env.VITE_PATCH_MODE as string || 'line-by-line') as 'intelligent' | 'line-by-line' | 'direct',
+      preserve_branch_case: (process.env.PRESERVE_BRANCH_CASE === 'true' || import.meta.env.VITE_PRESERVE_BRANCH_CASE === 'true') || true,
+      include_test_files: (process.env.INCLUDE_TEST_FILES === 'true' || import.meta.env.VITE_INCLUDE_TEST_FILES === 'true') || false
     };
     
     // Get TEST_MODE setting - more explicitly check for true values
@@ -77,6 +79,8 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
     console.log(`GitHub config loaded: ${config.repo_owner}/${config.repo_name}`);
     console.log(`Using branch: ${config.branch} (default: ${config.default_branch})`);
     console.log(`Using patch mode: ${config.patch_mode}`);
+    console.log(`Preserve branch case: ${config.preserve_branch_case ? 'Yes' : 'No'}`);
+    console.log(`Include test files: ${config.include_test_files ? 'Yes' : 'No'}`);
     console.log(`Test mode: ${isTestMode ? 'Enabled' : 'Disabled'}`);
     
     // Log raw environment variables (redacted) for debugging
@@ -86,7 +90,9 @@ export const getGitHubConfig = async (): Promise<GitHubConfig | null> => {
       GITHUB_REPO_NAME: Boolean(process.env.GITHUB_REPO_NAME),
       VITE_GITHUB_REPO_NAME: Boolean(import.meta.env.VITE_GITHUB_REPO_NAME),
       TEST_MODE: Boolean(process.env.TEST_MODE) || Boolean(import.meta.env.VITE_TEST_MODE),
-      GITHUB_USE_DEFAULT_BRANCH_ONLY: process.env.GITHUB_USE_DEFAULT_BRANCH_ONLY || import.meta.env.VITE_GITHUB_USE_DEFAULT_BRANCH_ONLY
+      GITHUB_USE_DEFAULT_BRANCH_ONLY: process.env.GITHUB_USE_DEFAULT_BRANCH_ONLY || import.meta.env.VITE_GITHUB_USE_DEFAULT_BRANCH_ONLY,
+      PRESERVE_BRANCH_CASE: Boolean(process.env.PRESERVE_BRANCH_CASE) || Boolean(import.meta.env.VITE_PRESERVE_BRANCH_CASE),
+      INCLUDE_TEST_FILES: Boolean(process.env.INCLUDE_TEST_FILES) || Boolean(import.meta.env.VITE_INCLUDE_TEST_FILES)
     });
     
     // Validate the configuration

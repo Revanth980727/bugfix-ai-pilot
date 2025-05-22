@@ -35,9 +35,11 @@ class GitHubService:
             self.test_mode = is_test_mode()
             self.production = is_production()
             self.allow_empty_commits = os.environ.get('ALLOW_EMPTY_COMMITS', 'false').lower() in ('true', 'yes', '1', 't')
+            self.preserve_case = os.environ.get('PRESERVE_BRANCH_CASE', 'true').lower() in ('true', 'yes', '1', 't')
             
             # Log environment info
             logger.info(f"Environment: {'Production' if self.production else 'Development'}, Test Mode: {self.test_mode}")
+            logger.info(f"Branch case sensitivity: {'Preserved' if self.preserve_case else 'Lowercase'}")
             
             logger.info("GitHub service initialized")
         except Exception as e:
@@ -48,11 +50,13 @@ class GitHubService:
         """Create a branch for fixing a bug"""
         # Log operation start
         logger.info("GitHub operation started: create_branch")
-        logger.info(f"Operation details: {{'ticket_id': '{ticket_id}', 'branch_name': 'fix/{ticket_id.lower()}', 'base_branch': {base_branch}, 'test_mode': {self.test_mode}}}")
+        
+        # Create branch name based on case sensitivity setting
+        branch_name = f"fix/{ticket_id}" if self.preserve_case else f"fix/{ticket_id.lower()}"
+        logger.info(f"Operation details: {{'ticket_id': '{ticket_id}', 'branch_name': '{branch_name}', 'base_branch': {base_branch}, 'test_mode': {self.test_mode}}}")
         
         try:
             # Create branch using client
-            branch_name = f"fix/{ticket_id.lower()}"
             self.client.create_branch(branch_name, base_branch)
             
             # Log success
@@ -67,7 +71,7 @@ class GitHubService:
             logger.error(f"Error details: {str(e)}")
             
             # Return branch name anyway since it might exist
-            return f"fix/{ticket_id.lower()}"
+            return branch_name
 
     def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> Tuple[bool, str]:
         """
@@ -86,7 +90,8 @@ class GitHubService:
         except Exception as e:
             logger.error(f"Error creating branch: {str(e)}")
             # Still return the branch name for cases where it might exist but creation failed
-            return False, f"fix/{ticket_id.lower()}"
+            branch_name = f"fix/{ticket_id}" if self.preserve_case else f"fix/{ticket_id.lower()}"
+            return False, branch_name
 
     def get_branch(self, branch_name: str) -> Optional[Dict[str, Any]]:
         """Get information about a branch if it exists"""
@@ -292,6 +297,7 @@ class GitHubService:
         # Log operation start
         logger.info("GitHub operation started: commit_patch")
         logger.info(f"Applying patch to branch {branch_name} with {len(patch_file_paths)} files")
+        logger.info(f"Expected content validation: {'Enabled' if expected_content else 'Disabled'}")
         
         try:
             # Validate patch content
@@ -304,7 +310,7 @@ class GitHubService:
                 logger.error("No file paths provided for patch")
                 return False, {"error": {"code": "NO_FILES", "message": "No file paths provided for patch"}}
             
-            # Parse patch to verify files
+            # Parse patch to verify files and log details
             parsed_changes = parse_patch_content(patch_content)
             parsed_files = [change.get('file_path', '') for change in parsed_changes]
             
@@ -317,6 +323,48 @@ class GitHubService:
             if missing_files:
                 logger.warning(f"Some files missing in patch: {', '.join(missing_files)}")
             
+            # Get the original content for each file for validation
+            original_contents = {}
+            for file_path in patch_file_paths:
+                content = self.client._get_file_content(file_path, branch_name)
+                if content is not None:
+                    original_contents[file_path] = content
+                    logger.info(f"Retrieved original content for {file_path}: {len(content)} bytes")
+                else:
+                    logger.warning(f"Could not retrieve original content for {file_path}")
+            
+            # Validate patch before applying
+            if expected_content and original_contents:
+                validation_result = validate_patch(
+                    patch_content=patch_content,
+                    file_paths=patch_file_paths,
+                    original_contents=original_contents,
+                    expected_contents=expected_content
+                )
+                
+                logger.info(f"Patch validation results: Valid={validation_result['valid']}")
+                for file_path, file_result in validation_result['file_results'].items():
+                    if file_result.get('valid', False):
+                        logger.info(f"✓ Validation passed for {file_path} using {file_result.get('method', 'unknown')}")
+                    else:
+                        logger.warning(f"✗ Validation failed for {file_path}: {file_result.get('error', 'unknown error')}")
+                        logger.warning(f"Will attempt patch application anyway with careful validation")
+            
+            # Filter out any unwanted test files based on environment variables
+            include_test_files = os.environ.get('INCLUDE_TEST_FILES', 'false').lower() in ('true', 'yes', '1', 't') or self.test_mode
+            
+            if not include_test_files and not self.test_mode:
+                filtered_file_paths = []
+                for file_path in patch_file_paths:
+                    if '/test/' in file_path or file_path.endswith('_test.py') or file_path.endswith('test.md'):
+                        logger.info(f"Skipping test file: {file_path} (INCLUDE_TEST_FILES is disabled)")
+                        continue
+                    filtered_file_paths.append(file_path)
+                
+                if len(filtered_file_paths) < len(patch_file_paths):
+                    logger.warning(f"Filtered out {len(patch_file_paths) - len(filtered_file_paths)} test files")
+                    patch_file_paths = filtered_file_paths
+            
             # Log the files that will be patched
             logger.info(f"Patching files from parsed content: {parsed_files}")
             
@@ -327,6 +375,16 @@ class GitHubService:
             if result.get("committed", False):
                 logger.info("GitHub operation succeeded: commit_patch")
                 logger.info(f"Applied patch to {result.get('files_changed', 0)} files")
+                
+                # Capture which method was used for each file (patch vs full replace)
+                if "file_results" in result:
+                    for file_path, file_result in result["file_results"].items():
+                        method = file_result.get("method", "unknown")
+                        if method == "full_replace":
+                            logger.warning(f"File {file_path} used full replacement instead of patching")
+                        else:
+                            logger.info(f"File {file_path} patched successfully using {method}")
+                
                 return True, result
             else:
                 logger.error(f"GitHub operation failed: commit_patch")

@@ -1,4 +1,3 @@
-
 import os
 import logging
 import sys
@@ -22,6 +21,10 @@ DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
 TEST_MODE = os.getenv('TEST_MODE', 'False').lower() in ('true', 'yes', '1', 't')
 # Add configuration for empty commit handling
 ALLOW_EMPTY_COMMITS = os.getenv('ALLOW_EMPTY_COMMITS', 'False').lower() in ('true', 'yes', '1', 't')
+# Add configuration for branch case sensitivity
+PRESERVE_BRANCH_CASE = os.getenv('PRESERVE_BRANCH_CASE', 'True').lower() in ('true', 'yes', '1', 't')
+# Add configuration for including test files in commits
+INCLUDE_TEST_FILES = os.getenv('INCLUDE_TEST_FILES', 'False').lower() in ('true', 'yes', '1', 't')
 
 # Patch processing configuration
 PATCH_MODE = os.getenv('PATCH_MODE', 'line-by-line')
@@ -101,6 +104,8 @@ def verify_config():
         logger.info(f"Test mode: {TEST_MODE}, Debug mode: {DEBUG_MODE}")
         logger.info(f"Patch mode: {PATCH_MODE}")
         logger.info(f"Allow empty commits: {ALLOW_EMPTY_COMMITS}")
+        logger.info(f"Preserve branch case: {PRESERVE_BRANCH_CASE}")
+        logger.info(f"Include test files: {INCLUDE_TEST_FILES}")
     
     return True
 
@@ -112,7 +117,9 @@ def get_repo_info():
         "default_branch": GITHUB_DEFAULT_BRANCH,
         "use_default_branch_only": GITHUB_USE_DEFAULT_BRANCH_ONLY,
         "patch_mode": PATCH_MODE,
-        "allow_empty_commits": ALLOW_EMPTY_COMMITS
+        "allow_empty_commits": ALLOW_EMPTY_COMMITS,
+        "preserve_branch_case": PRESERVE_BRANCH_CASE,
+        "include_test_files": INCLUDE_TEST_FILES
     }
 
 def is_test_mode():
@@ -141,3 +148,12 @@ def allow_empty_commits():
     """Check if empty commits are allowed."""
     return ALLOW_EMPTY_COMMITS
 
+# Check if branch case should be preserved
+def preserve_branch_case():
+    """Check if branch case should be preserved."""
+    return PRESERVE_BRANCH_CASE
+
+# Check if test files should be included in commits
+def include_test_files():
+    """Check if test files should be included in commits."""
+    return INCLUDE_TEST_FILES or TEST_MODE

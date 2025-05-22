@@ -1,3 +1,4 @@
+
 import os
 import sys
 import logging
@@ -16,6 +17,7 @@ def test_github_service():
     from github_service.github_service import GitHubService
     from github_service.utils import parse_patch_content, parse_patch_basic
     from github_service.patch_engine import apply_patch_to_content, validate_patch
+    from github_service.config import preserve_branch_case, include_test_files
     
     # Verify environment variables
     token = os.environ.get('GITHUB_TOKEN')
@@ -36,12 +38,25 @@ def test_github_service():
         # Initialize service
         service = GitHubService()
         
-        # Test creating a branch
+        # Test creating a branch with case sensitivity
         ticket_id = "TEST-123"
+        logger.info(f"Creating branch for ticket ID: {ticket_id}")
+        logger.info(f"Preserve branch case setting: {preserve_branch_case()}")
+        
         branch_name = service.create_branch(ticket_id)
         if not branch_name:
             logger.error("Failed to create branch")
             return
+        
+        # Verify branch name case sensitivity
+        expected_branch_name = f"fix/{ticket_id}" if service.preserve_case else f"fix/{ticket_id.lower()}"
+        if branch_name == expected_branch_name:
+            logger.info(f"✓ Branch name case sensitivity working correctly: {branch_name}")
+        else:
+            logger.error(f"✗ Branch name case sensitivity not working. Got: {branch_name}, Expected: {expected_branch_name}")
+        
+        # Test whether test files are included based on configuration
+        logger.info(f"Include test files setting: {include_test_files()}")
         
         # Test various file types to ensure all are handled correctly
         test_changes = [
@@ -54,6 +69,8 @@ def test_github_service():
                 "content": "import networkx as nx\n\n# Test Graph RAG implementation\ndef graph_function():\n    G = nx.Graph()\n    return G"
             }
         ]
+        
+        # ... keep existing code (test patch parsing, validation, commit, etc.)
         
         # Extract file paths and contents correctly
         file_paths = [change["filename"] for change in test_changes]
@@ -136,6 +153,8 @@ def test_github_service():
         
         # Test our new patch engine
         logger.info("Testing new patch engine with validation")
+        
+        # ... keep existing code (test patch engine with validation)
         
         # Test 1: First test with empty original content (new files)
         logger.info("Test 1: Testing patch engine with new files")
