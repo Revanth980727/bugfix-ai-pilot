@@ -15,7 +15,7 @@ async def start_orchestrator():
     os.makedirs("logs", exist_ok=True)
     
     orchestrator = Orchestrator()
-    await orchestrator.run_forever()
+    await orchestrator.run()
 
 if __name__ == "__main__":
     try:

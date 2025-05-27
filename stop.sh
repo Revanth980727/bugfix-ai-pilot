@@ -8,5 +8,6 @@ docker-compose down
 if [ $? -eq 0 ]; then
   echo "System stopped successfully!"
 else
-  echo "Error stopping the system. You may need to manually stop containers."
+  echo "Error stopping the system. You may need to manually stop containers with:"
+  echo "docker-compose down --remove-orphans"
 fi

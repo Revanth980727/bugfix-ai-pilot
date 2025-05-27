@@ -1,300 +1,397 @@
-
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-import subprocess
 import os
-import json
 import logging
-import re
-from .agent_base import Agent, AgentStatus
+import subprocess
+import sys
+import json
+import time
+from typing import Dict, Any, List, Optional
+from .agent_base import Agent
 
-# Configure logging
+# Set up logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("qa-agent")
+logger = logging.getLogger("qa_agent")
 
 class QAAgent(Agent):
+    """
+    Agent responsible for running tests to validate developer-generated fixes.
+    Ensures that fixes pass all tests before proceeding.
+    """
+    
     def __init__(self):
-        super().__init__(name="QAAgent")
-        self.repo_path = os.getenv("REPO_PATH", "/app/code_repo")
+        """Initialize the QA agent"""
+        super().__init__(name="QA Agent")
+    
+    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process input from developer agent and run tests to validate the fix
         
-    def _run_test_command(self, command: str, timeout: int = 300) -> Dict[str, Any]:
-        """Execute a test command and capture results"""
+        Args:
+            input_data: Dictionary with data from developer agent including patch data
+            
+        Returns:
+            Dictionary with test results
+        """
+        logger.info("QA Agent starting test process")
+        
+        # Initialize result structure
+        result = {
+            "passed": False,
+            "test_results": [],
+            "execution_time": 0,
+            "error_message": None,
+            "code_changes_detected": False,
+            "validation_errors": [],
+            "success": False
+        }
+        
+        # Log the developer agent input
+        logger.info(f"QA Agent received input with keys: {list(input_data.keys())}")
+        
+        # Debug input data to better diagnose issues
+        debug_dir = "debug_logs"
+        os.makedirs(debug_dir, exist_ok=True)
         try:
-            logger.info(f"Running test command: {command}")
-            process = subprocess.Popen(
-                command.split(),
-                cwd=self.repo_path,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            with open(f"{debug_dir}/qa_received_input.json", "w") as f:
+                json.dump(input_data, f, indent=2)
+            logger.info(f"Saved received input to {debug_dir}/qa_received_input.json")
+        except Exception as e:
+            logger.error(f"Error saving input for debugging: {str(e)}")
+        
+        # Extract the developer result - it could be at the root or nested in developer_result
+        developer_data = input_data.get("developer_result", input_data)
+        
+        # Validate developer input
+        if not self._validate_developer_input(developer_data, result):
+            result["error_message"] = "Invalid input from developer agent"
+            logger.error(f"Developer input validation failed: {result['validation_errors']}")
+            return result
+            
+        # Check if developer agent reported success
+        if not developer_data.get("success", False):
+            result["error_message"] = "Developer agent reported failure"
+            logger.error("Developer agent reported failure, skipping QA tests")
+            return result
+            
+        # Verify that code changes were actually made
+        logger.info("Verifying code changes")
+        if not self._verify_code_changes(result):
+            result["error_message"] = "No code changes detected"
+            logger.error("No code changes detected in the repository")
+            return result
+        
+        # Write test files if present
+        test_files_written = []
+        if "test_code" in developer_data and developer_data["test_code"]:
+            logger.info("Found test code in developer output, writing test files")
+            test_files_written = self._write_test_files(developer_data["test_code"])
+            logger.info(f"Wrote {len(test_files_written)} test files")
+            
+        # Run tests
+        logger.info("Running tests")
+        # IMPORTANT: Always use pytest in the backend containers - never npm
+        test_command = "python -m pytest"
+        logger.info(f"Using test command: {test_command}")
+        success, test_output = self._run_test_command(test_command)
+        
+        # Parse and process test results
+        if success:
+            logger.info("Tests passed successfully")
+            result["passed"] = True
+            result["test_results"] = self._parse_test_output(test_output)
+            result["execution_time"] = self._calculate_execution_time(test_output)
+            result["success"] = True
+            
+            # Add a failure_summary field for consistency even when tests pass
+            result["failure_summary"] = ""
+        else:
+            logger.error("Tests failed")
+            result["passed"] = False
+            result["error_message"] = "Tests failed"
+            result["test_results"] = self._parse_test_output(test_output)
+            result["execution_time"] = self._calculate_execution_time(test_output)
+            
+            # Extract a failure summary from the test output
+            result["failure_summary"] = self._extract_failure_summary(test_output)
+            
+        logger.info(f"QA Agent completed with success={result['success']} and passed={result['passed']}")
+        return result
+        
+    def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Legacy method for backwards compatibility.
+        Delegates to run() method.
+        """
+        return self.run(input_data)
+    
+    def _write_test_files(self, test_code: Dict[str, str]) -> List[str]:
+        """
+        Write test files to the repository
+        
+        Args:
+            test_code: Dictionary mapping file names to test code
+            
+        Returns:
+            List of written test file paths
+        """
+        written_files = []
+        repo_path = os.environ.get("REPO_PATH", "/mnt/codebase")
+        
+        try:
+            for file_name, content in test_code.items():
+                try:
+                    # Create full path
+                    file_path = os.path.join(repo_path, file_name)
+                    
+                    # Create directory if it doesn't exist
+                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                    
+                    # Write test file
+                    with open(file_path, 'w') as f:
+                        f.write(content)
+                        
+                    logger.info(f"Successfully wrote test file: {file_name}")
+                    written_files.append(file_name)
+                except Exception as e:
+                    logger.error(f"Error writing test file {file_name}: {str(e)}")
+            
+            return written_files
+        except Exception as e:
+            logger.error(f"Error writing test files: {str(e)}")
+            return []
+    
+    def _validate_developer_input(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
+        """
+        Validate input from developer agent
+        
+        Args:
+            input_data: Dictionary with data from developer agent
+            result: Result dictionary to update with validation errors
+            
+        Returns:
+            Boolean indicating if input is valid
+        """
+        valid = True
+        validation_errors = []
+        
+        # Log the received input keys to help debugging
+        logger.info(f"Validating developer input with keys: {list(input_data.keys())}")
+        
+        # Check if patched_code exists and is not empty
+        if "patched_code" not in input_data:
+            validation_errors.append("Missing patched_code in developer output")
+            valid = False
+            logger.error(f"Missing patched_code in developer output. Keys available: {list(input_data.keys())}")
+        elif not input_data["patched_code"]:
+            validation_errors.append("Empty patched_code in developer output")
+            valid = False
+            logger.error("Empty patched_code in developer output")
+        else:
+            logger.info(f"Found patched_code with {len(input_data['patched_code'])} entries")
+            
+        # Check confidence score
+        if "confidence_score" not in input_data:
+            validation_errors.append("Missing confidence_score in developer output")
+            valid = False
+            logger.error(f"Missing confidence_score in developer output. Keys available: {list(input_data.keys())}")
+        elif input_data.get("confidence_score", 0) <= 0:
+            validation_errors.append(f"Invalid confidence score: {input_data.get('confidence_score', 0)}")
+            valid = False
+            logger.error(f"Invalid confidence score: {input_data.get('confidence_score', 0)}")
+        else:
+            logger.info(f"Found confidence_score: {input_data.get('confidence_score')}")
+            
+        # Check patch file paths
+        if "patched_files" not in input_data:
+            validation_errors.append("Missing patched_files in developer output")
+            valid = False
+            logger.error(f"Missing patched_files in developer output. Keys available: {list(input_data.keys())}")
+        elif not input_data.get("patched_files", []):
+            validation_errors.append("Empty patched_files list in developer output")
+            valid = False
+            logger.error("Empty patched_files list in developer output")
+        else:
+            logger.info(f"Found patched_files: {input_data.get('patched_files')}")
+            
+        # Add relaxed validation - if we have diffs but not patched_code or patched_files
+        if "diffs" in input_data and input_data.get("diffs") and "patched_code" not in input_data:
+            logger.warning("Using 'diffs' instead of missing 'patched_code'")
+            input_data["patched_code"] = {d["file"]: d["content"] for d in input_data["diffs"] if "file" in d and "content" in d}
+            if not "patched_files" in input_data:
+                input_data["patched_files"] = [d["file"] for d in input_data["diffs"] if "file" in d]
+            logger.info(f"Constructed patched_code and patched_files from diffs: {list(input_data['patched_code'].keys())}")
+            
+        # Log validation results
+        if validation_errors:
+            result["validation_errors"] = validation_errors
+            logger.warning(f"Developer input validation failed: {validation_errors}")
+            try:
+                # Log a limited sample of the input for debugging
+                sample_input = {k: str(v)[:100] + "..." if isinstance(v, str) and len(str(v)) > 100 else v 
+                              for k, v in input_data.items()}
+                logger.warning(f"Developer input sample: {json.dumps(sample_input, indent=2)}")
+            except Exception as e:
+                logger.warning(f"Could not serialize developer input for logging: {str(e)}")
+                # Try to log keys at least
+                logger.warning(f"Developer input keys: {list(input_data.keys())}")
+        else:
+            logger.info("Developer input validation passed")
+        
+        return valid
+        
+    def _verify_code_changes(self, result: Dict[str, Any]) -> bool:
+        """
+        Verify that code changes were actually made using git diff
+        
+        Args:
+            result: Result dictionary to update
+            
+        Returns:
+            Boolean indicating if code changes were detected
+        """
+        try:
+            # Run git diff to check for changes
+            diff_process = subprocess.run(
+                ["git", "diff", "--exit-code"],
+                cwd=os.environ.get("REPO_PATH", "/mnt/codebase"),
+                capture_output=True,
                 text=True
             )
             
-            stdout, stderr = process.communicate(timeout=timeout)
-            
-            # Process test results
-            test_results = []
-            if process.returncode == 0:
-                if stdout:
-                    # Basic test result parsing - could be enhanced for specific test runners
-                    test_results.append({
-                        "name": "test_suite",
-                        "status": "pass",
-                        "duration": 0,  # Would need proper parsing from test output
-                        "output": stdout
-                    })
-            else:
-                # Parse failure information for more detailed reporting
-                failures = self._parse_test_failures(stdout, stderr)
-                for failure in failures:
-                    test_results.append({
-                        "name": failure.get("test_name", "test_suite"),
-                        "status": "fail",
-                        "duration": failure.get("duration", 0),
-                        "error_type": failure.get("error_type", "Error"),
-                        "error_message": failure.get("error_message", stderr if stderr else "Test suite failed with no error output"),
-                        "output": failure.get("output", stdout)
-                    })
+            # If git diff exits with code 0, there are no changes
+            if diff_process.returncode == 0:
+                logger.warning("No code changes detected by git diff")
+                result["code_changes_detected"] = False
+                return False
                 
-                # If no specific failures were parsed, add a generic one
-                if not failures:
-                    test_results.append({
-                        "name": "test_suite",
-                        "status": "fail",
-                        "duration": 0,
-                        "error_type": "UnknownError",
-                        "error_message": stderr if stderr else "Test suite failed with no error output",
-                        "output": stdout
-                    })
+            # Changes detected
+            logger.info("Code changes detected by git diff")
+            result["code_changes_detected"] = True
+            return True
             
-            return {
-                "passed": process.returncode == 0,
-                "test_results": test_results,
-                "exit_code": process.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "command": command,
-                "timestamp": datetime.now().isoformat(),
-                "failure_summary": self._generate_failure_summary(test_results) if process.returncode != 0 else ""
-            }
-            
-        except subprocess.TimeoutExpired:
-            logger.error(f"Test command timed out after {timeout} seconds")
-            error_msg = f"Test execution timed out after {timeout} seconds"
-            return {
-                "passed": False,
-                "test_results": [{
-                    "name": "test_suite",
-                    "status": "fail",
-                    "duration": timeout * 1000,
-                    "error_type": "Timeout",
-                    "error_message": error_msg
-                }],
-                "exit_code": -1,
-                "stderr": f"Command timed out after {timeout} seconds",
-                "command": command,
-                "timestamp": datetime.now().isoformat(),
-                "failure_summary": f"test_suite: Timeout: {error_msg}"
-            }
         except Exception as e:
-            logger.error(f"Error running test command: {str(e)}")
-            error_msg = str(e)
-            return {
-                "passed": False,
-                "test_results": [{
-                    "name": "test_suite",
-                    "status": "fail",
-                    "duration": 0,
-                    "error_type": "Exception",
-                    "error_message": error_msg
-                }],
-                "exit_code": -1,
-                "stderr": error_msg,
-                "command": command,
-                "timestamp": datetime.now().isoformat(),
-                "failure_summary": f"test_suite: Exception: {error_msg}"
-            }
+            logger.error(f"Error checking for code changes: {str(e)}")
+            result["error_message"] = f"Error checking for code changes: {str(e)}"
+            result["code_changes_detected"] = False
+            return False
     
-    def _parse_test_failures(self, stdout: str, stderr: str) -> List[Dict[str, Any]]:
-        """Parse test output to extract specific failures"""
-        failures = []
+    def _run_test_command(self, test_command: str, timeout: int = 300) -> tuple:
+        """
+        Run tests using the specified command
         
-        # Combine stdout and stderr for parsing
-        output = stdout + "\n" + stderr
-        
-        # Try to detect test framework by output patterns
-        if "FAILED" in output and ("pytest" in output or "test_" in output):
-            # Looks like pytest output
-            failures = self._parse_pytest_failures(output)
-        elif "FAIL:" in output and "unittest" in output:
-            # Looks like unittest output
-            failures = self._parse_unittest_failures(output)
-        elif "fail" in output.lower() and ("jest" in output.lower() or "npm test" in output.lower()):
-            # Looks like Jest/Node test output
-            failures = self._parse_jest_failures(output)
-        
-        return failures
-    
-    def _parse_pytest_failures(self, output: str) -> List[Dict[str, Any]]:
-        """Parse pytest failures"""
-        failures = []
-        # Simple regex to find pytest failures
-        test_failures = re.finditer(r'(test_\w+).*FAILED', output)
-        error_matches = re.finditer(r'E\s+(\w+Error|Exception):\s+(.+?)$', output, re.MULTILINE)
-        
-        # Collect test names and errors
-        test_names = [match.group(1) for match in test_failures]
-        errors = [(match.group(1), match.group(2)) for match in error_matches]
-        
-        # Try to match tests with their errors
-        for i, test_name in enumerate(test_names):
-            error_type = "AssertionError"
-            error_msg = "Test failed"
+        Args:
+            test_command: Command to run tests
+            timeout: Timeout in seconds
             
-            # Try to match with an error if available
-            if i < len(errors):
-                error_type, error_msg = errors[i]
-            
-            failures.append({
-                "test_name": test_name,
-                "error_type": error_type,
-                "error_message": error_msg,
-                "output": output
-            })
-        
-        return failures
-    
-    def _parse_unittest_failures(self, output: str) -> List[Dict[str, Any]]:
-        """Parse unittest failures"""
-        failures = []
-        # Simple regex to find unittest failures
-        matches = re.finditer(r'FAIL: (\w+) \(([\w\.]+)\)', output)
-        
-        for match in matches:
-            test_name = match.group(1)
-            test_class = match.group(2)
-            
-            # Try to find the associated error
-            error_match = re.search(rf'{test_name}.*?\n([\s\S]*?)(?=FAIL:|ERROR:|OK|$)', output)
-            error_msg = error_match.group(1).strip() if error_match else "Test failed"
-            
-            # Try to extract error type
-            error_type_match = re.search(r'(\w+Error|Exception):', error_msg)
-            error_type = error_type_match.group(1) if error_type_match else "AssertionError"
-            
-            failures.append({
-                "test_name": f"{test_class}.{test_name}",
-                "error_type": error_type,
-                "error_message": error_msg,
-                "output": output
-            })
-        
-        return failures
-    
-    def _parse_jest_failures(self, output: str) -> List[Dict[str, Any]]:
-        """Parse Jest/Node test failures"""
-        failures = []
-        # Find Jest test failures
-        test_blocks = re.split(r'●\s+', output)
-        
-        for block in test_blocks[1:]:  # Skip the first split which is before any match
-            lines = block.strip().split('\n')
-            if not lines:
-                continue
-                
-            # First line contains the test description
-            test_name = lines[0].strip()
-            error_msg = "Test failed"
-            error_type = "Error"
-            
-            # Look for error type and message
-            for line in lines:
-                error_match = re.search(r'(\w+Error|Error):\s+(.+)$', line)
-                if error_match:
-                    error_type = error_match.group(1)
-                    error_msg = error_match.group(2)
-                    break
-            
-            failures.append({
-                "test_name": test_name,
-                "error_type": error_type,
-                "error_message": error_msg,
-                "output": block
-            })
-        
-        return failures
-    
-    def _generate_failure_summary(self, test_results: List[Dict[str, Any]]) -> str:
-        """Generate a concise summary of test failures"""
-        if not test_results:
-            return "No test results available"
-            
-        summary_lines = []
-        for test in test_results:
-            if test["status"] == "fail":
-                error_type = test.get("error_type", "Error")
-                error_msg = test.get("error_message", "Unknown error")
-                
-                # Format the error message - take only the first line if it's multiline
-                if isinstance(error_msg, str):
-                    error_msg_first_line = error_msg.split('\n')[0]
-                    if len(error_msg_first_line) > 100:
-                        error_msg_first_line = error_msg_first_line[:97] + "..."
-                else:
-                    error_msg_first_line = str(error_msg)
-                
-                summary_line = f"{test['name']}: {error_type}: {error_msg_first_line}"
-                summary_lines.append(summary_line)
-        
-        return "\n- ".join([""] + summary_lines) if summary_lines else "All tests passed"
-    
-    def _save_output(self, ticket_id: str, output: Dict[str, Any]) -> None:
-        """Save QA output to file"""
+        Returns:
+            Tuple of (success, output)
+        """
         try:
-            output_dir = os.path.join(self.repo_path, "qa_outputs")
-            os.makedirs(output_dir, exist_ok=True)
+            logger.info(f"Running test command: {test_command}")
             
-            output_file = os.path.join(output_dir, f"qa_output_{ticket_id}.json")
-            with open(output_file, 'w') as f:
-                json.dump(output, f, indent=2)
-                
+            # Check if pytest is available
+            try:
+                import pytest
+                logger.info(f"Found pytest version: {pytest.__version__}")
+            except ImportError:
+                logger.warning("Pytest not found, attempting to install...")
+                try:
+                    subprocess.run([sys.executable, "-m", "pip", "install", "pytest"], check=True)
+                    logger.info("Successfully installed pytest")
+                except Exception as e:
+                    logger.error(f"Failed to install pytest: {str(e)}")
+                    return False, f"Failed to install pytest: {str(e)}"
+            
+            # ALWAYS use python -m pytest in the backend container
+            command_parts = ["python", "-m", "pytest"]
+            
+            # Add any additional arguments if specified in the test command
+            if "python -m pytest" in test_command and test_command != "python -m pytest":
+                extra_args = test_command.replace("python -m pytest", "").strip().split()
+                if extra_args:
+                    command_parts.extend(extra_args)
+                    
+            logger.info(f"Executing test command: {' '.join(command_parts)}")
+            
+            # Print environment info for debugging
+            env = os.environ.copy()
+            logger.info(f"Environment variables for test command: PATH={env.get('PATH', '')}, PYTHONPATH={env.get('PYTHONPATH', '')}")
+            
+            process = subprocess.run(
+                command_parts,
+                cwd=os.environ.get("REPO_PATH", "/mnt/codebase"),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env  # Pass environment variables
+            )
+            
+            # Check if tests passed
+            success = process.returncode == 0
+            logger.info(f"Test command exited with code {process.returncode}")
+            
+            # Log output for debugging
+            logger.info(f"Test stdout: {process.stdout}")
+            if process.stderr:
+                logger.info(f"Test stderr: {process.stderr}")
+            
+            return success, process.stdout + process.stderr
+            
+        except subprocess.TimeoutExpired as e:
+            logger.error(f"Test command timed out after {timeout} seconds")
+            return False, f"Timeout: Test execution exceeded {timeout} seconds"
         except Exception as e:
-            logger.error(f"Error saving QA output: {str(e)}")
-
-    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Run tests and return results"""
-        ticket_id = input_data.get("ticket_id")
-        if not ticket_id:
-            raise ValueError("ticket_id is required")
+            logger.error(f"Error running tests: {str(e)}")
+            return False, str(e)
             
-        logger.info(f"Starting QA tests for ticket {ticket_id}")
+    def _parse_test_output(self, output: str) -> List[Dict[str, Any]]:
+        """
+        Parse test output into structured format
         
-        # Use custom test command if provided, otherwise use default
-        test_command = input_data.get("test_command", "npm test")  # Default to frontend tests
-        target = input_data.get("target", "")  # Optional target file/folder
-        
-        if target:
-            test_command = f"{test_command} {target}"
+        Args:
+            output: Test output to parse
             
-        # Run tests and capture results
-        result = self._run_test_command(test_command)
+        Returns:
+            List of test results
+        """
+        # Simple implementation - in a real system, you would parse the test output
+        # into a structured format based on the testing framework used
+        return [{"raw_output": output}]
         
-        # Save output for debugging
-        self._save_output(ticket_id, result)
+    def _calculate_execution_time(self, output: str) -> float:
+        """
+        Calculate test execution time from output
         
-        # Log test completion
-        status = "PASSED" if result["passed"] else "FAILED"
-        logger.info(f"QA testing for ticket {ticket_id} completed: {status}")
+        Args:
+            output: Test output
+            
+        Returns:
+            Execution time in seconds
+        """
+        # Simple implementation - in a real system, you would extract the actual
+        # execution time from the test output
+        return 1.5  # Mock execution time
         
-        # If tests failed, log the failure summary
-        if not result["passed"] and "failure_summary" in result:
-            logger.info(f"Failure summary for ticket {ticket_id}:\n{result['failure_summary']}")
+    def _extract_failure_summary(self, output: str) -> str:
+        """
+        Extract a concise failure summary from test output
         
-        # Update agent status
-        self.status = AgentStatus.SUCCESS if result["passed"] else AgentStatus.FAILED
+        Args:
+            output: Test output
+            
+        Returns:
+            Concise failure summary
+        """
+        # Look for common failure patterns in test output
+        failure_lines = []
         
-        return {
-            "ticket_id": ticket_id,
-            "passed": result["passed"],
-            "test_results": result["test_results"],
-            "failure_summary": result.get("failure_summary", "") if not result["passed"] else ""
-        }
+        # Process the output line by line to extract key failure information
+        for line in output.split('\n'):
+            if "FAILED" in line or "Error:" in line or "Exception:" in line or "No module named" in line:
+                failure_lines.append(line.strip())
+                
+        # If we found specific failure lines, join them
+        if failure_lines:
+            return "\n".join(failure_lines[:3])  # Limit to first 3 failures for conciseness
+            
+        # Fallback: Return a generic message with a snippet of the output
+        return f"Tests failed. Output: {output[:200]}..." if len(output) > 200 else output

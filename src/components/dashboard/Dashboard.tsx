@@ -1,9 +1,8 @@
-
 import React, { useState } from 'react';
 import { TicketForm } from '../tickets/TicketForm';
 import { TicketInfo } from '../tickets/TicketInfo';
 import { PlannerAgent } from '../agents/PlannerAgent';
-import { DeveloperAgent } from '../agents/DeveloperAgent';
+import DeveloperAgent from '../agents/DeveloperAgent';
 import { QAAgent } from '../agents/QAAgent';
 import { CommunicatorAgent } from '../agents/CommunicatorAgent';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -98,11 +97,8 @@ export function Dashboard() {
                 />
                 
                 <DeveloperAgent 
-                  status={developerStatus} 
-                  progress={developerProgress}
-                  attempt={currentAttempt}
-                  maxAttempts={maxAttempts}
-                  diffs={diffs}
+                  onStart={() => console.log('Developer started')}
+                  onComplete={() => console.log('Developer completed')}
                 />
               </div>
               

@@ -1,3 +1,4 @@
+
 version: '3.9'
 
 services:
@@ -34,11 +35,13 @@ services:
       - COMMUNICATOR_URL=http://communicator:8004
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
     env_file:
       - ./.env
     volumes:
       - ./logs:/app/logs
       - ./code_repo:/app/code_repo
+      - ./backend:/app
     depends_on:
       - planner
       - developer
@@ -65,16 +68,16 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
     env_file:
       - ./.env
     volumes:
       - ./code_repo:/app/code_repo
-      - ./logs:/app/logs/planner
-      - ./agents/utils:/app/utils
+      - ./logs:/app/logs
     networks:
       - bugfix_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/"] || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
@@ -92,16 +95,17 @@ services:
       - MAX_RETRIES=${MAX_RETRIES:-4}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
+      - REPO_PATH=/app/code_repo
     env_file:
       - ./.env
     volumes:
       - ./code_repo:/app/code_repo
-      - ./logs:/app/logs/developer
-      - ./agents/utils:/app/utils
+      - ./logs:/app/logs
     networks:
       - bugfix_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8002/"] || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
@@ -115,19 +119,22 @@ services:
       - "8003:8003"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - TEST_COMMAND=${PROJECT_TEST_COMMAND:-pytest}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
+      - CODEBASE_PATH=/app/code_repo
+      - REPO_PATH=/app/code_repo
+      - PIP_NO_CACHE_DIR=off
+      - PYTHONDONTWRITEBYTECODE=1
     env_file:
       - ./.env
     volumes:
       - ./code_repo:/app/code_repo
-      - ./logs:/app/logs/qa
-      - ./agents/utils:/app/utils
+      - ./logs:/app/logs
     networks:
       - bugfix_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8003/"] || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
@@ -155,17 +162,22 @@ services:
       - SLACK_CHANNEL=${SLACK_CHANNEL:-""}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app:/app/backend
+      - TEST_COMMAND=python -m pytest
+      - TEST_MODE=${TEST_MODE:-false}
+      - NO_FALLBACK_MOCK=${NO_FALLBACK_MOCK:-true}
     env_file:
       - ./.env
     volumes:
-      - ./logs:/app/logs/communicator
       - ./code_repo:/app/code_repo
+      - ./logs:/app/logs
+      - ./backend/github_service:/app/backend/github_service
+      - ./backend/github_utils.py:/app/backend/github_utils.py
       - ./agents/utils:/app/utils
     networks:
       - bugfix_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8004/"] || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
@@ -184,10 +196,13 @@ services:
       - JIRA_POLL_INTERVAL=${JIRA_POLL_INTERVAL:-30}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
+      - REPO_PATH=/app/code_repo
     env_file:
       - ./.env
     volumes:
       - ./logs:/app/logs/jira_service
+      - ./code_repo:/app/code_repo
     networks:
       - bugfix_network
     restart: unless-stopped
@@ -204,10 +219,13 @@ services:
       - GITHUB_DEFAULT_BRANCH=${GITHUB_DEFAULT_BRANCH:-main}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      - TEST_COMMAND=python -m pytest
+      - TEST_MODE=false
     env_file:
       - ./.env
     volumes:
       - ./logs:/app/logs/github_service
+      - ./code_repo:/app/code_repo
     networks:
       - bugfix_network
     restart: "no"

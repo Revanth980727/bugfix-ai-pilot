@@ -1,10 +1,10 @@
-
 import asyncio
 import logging
 import os
 import json
 from datetime import datetime
 import shutil
+import traceback
 from jira_utils import fetch_jira_tickets
 from ticket_processor import process_ticket, cleanup_old_tickets, active_tickets
 
@@ -22,26 +22,60 @@ logger = logging.getLogger("bugfix-controller")
 # Configuration for log rotation (days to keep logs)
 LOG_RETENTION_DAYS = os.environ.get('LOG_RETENTION_DAYS', 30)
 
+# Track which tickets have already been processed
+processed_tickets = set()
+
 async def run_controller():
     """Main controller loop that runs every 60 seconds"""
     while True:
         try:
+            # First, check if git is installed
+            try:
+                import subprocess
+                result = subprocess.run(['which', 'git'], capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.error("Git is not installed in the container. This will cause issues with git operations.")
+                    logger.error("Please rebuild the container with git installed.")
+                else:
+                    logger.info(f"Git is installed at: {result.stdout.strip()}")
+            except Exception as git_check_error:
+                logger.error(f"Error checking for git: {git_check_error}")
+            
             # Fetch new tickets from JIRA
             new_tickets = await fetch_jira_tickets()
             
             # Process each new ticket
             for ticket in new_tickets:
-                # Skip if already being processed
-                if ticket["ticket_id"] not in active_tickets:
-                    # Create log directory for this ticket
-                    ticket_log_dir = f"logs/{ticket['ticket_id']}"
-                    os.makedirs(ticket_log_dir, exist_ok=True)
+                ticket_id = ticket.get("ticket_id")
+                if not ticket_id:
+                    logger.warning("Received ticket without ID, skipping")
+                    continue
+                
+                # Skip if already being processed or already processed
+                if ticket_id in active_tickets or ticket_id in processed_tickets:
+                    logger.info(f"Ticket {ticket_id} is already being processed or was previously processed, skipping")
+                    continue
                     
-                    # Log the input received
-                    with open(f"{ticket_log_dir}/controller_input.json", 'w') as f:
-                        json.dump(ticket, f, indent=2)
-                    
-                    asyncio.create_task(process_ticket(ticket))
+                # Create log directory for this ticket
+                ticket_log_dir = f"logs/{ticket_id}"
+                os.makedirs(ticket_log_dir, exist_ok=True)
+                
+                # Log the input received
+                with open(f"{ticket_log_dir}/controller_input.json", 'w') as f:
+                    json.dump(ticket, f, indent=2)
+                
+                # Track that we're processing this ticket
+                processed_tickets.add(ticket_id)
+                
+                # Process the ticket
+                try:
+                    # Create task to process ticket asynchronously
+                    task = asyncio.create_task(process_ticket(ticket))
+                    # Add error handling callback
+                    task.add_done_callback(lambda t: handle_task_completion(t, ticket_id))
+                except Exception as e:
+                    logger.error(f"Error creating task for ticket {ticket_id}: {str(e)}")
+                    logger.error(traceback.format_exc())
             
             # Clean up old tickets
             await cleanup_old_tickets()
@@ -57,7 +91,7 @@ async def run_controller():
             error_log = {
                 "timestamp": datetime.now().isoformat(),
                 "error": str(e),
-                "stacktrace": logging.traceback.format_exc()
+                "stacktrace": traceback.format_exc()
             }
             try:
                 with open(f"logs/controller_errors.json", 'a') as f:
@@ -66,6 +100,19 @@ async def run_controller():
                 logger.error(f"Error writing to error log: {str(log_error)}")
             
             await asyncio.sleep(60)
+
+def handle_task_completion(task, ticket_id):
+    """Handle completion of task processing"""
+    try:
+        # Check if task raised an exception
+        exc = task.exception()
+        if exc:
+            logger.error(f"Task for ticket {ticket_id} failed: {str(exc)}")
+            logger.error(traceback.format_exc())
+    except asyncio.CancelledError:
+        logger.warning(f"Task for ticket {ticket_id} was cancelled")
+    except Exception as e:
+        logger.error(f"Error handling task completion for {ticket_id}: {str(e)}")
 
 async def cleanup_old_logs(days):
     """Delete logs older than the specified number of days"""
@@ -77,7 +124,7 @@ async def cleanup_old_logs(days):
             dir_path = os.path.join("logs", log_dir)
             
             # Skip if not a ticket log directory
-            if not (log_dir.startswith("DEMO-") or log_dir.startswith("BUG-") or log_dir.startswith("FEAT-")):
+            if not (log_dir.startswith("DEMO-") or log_dir.startswith("BUG-") or log_dir.startswith("FEAT-") or log_dir.startswith("SCRUM-")):
                 continue
                 
             # Check modification time of directory

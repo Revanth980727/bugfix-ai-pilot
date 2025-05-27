@@ -1,8 +1,8 @@
-
 import asyncio
 import logging
 import os
 import json
+import time
 from datetime import datetime
 import traceback
 from typing import Dict, Any, List, Optional
@@ -11,15 +11,15 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Import agent frameworks
-from ..agent_framework.planner_agent import PlannerAgent
-from ..agent_framework.developer_agent import DeveloperAgent
-from ..agent_framework.qa_agent import QAAgent 
-from ..agent_framework.communicator_agent import CommunicatorAgent
-from ..jira_service.jira_client import JiraClient
-from ..github_service.github_service import GitHubService
-from ..analytics_tracker import get_analytics_tracker
-from ..env import MAX_RETRIES
+# Direct imports instead of relative imports
+from agent_framework.planner_agent import PlannerAgent
+from agent_framework.developer_agent import DeveloperAgent
+from agent_framework.qa_agent import QAAgent 
+from agent_framework.communicator_agent import CommunicatorAgent
+from jira_service.jira_client import JiraClient
+from github_service.github_service import GitHubService
+from analytics_tracker import get_analytics_tracker
+from env import MAX_RETRIES
 
 # Configure logging
 logging.basicConfig(
@@ -58,32 +58,200 @@ class Orchestrator:
         # Track active tickets
         self.active_tickets = {}
         
+        # Track processed tickets to avoid duplicates with JIRA service
+        self.processed_tickets = set()
+        
+        # Set up lock directory
+        self.lock_dir = os.environ.get("TICKET_LOCK_DIR", "/tmp/bugfix_ai_locks")
+        os.makedirs(self.lock_dir, exist_ok=True)
+        
         logger.info("Orchestrator initialized")
+        logger.info(f"Using lock directory: {self.lock_dir}")
+    
+    def _check_ticket_locked(self, ticket_id: str) -> bool:
+        """Check if a ticket is locked by another service."""
+        lock_file = os.path.join(self.lock_dir, f"{ticket_id}.lock")
+        
+        if not os.path.exists(lock_file):
+            return False
+            
+        # Check if the lock is stale (older than 1 hour)
+        lock_time = os.path.getmtime(lock_file)
+        if time.time() - lock_time >= 3600:  # 1 hour in seconds
+            logger.info(f"Found stale lock for ticket {ticket_id}, considering it unlocked")
+            return False
+            
+        # Lock exists and is valid, check who owns it
+        try:
+            with open(lock_file, 'r') as f:
+                lock_data = json.load(f)
+                owner = lock_data.get('owner', 'unknown')
+                pid = lock_data.get('pid', 0)
+                timestamp = lock_data.get('timestamp', 0)
+                
+                # If we own the lock, it's not considered locked by another service
+                if owner == "orchestrator" and pid == os.getpid():
+                    return False
+                    
+                logger.info(f"Ticket {ticket_id} is locked by {owner} (PID: {pid}) since {time.ctime(timestamp)}")
+                return True
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Error reading lock file for ticket {ticket_id}: {str(e)}")
+            # If we can't read the lock file, assume it's locked to be safe
+            return True
+    
+    def _acquire_lock(self, ticket_id: str) -> bool:
+        """Try to acquire a lock on the ticket."""
+        lock_file = os.path.join(self.lock_dir, f"{ticket_id}.lock")
+        
+        try:
+            # Check if locked by another service first
+            if self._check_ticket_locked(ticket_id):
+                return False
+                
+            # Create the lock file with our service info
+            with open(lock_file, 'w') as f:
+                lock_data = {
+                    'owner': 'orchestrator',
+                    'pid': os.getpid(),
+                    'timestamp': time.time()
+                }
+                json.dump(lock_data, f)
+            
+            logger.info(f"Acquired lock for ticket {ticket_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error acquiring lock for ticket {ticket_id}: {str(e)}")
+            return False
+            
+    def _release_lock(self, ticket_id: str) -> bool:
+        """Release our lock on a ticket."""
+        lock_file = os.path.join(self.lock_dir, f"{ticket_id}.lock")
+        
+        try:
+            if os.path.exists(lock_file):
+                # Verify we own the lock before removing it
+                try:
+                    with open(lock_file, 'r') as f:
+                        lock_data = json.load(f)
+                        if lock_data.get('owner') == 'orchestrator' and lock_data.get('pid') == os.getpid():
+                            os.remove(lock_file)
+                            logger.info(f"Released lock for ticket {ticket_id}")
+                            return True
+                        else:
+                            logger.warning(f"Lock for ticket {ticket_id} is owned by another process, not releasing")
+                            return False
+                except (json.JSONDecodeError, IOError):
+                    # If we can't read the file, don't delete it
+                    logger.error(f"Couldn't read lock file for ticket {ticket_id}")
+                    return False
+            return True  # No lock file exists
+        except Exception as e:
+            logger.error(f"Error releasing lock for ticket {ticket_id}: {str(e)}")
+            return False
     
     async def fetch_eligible_tickets(self) -> List[Dict[str, Any]]:
         """Fetch eligible tickets from JIRA that need processing"""
-        # ... keep existing code (fetch eligible tickets method)
-    
+        try:
+            # Changed from fetch_tickets to fetch_bug_tickets to match the actual method name in JiraClient
+            tickets = await self.jira_client.fetch_bug_tickets()
+            
+            if not tickets:
+                return []
+                
+            # Filter tickets to process - now check lock status
+            eligible_tickets = []
+            
+            for ticket in tickets:
+                if not ticket or not isinstance(ticket, dict):
+                    continue
+                    
+                ticket_id = ticket.get("ticket_id")
+                if not ticket_id:
+                    continue
+                    
+                status = ticket.get("status", "Unknown")
+                
+                # Skip tickets we're already processing
+                if ticket_id in self.active_tickets:
+                    continue
+                    
+                # Skip tickets we've already processed
+                if ticket_id in self.processed_tickets:
+                    continue
+                    
+                # Skip tickets locked by another service
+                if self._check_ticket_locked(ticket_id):
+                    logger.info(f"Ticket {ticket_id} is locked by another service, skipping")
+                    continue
+                    
+                # Only process tickets that are "To Do" - let jira_service handle "In Progress"
+                if status == "To Do":
+                    eligible_tickets.append(ticket)
+            
+            return eligible_tickets
+        
+        except Exception as e:
+            logger.error(f"Error fetching eligible tickets: {str(e)}")
+            logger.error(traceback.format_exc())
+            return []
+
     async def process_ticket(self, ticket: Dict[str, Any]) -> None:
         """Process a single ticket through the AI agent pipeline"""
-        ticket_id = ticket["ticket_id"]
-        
-        # Mark ticket as being processed
-        self.active_tickets[ticket_id] = {
-            "status": "processing",
-            "start_time": datetime.now().isoformat(),
-            "current_attempt": 0,
-            "escalated": False,
-            "retry_history": []  # Store retry history with QA errors
-        }
-        
-        logger.info(f"Starting processing for ticket {ticket_id}")
-        
-        # Create log directory for this ticket
-        log_dir = f"logs/{ticket_id}"
-        os.makedirs(log_dir, exist_ok=True)
-        
+        # Validate ticket
+        if not ticket or not isinstance(ticket, dict):
+            logger.error("Invalid ticket object: not a dictionary or None")
+            return
+            
+        ticket_id = ticket.get("ticket_id")
+        if not ticket_id:
+            logger.error("Invalid ticket: missing ticket_id")
+            return
+            
+        # Try to acquire lock
+        if not self._acquire_lock(ticket_id):
+            logger.info(f"Could not acquire lock for ticket {ticket_id}, skipping")
+            return
+            
         try:
+            # Check if already processed or active
+            if ticket_id in self.processed_tickets:
+                logger.info(f"Ticket {ticket_id} has already been processed. Skipping.")
+                self._release_lock(ticket_id)
+                return
+                
+            if ticket_id in self.active_tickets:
+                logger.info(f"Ticket {ticket_id} is already being processed. Skipping.")
+                self._release_lock(ticket_id)
+                return
+                
+            # Add to processed tickets set
+            self.processed_tickets.add(ticket_id)
+            
+            # Mark ticket as being processed
+            self.active_tickets[ticket_id] = {
+                "status": "processing",
+                "start_time": datetime.now().isoformat(),
+                "current_attempt": 0,
+                "escalated": False,
+                "retry_history": []  # Store retry history with QA errors
+            }
+            
+            logger.info(f"Starting processing for ticket {ticket_id}")
+            
+            # Create log directory for this ticket
+            log_dir = f"logs/{ticket_id}"
+            os.makedirs(log_dir, exist_ok=True)
+            
+            # Set ticket to In Progress if it's not already
+            current_status = ticket.get("status", "Unknown")
+            if current_status != "In Progress":
+                # Update JIRA ticket to In Progress
+                comment = "BugFix AI has started processing this ticket. Agent workflow initiated."
+                success = await self.jira_client.update_ticket(ticket_id, "In Progress", comment)
+                if not success:
+                    logger.error(f"Failed to update ticket {ticket_id} to In Progress. Continuing anyway.")
+            
             # STEP 1: Run planner agent
             logger.info(f"Running PlannerAgent for ticket {ticket_id}")
             
@@ -99,7 +267,8 @@ class Orchestrator:
             planner_result = await self.run_agent(self.planner_agent, planner_input)
             
             if not planner_result or "error" in planner_result:
-                raise Exception(f"PlannerAgent failed: {planner_result.get('error', 'Unknown error')}")
+                error_msg = planner_result.get("error", "Unknown error") if planner_result else "No result"
+                raise Exception(f"PlannerAgent failed: {error_msg}")
             
             with open(f"{log_dir}/planner_output.json", 'w') as f:
                 json.dump(planner_result, f, indent=2)
@@ -135,6 +304,9 @@ class Orchestrator:
                 final_status="failed",
                 escalation_reason=f"Process error: {str(e)}"
             )
+        finally:
+            # Release the lock when we're done
+            self._release_lock(ticket_id)
     
     async def run_development_qa_loop(self, ticket_id: str, planner_result: Dict[str, Any]) -> None:
         """Run the developer-QA loop with retries"""
@@ -176,8 +348,18 @@ class Orchestrator:
                 
                 developer_result = await self.run_agent(self.developer_agent, developer_input)
                 
-                if not developer_result or "error" in developer_result:
-                    raise Exception(f"DeveloperAgent failed: {developer_result.get('error', 'Unknown error')}")
+                # Fix: Check developer_result properly, including None check and success flag check
+                if not developer_result:
+                    raise Exception(f"DeveloperAgent failed: No result returned")
+                    
+                if "error" in developer_result and developer_result["error"]:
+                    raise Exception(f"DeveloperAgent failed: {developer_result['error']}")
+                
+                # Get success status and ensure it's properly marked
+                dev_success = developer_result.get("success", False)
+                if not dev_success:
+                    logger.warning(f"DeveloperAgent reported success=False for ticket {ticket_id}")
+                    # We don't raise an exception here, we'll let the QA agent determine if the fix is good
                 
                 # Get confidence score from developer result
                 confidence_score = developer_result.get("confidence_score")
@@ -194,9 +376,11 @@ class Orchestrator:
                 # STEP 3: Run QA agent
                 logger.info(f"Running QAAgent for ticket {ticket_id} (attempt {current_attempt})")
                 
+                # Pass the developer result to QA agent
                 qa_input = {
                     "ticket_id": ticket_id,
                     "test_command": "npm test",  # Default test command, could be customized
+                    "developer_result": developer_result  # Pass the entire result for test execution
                 }
                 
                 with open(f"{log_dir}/qa_input_{current_attempt}.json", 'w') as f:
@@ -372,10 +556,14 @@ class Orchestrator:
             with open(f"{log_dir}/communicator_input.json", 'w') as f:
                 json.dump(communicator_input, f, indent=2)
             
+            # FIXED: Await the coroutine before trying to use its result
             communicator_result = await self.run_agent(self.communicator_agent, communicator_input)
             
+            # Write the result, not the coroutine
             with open(f"{log_dir}/communicator_output.json", 'w') as f:
-                json.dump(communicator_result, f, indent=2)
+                # Ensure the result is JSON serializable
+                serializable_result = self._ensure_json_serializable(communicator_result)
+                json.dump(serializable_result, f, indent=2)
             
             # Update ticket tracking
             self.active_tickets[ticket_id]["status"] = "completed"
@@ -385,6 +573,7 @@ class Orchestrator:
             
         except Exception as e:
             logger.error(f"Error finalizing successful fix for ticket {ticket_id}: {str(e)}")
+            logger.error(traceback.format_exc())
             # Even if PR creation fails, we still have the fix locally
             # Mark as needing review
             await self.jira_client.update_ticket(
@@ -420,6 +609,7 @@ class Orchestrator:
             # Run communicator agent for escalation
             logger.info(f"Running CommunicatorAgent for escalation of ticket {ticket_id}")
             
+            # Prepare communicator input - make sure it's JSON serializable
             communicator_input = {
                 "ticket_id": ticket_id,
                 "test_passed": False,
@@ -430,65 +620,155 @@ class Orchestrator:
                 "early_escalation": early,
                 "early_escalation_reason": reason if early else None,
                 "confidence_score": confidence,
-                "failure_summary": failure_summary
+                "failure_summary": str(failure_summary)
             }
             
             log_dir = f"logs/{ticket_id}"
-            with open(f"{log_dir}/communicator_input_escalation.json", 'w') as f:
+            os.makedirs(log_dir, exist_ok=True)
+            
+            with open(f"{log_dir}/communicator_escalation_input.json", 'w') as f:
                 json.dump(communicator_input, f, indent=2)
             
-            communicator_result = await self.run_agent(self.communicator_agent, communicator_input)
-            
-            with open(f"{log_dir}/communicator_output_escalation.json", 'w') as f:
-                json.dump(communicator_result, f, indent=2)
-            
-            # Update JIRA ticket with escalation message including failure summary
-            escalation_message = ""
-            if early:
-                escalation_message = f"Early escalation: {reason}"
-                if confidence is not None:
-                    escalation_message += f" (confidence score: {confidence}%)"
-            else:
-                escalation_message = f"Automatic retry limit ({MAX_RETRIES}) reached. Last failure: {failure_summary}"
+            try:
+                # FIXED: Await the coroutine before trying to use its result
+                communicator_result = await self.run_agent(self.communicator_agent, communicator_input)
                 
-            await self.jira_client.update_ticket(
-                ticket_id,
-                "Needs Review",
-                escalation_message
-            )
-            
-            if early:
-                logger.info(f"Ticket {ticket_id} has been escalated early after attempt {attempt}: {reason}")
-            else:
-                logger.info(f"Ticket {ticket_id} has been escalated after {attempt} failed attempts")
-            
+                # Ensure the result is serializable before writing
+                serializable_result = self._ensure_json_serializable(communicator_result)
+                
+                with open(f"{log_dir}/communicator_output.json", 'w') as f:
+                    json.dump(serializable_result, f, indent=2)
+                    
+                # Update JIRA with escalation
+                await self.jira_client.update_ticket(
+                    ticket_id,
+                    "Needs Review",
+                    f"BugFix AI was unable to fix this issue after {attempt} attempts. Human review needed. Failure details: {failure_summary}"
+                )
+                
+            except Exception as e:
+                logger.error(f"Error escalating ticket {ticket_id}: {str(e)}")
+                logger.error(traceback.format_exc())
+                # Try to update JIRA even if communicator fails
+                await self.jira_client.update_ticket(
+                    ticket_id,
+                    "Needs Review",
+                    f"BugFix AI was unable to fix this issue after {attempt} attempts. Human review needed."
+                )
         except Exception as e:
             logger.error(f"Error escalating ticket {ticket_id}: {str(e)}")
+            logger.error(traceback.format_exc())
     
-    async def run_agent(self, agent: Any, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Run an agent with error handling and retry logic"""
-        # ... keep existing code (run agent method)
+    async def run_agent(self, agent, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Run an agent and ensure we get a usable result back
+        
+        This wrapper handles both regular functions and async functions (coroutines)
+        """
+        try:
+            # Call the agent's run method
+            if asyncio.iscoroutinefunction(agent.run):
+                # If it's async, await it
+                result = await agent.run(input_data)
+            else:
+                # If it's synchronous, just call it directly
+                result = agent.run(input_data)
+                
+            # Fix: Handle None result as a failure case
+            if result is None:
+                logger.error(f"Agent returned None result")
+                return {"error": "Agent returned None", "success": False}
+                
+            # Verify the result is a dictionary
+            if not isinstance(result, dict):
+                logger.error(f"Agent returned non-dictionary result: {type(result)}")
+                return {"error": f"Agent returned {type(result)} instead of dict", "success": False}
+                
+            # Ensure success is in the result dict if not present
+            if "success" not in result:
+                # Default to True if success is not explicitly False or there's no error
+                default_success = not ("error" in result and result["error"])
+                result["success"] = default_success
+                logger.info(f"Added missing success={default_success} to agent result")
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error running agent: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {"error": str(e), "success": False}
     
+    def _ensure_json_serializable(self, obj):
+        """Ensure an object is JSON serializable by converting problematic types"""
+        # Handle common non-serializable types
+        if obj is None or isinstance(obj, (bool, int, float, str)):
+            return obj
+        elif isinstance(obj, (list, tuple)):
+            return [self._ensure_json_serializable(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {k: self._ensure_json_serializable(v) for k, v in obj.items()}
+        else:
+            # Convert anything else to string
+            return str(obj)
+            
     def get_status(self) -> Dict[str, Any]:
         """Get current status of the orchestrator"""
-        # ... keep existing code (get status method)
+        status = {
+            "active_tickets": self.active_tickets,
+            "agent_statuses": self.get_agent_statuses()
+        }
+        return status
     
     def get_agent_statuses(self) -> Dict[str, str]:
         """Get statuses of all agents for health check"""
-        # ... keep existing code (get agent statuses method)
+        return {
+            "planner": self.planner_agent.status.value,
+            "developer": self.developer_agent.status.value,
+            "qa": self.qa_agent.status.value,
+            "communicator": self.communicator_agent.status.value
+        }
 
+    async def process_tickets(self):
+        """Process all eligible tickets"""
+        try:
+            # Fetch tickets that need processing
+            tickets = await self.fetch_eligible_tickets()
+            
+            if not tickets:
+                logger.info("No eligible tickets found")
+                return
+                
+            logger.info(f"Found {len(tickets)} eligible tickets to process")
+            
+            # Process each ticket
+            for ticket in tickets:
+                await self.process_ticket(ticket)
+                
+        except Exception as e:
+            logger.error(f"Error in process_tickets: {str(e)}")
+            logger.error(traceback.format_exc())
+    
+    async def run(self):
+        """Run the orchestrator in a continuous loop"""
+        logger.info("Starting orchestrator loop")
+        
+        while True:
+            try:
+                await self.process_tickets()
+                
+                # Sleep before next poll
+                logger.info(f"Sleeping for {POLL_INTERVAL_SECONDS} seconds")
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                
+            except Exception as e:
+                logger.error(f"Error in orchestrator loop: {str(e)}")
+                logger.error(traceback.format_exc())
+                
+                # Sleep before retry even on error
+                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        
+# Create orchestrator instance for global access
+orchestrator = Orchestrator()
 
 async def start_orchestrator():
-    """Initialize and start the orchestrator"""
-    # Ensure logs directory exists
-    os.makedirs("logs", exist_ok=True)
-    
-    orchestrator = Orchestrator()
-    await orchestrator.run_forever()
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(start_orchestrator())
-    except KeyboardInterrupt:
-        logger.info("Orchestrator stopped by user")
+    """Start the orchestrator"""
+    await orchestrator.run()

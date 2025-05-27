@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { AgentCard } from './AgentCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -16,9 +17,24 @@ interface QAAgentProps {
     failed: number;
     duration: number;
   };
+  projectType?: string; // Add projectType prop
+  activeOrchestrator?: string | null; // Add orchestrator ID
 }
 
-export function QAAgent({ status, progress, testResults, summary }: QAAgentProps) {
+export function QAAgent({ 
+  status, 
+  progress, 
+  testResults, 
+  summary, 
+  projectType = 'python',
+  activeOrchestrator = null
+}: QAAgentProps) {
+  // Always use pytest for this project
+  const getTestCommand = () => {
+    // Always return pytest for this project
+    return 'python -m pytest';
+  };
+
   return (
     <AgentCard title="QA" type="qa" status={status} progress={progress}>
       {status === 'idle' && (
@@ -29,7 +45,11 @@ export function QAAgent({ status, progress, testResults, summary }: QAAgentProps
       
       {status === 'working' && !testResults && (
         <div className="space-y-2">
-          <p>Running tests to validate the fix...</p>
+          <p>Running tests to validate the fix using {getTestCommand()}...
+            {activeOrchestrator && (
+              <span className="text-xs text-muted-foreground ml-2">(Orchestrator: {activeOrchestrator})</span>
+            )}
+          </p>
           <div className="h-4 w-full bg-muted overflow-hidden rounded">
             <div 
               className="h-full bg-agent-qa transition-all duration-300" 

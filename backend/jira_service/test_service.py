@@ -45,7 +45,8 @@ async def test_update_ticket(ticket_id):
         comment = f"This is a test comment from the JIRA service at {timestamp}"
         
         logger.info(f"Adding comment to ticket {ticket_id}")
-        success = await client.add_comment(ticket_id, comment)
+        # Properly await the asynchronous operation
+        success = await client.update_ticket(ticket_id, status=None, comment=comment)
         
         if success:
             logger.info(f"Successfully added comment to ticket {ticket_id}")

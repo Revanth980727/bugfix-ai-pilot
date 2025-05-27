@@ -54,7 +54,9 @@ class PlannerAgent:
             # Extract ticket information
             ticket_id = ticket_data.get("ticket_id", "unknown")
             title = ticket_data.get("title", "")
-            description = ticket_data.get("description", "")
+            
+            # Fix for JIRA's complex description field - safely convert to string
+            description = self._extract_description_text(ticket_data.get("description", ""))
             labels = ticket_data.get("labels", [])
             
             # Step 1: Clean the ticket description
@@ -120,10 +122,72 @@ class PlannerAgent:
             # Even in case of exception, return structured fallback output
             fallback_output = self._generate_fallback_output(
                 ticket_data.get("ticket_id", "unknown"),
-                ticket_data.get("description", "")
+                self._extract_description_text(ticket_data.get("description", ""))
             )
             return fallback_output
     
+    def _extract_description_text(self, description: Any) -> str:
+        """
+        Safely extract plain text from JIRA description field which may be a 
+        string, dictionary, or other complex structure
+        
+        Args:
+            description: The description field from JIRA ticket
+            
+        Returns:
+            Plain text description as a string
+        """
+        # If it's already a string, just return it
+        if isinstance(description, str):
+            return description
+            
+        # If it's None, return empty string
+        if description is None:
+            return ""
+            
+        # If it's a dict with Atlassian Document Format structure
+        if isinstance(description, dict):
+            # Try common JIRA API formats
+            if "content" in description:
+                # Try to extract text from Atlassian Document Format
+                try:
+                    text_parts = []
+                    
+                    # Process content array if it exists
+                    for content_item in description.get("content", []):
+                        # Handle paragraph type
+                        if content_item.get("type") == "paragraph":
+                            for text_item in content_item.get("content", []):
+                                if text_item.get("type") == "text":
+                                    text_parts.append(text_item.get("text", ""))
+                        # Handle code block type
+                        elif content_item.get("type") == "codeBlock":
+                            for text_item in content_item.get("content", []):
+                                if text_item.get("type") == "text":
+                                    text_parts.append(f"```\n{text_item.get('text', '')}\n```")
+                        # Handle bullet list type
+                        elif content_item.get("type") in ["bulletList", "orderedList"]:
+                            for list_item in content_item.get("content", []):
+                                for item_content in list_item.get("content", []):
+                                    if item_content.get("type") == "paragraph":
+                                        for text_item in item_content.get("content", []):
+                                            if text_item.get("type") == "text":
+                                                text_parts.append(f"- {text_item.get('text', '')}")
+                    
+                    return "\n".join(text_parts)
+                except Exception as e:
+                    self.logger.warning(f"Error extracting text from Atlassian Document Format: {str(e)}")
+            
+            # Try raw value if content extraction failed
+            if "raw" in description:
+                return description.get("raw", "")
+                
+            # If we can't extract structured content, convert the whole dict to string
+            return str(description)
+        
+        # For any other type, convert to string
+        return str(description)
+        
     def _validate_affected_files(self, files: List[str]) -> List[Dict[str, Any]]:
         """
         Validate file paths against the repository structure

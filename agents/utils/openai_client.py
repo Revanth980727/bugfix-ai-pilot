@@ -39,6 +39,7 @@ class OpenAIClient:
             Completion text or None if all retries fail
         """
         self.logger.info(f"Sending prompt to OpenAI API using model {self.model}")
+        self.logger.debug(f"Prompt length: {len(prompt)} characters")
         
         attempt = 0
         while attempt < max_retries:
@@ -58,7 +59,14 @@ class OpenAIClient:
                 
                 # Extract and return the completion text
                 completion = response.choices[0].message.content
-                self.logger.info("Successfully received completion from OpenAI API")
+                
+                # Log response stats
+                token_usage = getattr(response, 'usage', None)
+                if token_usage:
+                    self.logger.info(f"Token usage: {token_usage.total_tokens} total " +
+                                   f"({token_usage.prompt_tokens} prompt, {token_usage.completion_tokens} completion)")
+                
+                self.logger.info(f"Successfully received completion from OpenAI API (length: {len(completion)} chars)")
                 return completion
                 
             except openai.RateLimitError:
