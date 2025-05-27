@@ -58,167 +58,179 @@ def test_github_service():
         # Test whether test files are included based on configuration
         logger.info(f"Include test files setting: {include_test_files()}")
         
-        # Generate dynamic test content based on actual developer agent structure
-        logger.info("Generating dynamic test content using developer agent patterns...")
-        
-        # Simulate a developer agent result structure
-        developer_result = {
-            "patched_code": {
-                "example_module.py": f"# Bug fix for {ticket_id}\nimport os\nimport sys\n\ndef fixed_function():\n    return 'Fixed at {datetime.now()}'\n",
-                "utils.py": f"# Utility functions for {ticket_id}\n\ndef helper_function():\n    return True\n"
-            },
-            "test_code": {
-                "test_example_module.py": f"import pytest\nfrom example_module import fixed_function\n\ndef test_fixed_function():\n    result = fixed_function()\n    assert 'Fixed' in result\n",
-                "test_utils.py": f"import pytest\nfrom utils import helper_function\n\ndef test_helper_function():\n    assert helper_function() is True\n"
-            },
-            "patched_files": ["example_module.py", "utils.py"],
-            "patch_content": "",
-            "commit_message": f"Fix {ticket_id}: Dynamic test commit"
+        # Simulate planner agent analysis (this would come from the actual planner)
+        planner_analysis = {
+            "ticket_id": ticket_id,
+            "bug_summary": "Import error causing module initialization failure",
+            "error_type": "ImportError",
+            "affected_files": [
+                {"file": "src/utils/data_processor.py", "valid": True, "reason": "Contains the problematic import"},
+                {"file": "src/main.py", "valid": True, "reason": "Entry point that uses the affected module"}
+            ]
         }
         
-        # Extract file information dynamically
-        file_paths = list(developer_result["patched_code"].keys())
-        file_contents = list(developer_result["patched_code"].values())
+        # Initialize developer agent to get actual file names
+        logger.info("Initializing developer agent to get file analysis...")
+        from agent_framework.developer_agent import DeveloperAgent
         
-        # Log what we're about to commit
-        logger.info(f"Committing {len(file_paths)} files: {', '.join(file_paths)}")
-        for i, (file_path, content) in enumerate(zip(file_paths, file_contents)):
-            preview = content[:50] + "..." if len(content) > 50 else content
-            logger.info(f"File {i+1}: {file_path} - Content preview: {preview}")
+        developer_agent = DeveloperAgent()
+        developer_result = developer_agent.run(planner_analysis)
         
-        # Generate patch content dynamically based on the actual files
-        patch_content = ""
-        for file_path, content in developer_result["patched_code"].items():
-            lines = content.splitlines()
-            patch_content += f"--- a/{file_path}\n+++ b/{file_path}\n@@ -0,0 +1,{len(lines)} @@\n"
-            for line in lines:
-                patch_content += f"+{line}\n"
-            patch_content += "\n"
+        if not developer_result.get("success", False):
+            logger.error(f"Developer agent failed: {developer_result.get('error', 'Unknown error')}")
+            return
         
-        developer_result["patch_content"] = patch_content
+        # Extract actual file information from developer agent
+        actual_file_paths = developer_result.get("patched_files", [])
+        actual_file_contents = developer_result.get("patched_code", {})
+        actual_patch_content = developer_result.get("patch_content", "")
+        actual_commit_message = developer_result.get("commit_message", f"Fix {ticket_id}")
+        
+        if not actual_file_paths:
+            logger.error("Developer agent returned no file paths")
+            return
+        
+        # Log what we're about to commit using actual developer agent data
+        logger.info(f"Using developer agent output: {len(actual_file_paths)} files")
+        for file_path in actual_file_paths:
+            if file_path in actual_file_contents:
+                content = actual_file_contents[file_path]
+                preview = content[:50] + "..." if len(content) > 50 else content
+                logger.info(f"File: {file_path} - Content preview: {preview}")
+            else:
+                logger.warning(f"File {file_path} in patched_files but no content available")
+        
+        # Test patch parsing with actual content
+        logger.info("Testing patch parsing with developer agent content")
+        if actual_patch_content:
+            parsed_changes = parse_patch_content(actual_patch_content)
+            for change in parsed_changes:
+                logger.info(f"Parsed file: {change['file_path']}, lines: +{change['line_changes']['added']}/-{change['line_changes']['removed']}")
             
-        # Test patch parsing to ensure it's working correctly
-        logger.info("Testing patch parsing functionality")
-        parsed_changes = parse_patch_content(patch_content)
-        for change in parsed_changes:
-            logger.info(f"Parsed file: {change['file_path']}, lines: +{change['line_changes']['added']}/-{change['line_changes']['removed']}")
+            # Test the basic patch parser as a fallback
+            logger.info("Testing basic patch parser with actual content")
+            basic_parsed_changes = parse_patch_basic(actual_patch_content)
+            
+            # Compare results between parsers
+            logger.info(f"Regular parser found {len(parsed_changes)} files, basic parser found {len(basic_parsed_changes)} files")
+            
+            # Verify that all files from developer agent are in the parsed_changes
+            parsed_files = [change['file_path'] for change in parsed_changes]
+            for file_path in actual_file_paths:
+                if file_path not in parsed_files:
+                    logger.error(f"File {file_path} from developer agent was not correctly parsed from patch!")
+        else:
+            logger.warning("No patch content from developer agent to test parsing")
         
-        # Test the basic patch parser as a fallback
-        logger.info("Testing basic patch parser (fallback)")
-        basic_parsed_changes = parse_patch_basic(patch_content)
+        # Test committing with actual developer agent content
+        logger.info("Testing commit with actual developer agent files")
         
-        # Compare results between parsers
-        logger.info(f"Regular parser found {len(parsed_changes)} files, basic parser found {len(basic_parsed_changes)} files")
-        
-        # Verify that all files in the developer result are also in the parsed_changes
-        parsed_files = [change['file_path'] for change in parsed_changes]
-        for file_path in file_paths:
-            if file_path not in parsed_files:
-                logger.error(f"File {file_path} was not correctly parsed from the patch content!")
-        
-        # Test committing with dynamic content
-        logger.info("Testing commit with dynamic content from developer agent")
+        # Prepare file contents list matching the file paths order
+        file_contents = []
+        for file_path in actual_file_paths:
+            content = actual_file_contents.get(file_path, f"# Generated content for {file_path}")
+            file_contents.append(content)
         
         commit_success = service.commit_bug_fix(
             branch_name,
-            file_paths,
+            actual_file_paths,
             file_contents,
             ticket_id,
-            developer_result["commit_message"]
+            actual_commit_message
         )
         
         if not commit_success:
-            logger.error("Failed to commit files")
+            logger.error("Failed to commit developer agent files")
             return
             
-        # Test modification patch with dynamic content
-        logger.info("Testing modification patch with dynamic content")
-        
-        # Generate a modification patch based on the existing content
-        modified_patch = ""
-        for file_path, original_content in developer_result["patched_code"].items():
-            # Add a modification to each file
-            lines = original_content.splitlines()
-            modified_lines = lines + [f"# Modified for testing at {datetime.now()}"]
+        # Test modification patch with actual content if available
+        if actual_patch_content:
+            logger.info("Testing modification patch with developer agent patch content")
             
-            modified_patch += f"--- a/{file_path}\n+++ b/{file_path}\n@@ -1,{len(lines)} +1,{len(modified_lines)} @@\n"
-            for line in lines:
-                modified_patch += f" {line}\n"
-            modified_patch += f"+# Modified for testing at {datetime.now()}\n"
-            modified_patch += "\n"
-        
-        logger.info("Created dynamic modification patch content")
-        
-        # Test patch engine with dynamic content
-        logger.info("Testing patch engine with dynamic validation")
-        
-        original_contents = {}
-        expected_contents = {}
-        
-        for file_path in file_paths:
-            current_content = service._github_client._get_file_content(file_path, branch_name)
-            if current_content:
-                original_contents[file_path] = current_content
-                # Generate expected content by applying the modification
-                expected_contents[file_path] = current_content + f"\n# Modified for testing at {datetime.now()}"
+            # Get current content from repository
+            original_contents = {}
+            expected_contents = {}
+            
+            for file_path in actual_file_paths:
+                current_content = service._github_client._get_file_content(file_path, branch_name)
+                if current_content:
+                    original_contents[file_path] = current_content
+                    # For testing, add a small modification to each file
+                    expected_contents[file_path] = current_content + f"\n# Test modification at {datetime.now()}"
+                    
+            # Create a test modification patch
+            modified_patch = ""
+            for file_path in actual_file_paths:
+                if file_path in original_contents:
+                    lines = original_contents[file_path].splitlines()
+                    modified_lines = lines + [f"# Test modification at {datetime.now()}"]
+                    
+                    modified_patch += f"--- a/{file_path}\n+++ b/{file_path}\n@@ -1,{len(lines)} +1,{len(modified_lines)} @@\n"
+                    for line in lines:
+                        modified_patch += f" {line}\n"
+                    modified_patch += f"+# Test modification at {datetime.now()}\n\n"
+            
+            if modified_patch:
+                logger.info("Testing patch engine with actual file modifications")
                 
-        # Test applying the patch with validation
-        for file_path in file_paths:
-            if file_path in original_contents:
-                result = apply_patch_to_content(
-                    original_content=original_contents[file_path],
+                # Test patch engine with actual files
+                for file_path in actual_file_paths:
+                    if file_path in original_contents:
+                        result = apply_patch_to_content(
+                            original_content=original_contents[file_path],
+                            patch_content=modified_patch,
+                            file_path=file_path,
+                            expected_content=expected_contents.get(file_path)
+                        )
+                        logger.info(f"Patch engine result for {file_path}: {result[0]}, method: {result[2]}")
+                
+                # Test the validator with actual content
+                logger.info("Testing patch validator with actual files")
+                validation_result = validate_patch(
                     patch_content=modified_patch,
-                    file_path=file_path,
-                    expected_content=expected_contents.get(file_path)
+                    file_paths=actual_file_paths,
+                    original_contents=original_contents,
+                    expected_contents=expected_contents
                 )
-                logger.info(f"Patch engine result for {file_path}: {result[0]}, method: {result[2]}")
-        
-        # Test the validator with dynamic content
-        logger.info("Testing patch validator with dynamic content")
-        validation_result = validate_patch(
-            patch_content=modified_patch,
-            file_paths=file_paths,
-            original_contents=original_contents,
-            expected_contents=expected_contents
-        )
-        logger.info(f"Validation result: Valid={validation_result['valid']}")
-        for file_path, file_result in validation_result['file_results'].items():
-            if file_result.get('valid', False):
-                logger.info(f"✓ Validation passed for {file_path} using {file_result.get('method', 'unknown')}")
-            else:
-                logger.warning(f"✗ Validation failed for {file_path}: {file_result.get('error', 'unknown error')}")
-        
-        # Test committing with the dynamic patch content
-        logger.info("Testing commit with dynamic modification patch")
-        
-        commit_patch_success = service.commit_patch(
-            branch_name=branch_name,
-            patch_content=modified_patch,
-            commit_message=f"Modified patch commit for {ticket_id}",
-            patch_file_paths=file_paths,
-            expected_content=expected_contents
-        )
-        
-        if not commit_patch_success:
-            logger.warning("Modified patch-based commit failed, falling back to direct file commits")
-        else:
-            logger.info("Modified patch-based commit succeeded")
-            
-            # Verify the files were actually modified correctly
-            for file_path in file_paths:
-                updated_content = service._github_client._get_file_content(file_path, branch_name)
-                logger.info(f"Verifying {file_path} after patch:")
-                if "Modified for testing" in updated_content:
-                    logger.info(f"✅ {file_path} was correctly patched!")
+                logger.info(f"Validation result: Valid={validation_result['valid']}")
+                for file_path, file_result in validation_result['file_results'].items():
+                    if file_result.get('valid', False):
+                        logger.info(f"✓ Validation passed for {file_path} using {file_result.get('method', 'unknown')}")
+                    else:
+                        logger.warning(f"✗ Validation failed for {file_path}: {file_result.get('error', 'unknown error')}")
+                
+                # Test committing with the actual modification patch
+                logger.info("Testing commit with actual modification patch")
+                
+                commit_patch_success = service.commit_patch(
+                    branch_name=branch_name,
+                    patch_content=modified_patch,
+                    commit_message=f"Test modification patch for {ticket_id}",
+                    patch_file_paths=actual_file_paths,
+                    expected_content=expected_contents
+                )
+                
+                if not commit_patch_success:
+                    logger.warning("Modification patch-based commit failed")
                 else:
-                    logger.error(f"❌ {file_path} was not correctly patched!")
+                    logger.info("Modification patch-based commit succeeded")
+                    
+                    # Verify the files were actually modified correctly
+                    for file_path in actual_file_paths:
+                        updated_content = service._github_client._get_file_content(file_path, branch_name)
+                        if updated_content and "Test modification" in updated_content:
+                            logger.info(f"✅ {file_path} was correctly patched!")
+                        else:
+                            logger.error(f"❌ {file_path} was not correctly patched!")
         
-        # Test creating PR with dynamic data
+        # Test creating PR with actual developer agent data
+        pr_description = f"This PR contains fixes generated by the developer agent for ticket {ticket_id}.\n\nFiles modified: {', '.join(actual_file_paths)}\n\nBug summary: {planner_analysis.get('bug_summary', 'No summary available')}"
+        
         pr_url = service.create_pull_request(
             branch_name,
             ticket_id,
-            f"Dynamic bug fix for {ticket_id}",
-            f"This PR contains fixes generated dynamically for ticket {ticket_id}. Files modified: {', '.join(file_paths)}"
+            actual_commit_message,
+            pr_description
         )
         
         if not pr_url:
@@ -227,17 +239,21 @@ def test_github_service():
         
         logger.info(f"Created PR: {pr_url}")
         
-        # Test with test files if configured
-        if include_test_files() and developer_result.get("test_code"):
+        # Test with test files if configured and available
+        test_code = developer_result.get("test_code", {})
+        if include_test_files() and test_code:
             logger.info("Testing test file inclusion (enabled in configuration)")
-            test_files = list(developer_result["test_code"].keys())
-            test_contents = list(developer_result["test_code"].values())
+            test_files = list(test_code.keys())
             
-            logger.info(f"Would include {len(test_files)} test files: {', '.join(test_files)}")
+            logger.info(f"Developer agent generated {len(test_files)} test files: {', '.join(test_files)}")
+            for test_file in test_files:
+                test_content = test_code[test_file]
+                preview = test_content[:50] + "..." if len(test_content) > 50 else test_content
+                logger.info(f"Test file {test_file}: {preview}")
         else:
-            logger.info("Test file inclusion disabled or no test code generated")
+            logger.info("Test file inclusion disabled or no test code generated by developer agent")
         
-        logger.info("All dynamic GitHub service tests passed successfully!")
+        logger.info("All GitHub service tests with actual developer agent data passed successfully!")
         
     except Exception as e:
         logger.error(f"GitHub service test failed: {str(e)}")

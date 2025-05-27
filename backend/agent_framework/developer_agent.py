@@ -139,7 +139,7 @@ class DeveloperAgent(Agent):
     
     def _generate_tests(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
         """
-        Generate tests for the patched code
+        Generate tests for the patched code using actual file names from planner analysis
         
         Args:
             input_data: Dictionary with data from planner agent
@@ -149,7 +149,7 @@ class DeveloperAgent(Agent):
             Boolean indicating if tests were generated successfully
         """
         try:
-            # Extract file information for test generation
+            # Extract file information for test generation from the actual patched files
             patched_files = result.get("patched_files", [])
             if not patched_files:
                 logger.warning("No patched files to generate tests for")
@@ -159,28 +159,30 @@ class DeveloperAgent(Agent):
             bug_summary = input_data.get("bug_summary", input_data.get("summary", ""))
             error_type = input_data.get("error_type", "")
             
-            # Generate tests for each patched file
+            logger.info(f"Generating tests for actual patched files: {patched_files}")
+            
+            # Generate tests for each actual patched file
             for file_path in patched_files:
                 # Skip non-Python files
                 if not file_path.endswith(".py"):
                     logger.info(f"Skipping test generation for non-Python file: {file_path}")
                     continue
                     
-                # Determine the test file name
+                # Determine the test file name based on the actual file path
                 file_name = os.path.basename(file_path)
                 file_name_without_ext = os.path.splitext(file_name)[0]
                 test_file_name = f"test_{file_name_without_ext}.py"
                 
-                # Get the content of the patched file
+                # Get the content of the actual patched file
                 patched_content = result.get("patched_code", {}).get(file_path, "")
                 
-                # Generate tests based on the patched content and bug information
+                # Generate tests based on the actual patched content and bug information
                 test_content = self._create_test_for_file(file_path, file_name_without_ext, 
                                                          patched_content, bug_summary, error_type)
                 
                 # Add to test_code
                 result["test_code"][test_file_name] = test_content
-                logger.info(f"Generated test file: {test_file_name}")
+                logger.info(f"Generated test file: {test_file_name} for actual file: {file_path}")
                 
             return len(result["test_code"]) > 0
                 
@@ -188,154 +190,11 @@ class DeveloperAgent(Agent):
             logger.error(f"Error generating tests: {str(e)}")
             return False
     
-    def _create_test_for_file(self, file_path: str, module_name: str, file_content: str, 
-                              bug_summary: str, error_type: str) -> str:
-        """
-        Create a test for a specific file based on its content and bug information
-        
-        Args:
-            file_path: Path to the file
-            module_name: Name of the module (filename without extension)
-            file_content: Content of the patched file
-            bug_summary: Summary of the bug
-            error_type: Type of error (ImportError, TypeError, etc.)
-            
-        Returns:
-            Generated test code as string
-        """
-        # Extract functions and classes from the file content
-        import_pattern = r'import\s+([a-zA-Z0-9_\.]+)'
-        from_import_pattern = r'from\s+([a-zA-Z0-9_\.]+)\s+import\s+([a-zA-Z0-9_\.,\s]+)'
-        function_pattern = r'def\s+([a-zA-Z0-9_]+)\s*\('
-        class_pattern = r'class\s+([a-zA-Z0-9_]+)'
-        
-        import_matches = []
-        function_matches = []
-        class_matches = []
-        
-        import_statements = []
-        
-        # Extract imports, functions, and classes using re.search and re.findall
-        for line in file_content.splitlines():
-            # Check for imports
-            import_match = re.search(import_pattern, line)
-            from_import_match = re.search(from_import_pattern, line)
-            
-            if import_match:
-                import_statements.append(line)
-                import_matches.append(import_match.group(1))
-            elif from_import_match:
-                import_statements.append(line)
-                imported_items = from_import_match.group(2).split(',')
-                import_matches.extend([item.strip() for item in imported_items])
-            
-            # Check for function definitions
-            function_match = re.search(function_pattern, line)
-            if function_match and not line.startswith(' ' * 8):  # Avoid nested functions
-                function_matches.append(function_match.group(1))
-                
-            # Check for class definitions
-            class_match = re.search(class_pattern, line)
-            if class_match:
-                class_matches.append(class_match.group(1))
-                
-        # Generate appropriate test based on the file content and bug type
-        test_code = [
-            f"# Test for {file_path}",
-            f"# Generated for bug: {bug_summary}",
-            f"# Error type: {error_type}",
-            "import pytest"
-        ]
-        
-        # Basic import test
-        test_code.append(f"""
-def test_module_import():
-    \"\"\"Test if the module can be imported without errors\"\"\"
-    try:
-        import {module_name}
-        assert {module_name} is not None
-    except ImportError as e:
-        pytest.fail(f"Failed to import {module_name}: {{e}}")
-""")
-
-        # Generate specific tests based on bug type and functions found
-        if "ImportError" in error_type or "import" in bug_summary.lower():
-            # For import errors, test specific imports
-            if import_matches:
-                test_code.append(f"""
-def test_specific_imports():
-    \"\"\"Test that specific imports work\"\"\"
-    try:
-        import {module_name}
-        # Test specific imports mentioned in the file
-        {'; '.join(f'assert hasattr({module_name}, "{imp.split(".")[-1]}")' for imp in import_matches if '.' in imp)}
-        assert True  # If we got here, imports worked
-    except ImportError as e:
-        pytest.fail(f"Failed to import properly: {{e}}")
-""")
-
-        # Test each function found in the file
-        for func_name in function_matches:
-            if func_name.startswith('_'):
-                continue  # Skip private functions
-                
-            test_code.append(f"""
-def test_{func_name}_exists():
-    \"\"\"Test that the {func_name} function exists and can be called\"\"\"
-    from {module_name} import {func_name}
-    assert callable({func_name})
+    # ... keep existing code (test creation method, fix generation methods, validation methods, and patch application)
     
-    # Basic smoke test - call with minimal args
-    try:
-        # Note: This might fail if the function requires specific arguments
-        # In a real system, we would inspect the function signature
-        result = {func_name}()
-        assert result is not None
-    except TypeError:
-        # If it fails due to missing arguments, that's okay for this test
-        # We just want to verify it exists and is callable
-        pass
-    except Exception as e:
-        pytest.fail(f"Unexpected error calling {func_name}: {{e}}")
-""")
-
-        # Test each class found in the file
-        for class_name in class_matches:
-            test_code.append(f"""
-def test_{class_name}_exists():
-    \"\"\"Test that the {class_name} class exists and can be instantiated\"\"\"
-    from {module_name} import {class_name}
-    assert {class_name} is not None
-    
-    # Basic smoke test - try to instantiate
-    try:
-        # Note: This might fail if the class requires specific init arguments
-        instance = {class_name}()
-        assert instance is not None
-    except TypeError:
-        # If it fails due to missing arguments, that's okay for this test
-        # We just want to verify the class exists
-        pass
-    except Exception as e:
-        pytest.fail(f"Unexpected error instantiating {class_name}: {{e}}")
-""")
-
-        # Add a generic test for the overall functionality based on bug summary
-        test_code.append(f"""
-def test_bug_fix_validation():
-    \"\"\"Test that validates the specific bug fix described in: {bug_summary}\"\"\"
-    import {module_name}
-    # This test validates that the bug fix is working correctly
-    # Based on bug summary: {bug_summary}
-    # Error type addressed: {error_type}
-    assert True  # Replace with specific validation logic
-""")
-            
-        return "\n".join(test_code)
-        
     def _generate_fix(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
         """
-        Generate code fix based on input data
+        Generate code fix based on actual planner analysis data
         
         Args:
             input_data: Dictionary with data from planner agent
@@ -352,24 +211,29 @@ def test_bug_fix_validation():
             
             logger.info(f"Generating fix for ticket {ticket_id} with summary: {bug_summary}")
             
-            # Get affected files dynamically
+            # Get affected files from planner analysis - use actual file paths
             affected_files = []
             
             if "affected_files" in input_data and isinstance(input_data["affected_files"], list):
                 for file_info in input_data["affected_files"]:
                     if isinstance(file_info, dict) and "file" in file_info:
-                        affected_files.append(file_info["file"])
+                        # Extract the actual file path from planner analysis
+                        file_path = file_info["file"]
+                        affected_files.append(file_path)
+                        logger.info(f"Using actual file from planner: {file_path}")
                     elif isinstance(file_info, str):
                         affected_files.append(file_info)
+                        logger.info(f"Using file path: {file_info}")
             
             if not affected_files:
-                logger.error("No affected files found in input data")
+                logger.error("No affected files found in planner analysis")
                 return False
                 
-            # Generate fixes for each affected file
+            # Set the actual files that will be patched
             result["patched_files"] = affected_files.copy()
+            logger.info(f"Will generate fixes for actual files: {affected_files}")
             
-            # Generate appropriate fix content based on the bug details
+            # Generate fixes for each actual affected file from planner
             for file_path in affected_files:
                 # Determine file extension to generate appropriate content
                 file_ext = os.path.splitext(file_path)[1]
@@ -385,6 +249,7 @@ def test_bug_fix_validation():
                     fix_content = self._generate_generic_fix(file_path, ticket_id, bug_summary, error_type)
                 
                 result["patched_code"][file_path] = fix_content
+                logger.info(f"Generated fix content for actual file: {file_path}")
             
             # Generate patch content based on the actual files and content
             result["patch_content"] = self._generate_patch_content(result["patched_code"])
@@ -403,7 +268,7 @@ def test_bug_fix_validation():
             return False
     
     def _generate_python_fix(self, file_path: str, ticket_id: str, bug_summary: str, error_type: str) -> str:
-        """Generate Python-specific fix content"""
+        """Generate Python-specific fix content for actual file path"""
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         
         content = [
@@ -428,30 +293,30 @@ def test_bug_fix_validation():
                 ""
             ])
         
-        # Add main functionality
+        # Add main functionality based on actual file name
         content.extend([
             f"def {base_name}_fixed_function():",
-            f"    \"\"\"Fixed function addressing {error_type}\"\"\"",
+            f"    \"\"\"Fixed function addressing {error_type} in {file_path}\"\"\"",
             f"    # Implementation addressing: {bug_summary}",
             "    return True",
             "",
             f"class {base_name.title()}Fixed:",
-            f"    \"\"\"Fixed class for {ticket_id}\"\"\"",
+            f"    \"\"\"Fixed class for {ticket_id} in {file_path}\"\"\"",
             "    def __init__(self):",
             "        self.status = 'fixed'",
             "    ",
             "    def process(self):",
-            f"        return '{error_type} resolved'",
+            f"        return '{error_type} resolved in {file_path}'",
             "",
             "if __name__ == '__main__':",
             f"    result = {base_name}_fixed_function()",
-            "    print(f'Fix applied: {result}')"
+            "    print(f'Fix applied to {file_path}: {result}')"
         ])
         
         return "\n".join(content)
     
     def _generate_js_fix(self, file_path: str, ticket_id: str, bug_summary: str, error_type: str) -> str:
-        """Generate JavaScript/TypeScript-specific fix content"""
+        """Generate JavaScript/TypeScript-specific fix content for actual file path"""
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         
         content = [
@@ -471,11 +336,11 @@ def test_bug_fix_validation():
                 ""
             ])
         
-        # Add main functionality
+        # Add main functionality based on actual file name
         content.extend([
             f"function {base_name}FixedFunction() {{",
             f"    // Implementation addressing: {bug_summary}",
-            f"    console.log('Fixed {error_type}');",
+            f"    console.log('Fixed {error_type} in {file_path}');",
             "    return true;",
             "}",
             "",
@@ -485,7 +350,7 @@ def test_bug_fix_validation():
             "    }",
             "    ",
             "    process() {",
-            f"        return '{error_type} resolved';",
+            f"        return '{error_type} resolved in {file_path}';",
             "    }",
             "}",
             "",
@@ -495,18 +360,20 @@ def test_bug_fix_validation():
         return "\n".join(content)
     
     def _generate_generic_fix(self, file_path: str, ticket_id: str, bug_summary: str, error_type: str) -> str:
-        """Generate generic fix content for other file types"""
+        """Generate generic fix content for actual file path"""
         return f"""# Bug fix for {ticket_id}: {bug_summary}
 # File: {file_path}
 # Error type addressed: {error_type}
 
-Fixed content addressing the reported issue.
+Fixed content addressing the reported issue in {file_path}.
 This fix resolves: {bug_summary}
 Error type: {error_type}
 """
+
+    # ... keep existing code (patch content generation, confidence scoring, commit message generation, validation methods, and patch application)
     
     def _generate_patch_content(self, patched_code: Dict[str, str]) -> str:
-        """Generate unified diff patch content from patched code"""
+        """Generate unified diff patch content from actual patched code"""
         patch_lines = []
         
         for file_path, content in patched_code.items():
@@ -548,6 +415,142 @@ Error type: {error_type}
         files_desc = f"({len(affected_files)} files)" if len(affected_files) > 1 else f"({affected_files[0]})"
         
         return f"Fix {ticket_id}: {summary} {files_desc}"
+    
+    def _create_test_for_file(self, file_path: str, module_name: str, file_content: str, 
+                              bug_summary: str, error_type: str) -> str:
+        """
+        Create a test for a specific actual file based on its content and bug information
+        """
+        # ... keep existing code (test creation logic remains the same)
+        # Extract functions and classes from the file content
+        import_pattern = r'import\s+([a-zA-Z0-9_\.]+)'
+        from_import_pattern = r'from\s+([a-zA-Z0-9_\.]+)\s+import\s+([a-zA-Z0-9_\.,\s]+)'
+        function_pattern = r'def\s+([a-zA-Z0-9_]+)\s*\('
+        class_pattern = r'class\s+([a-zA-Z0-9_]+)'
+        
+        import_matches = []
+        function_matches = []
+        class_matches = []
+        
+        import_statements = []
+        
+        # Extract imports, functions, and classes using re.search and re.findall
+        for line in file_content.splitlines():
+            # Check for imports
+            import_match = re.search(import_pattern, line)
+            from_import_match = re.search(from_import_pattern, line)
+            
+            if import_match:
+                import_statements.append(line)
+                import_matches.append(import_match.group(1))
+            elif from_import_match:
+                import_statements.append(line)
+                imported_items = from_import_match.group(2).split(',')
+                import_matches.extend([item.strip() for item in imported_items])
+            
+            # Check for function definitions
+            function_match = re.search(function_pattern, line)
+            if function_match and not line.startswith(' ' * 8):  # Avoid nested functions
+                function_matches.append(function_match.group(1))
+                
+            # Check for class definitions
+            class_match = re.search(class_pattern, line)
+            if class_match:
+                class_matches.append(class_match.group(1))
+                
+        # Generate appropriate test based on the actual file content and bug type
+        test_code = [
+            f"# Test for {file_path}",
+            f"# Generated for bug: {bug_summary}",
+            f"# Error type: {error_type}",
+            "import pytest"
+        ]
+        
+        # Basic import test for the actual module
+        test_code.append(f"""
+def test_module_import():
+    \"\"\"Test if the actual module {file_path} can be imported without errors\"\"\"
+    try:
+        import {module_name}
+        assert {module_name} is not None
+    except ImportError as e:
+        pytest.fail(f"Failed to import {module_name}: {{e}}")
+""")
+
+        # Generate specific tests based on bug type and functions found
+        if "ImportError" in error_type or "import" in bug_summary.lower():
+            # For import errors, test specific imports
+            if import_matches:
+                test_code.append(f"""
+def test_specific_imports():
+    \"\"\"Test that specific imports work in {file_path}\"\"\"
+    try:
+        import {module_name}
+        # Test specific imports mentioned in the file
+        {'; '.join(f'assert hasattr({module_name}, "{imp.split(".")[-1]}")' for imp in import_matches if '.' in imp)}
+        assert True  # If we got here, imports worked
+    except ImportError as e:
+        pytest.fail(f"Failed to import properly: {{e}}")
+""")
+
+        # Test each function found in the actual file
+        for func_name in function_matches:
+            if func_name.startswith('_'):
+                continue  # Skip private functions
+                
+            test_code.append(f"""
+def test_{func_name}_exists():
+    \"\"\"Test that the {func_name} function exists in {file_path}\"\"\"
+    from {module_name} import {func_name}
+    assert callable({func_name})
+    
+    # Basic smoke test - call with minimal args
+    try:
+        # Note: This might fail if the function requires specific arguments
+        # In a real system, we would inspect the function signature
+        result = {func_name}()
+        assert result is not None
+    except TypeError:
+        # If it fails due to missing arguments, that's okay for this test
+        # We just want to verify it exists and is callable
+        pass
+    except Exception as e:
+        pytest.fail(f"Unexpected error calling {func_name}: {{e}}")
+""")
+
+        # Test each class found in the actual file
+        for class_name in class_matches:
+            test_code.append(f"""
+def test_{class_name}_exists():
+    \"\"\"Test that the {class_name} class exists in {file_path}\"\"\"
+    from {module_name} import {class_name}
+    assert {class_name} is not None
+    
+    # Basic smoke test - try to instantiate
+    try:
+        # Note: This might fail if the class requires specific init arguments
+        instance = {class_name}()
+        assert instance is not None
+    except TypeError:
+        # If it fails due to missing arguments, that's okay for this test
+        # We just want to verify the class exists
+        pass
+    except Exception as e:
+        pytest.fail(f"Unexpected error instantiating {class_name}: {{e}}")
+""")
+
+        # Add a generic test for the overall functionality based on bug summary
+        test_code.append(f"""
+def test_bug_fix_validation():
+    \"\"\"Test that validates the specific bug fix for {file_path}: {bug_summary}\"\"\"
+    import {module_name}
+    # This test validates that the bug fix is working correctly in {file_path}
+    # Based on bug summary: {bug_summary}
+    # Error type addressed: {error_type}
+    assert True  # Replace with specific validation logic
+""")
+            
+        return "\n".join(test_code)
     
     def _validate_output(self, result: Dict[str, Any]) -> bool:
         """
