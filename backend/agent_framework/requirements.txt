@@ -3,4 +3,4 @@
 typing-extensions>=4.0.0  # For better type hints support
 python-dotenv>=1.0.0     # For environment variable management
 openai>=1.0.0           # For OpenAI API access
-diff-match-patch>=1.0.5  # For advanced patch matching
+diff-match-patch>=20241021  # For advanced patch matching
