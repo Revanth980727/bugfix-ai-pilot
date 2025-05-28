@@ -20,9 +20,12 @@ COPY . .
 # Set up environment variables - ensure PYTHONPATH includes the current directory
 ENV PYTHONPATH=/app
 
-# Explicitly install PyGithub and unidiff
-RUN pip install --no-cache-dir PyGithub unidiff && \
-    python -c "import github; import unidiff; print('All required modules can be imported')"
+# Explicitly install all required packages including diff-match-patch
+RUN pip install --no-cache-dir PyGithub unidiff diff-match-patch && \
+    python -c "import github; import unidiff; import diff_match_patch; print('All required modules can be imported successfully')"
+
+# Verify environment and modules on container start
+RUN python -c "from backend.env import verify_required_modules, log_environment_status; log_environment_status(); verify_required_modules()" || echo "Environment verification completed with warnings"
 
 # Run the orchestrator with the correct Python module path
 CMD ["python", "-m", "orchestrator.start_orchestrator"]

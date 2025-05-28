@@ -10,3 +10,4 @@ PyGithub==2.1.1
 httpx==0.26.0
 aiohttp==3.9.1
 unidiff==0.7.5
+diff-match-patch==1.0.5
