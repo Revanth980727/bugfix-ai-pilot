@@ -49,8 +49,9 @@ export function useDeveloperAgent() {
           setPatchMode(config.patch_mode as 'unified_diff' | 'line-by-line' | 'direct' | 'intelligent' || 'unified_diff');
           
           // Set diff preferences based on config - fix the type comparison
-          const diffModes: Array<'unified_diff' | 'line-by-line' | 'direct' | 'intelligent'> = ['unified_diff', 'line-by-line', 'intelligent'];
-          setPreferDiffs(diffModes.includes(config.patch_mode as any));
+          const diffModes: Array<'unified_diff' | 'line-by-line' | 'intelligent'> = ['unified_diff', 'line-by-line', 'intelligent'];
+          const patchModeTyped = config.patch_mode as 'unified_diff' | 'line-by-line' | 'direct' | 'intelligent';
+          setPreferDiffs(diffModes.includes(patchModeTyped as 'unified_diff' | 'line-by-line' | 'intelligent'));
           
           // Validate the GitHub source
           const isValid = isValidGitHubSource(source);
@@ -353,8 +354,8 @@ export function useDeveloperAgent() {
       setPatchMode(options.patchMode);
       
       // Update diff preferences based on patch mode - fix the comparison
-      const diffModes: Array<'unified_diff' | 'line-by-line' | 'direct' | 'intelligent'> = ['unified_diff', 'line-by-line', 'intelligent'];
-      const usesDiffs = diffModes.includes(options.patchMode);
+      const diffModes: Array<'unified_diff' | 'line-by-line' | 'intelligent'> = ['unified_diff', 'line-by-line', 'intelligent'];
+      const usesDiffs = diffModes.includes(options.patchMode as 'unified_diff' | 'line-by-line' | 'intelligent');
       setPreferDiffs(usesDiffs);
       setDiagnosisLogs(prev => [...prev, `Patch mode set to: ${options.patchMode}`]);
       setDiagnosisLogs(prev => [...prev, `Diff-first approach: ${usesDiffs ? 'Enabled' : 'Disabled'}`]);
