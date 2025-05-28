@@ -48,8 +48,9 @@ export function useDeveloperAgent() {
           setGitHubSource(source);
           setPatchMode(config.patch_mode as 'unified_diff' | 'line-by-line' | 'direct' | 'intelligent' || 'unified_diff');
           
-          // Set diff preferences based on config
-          setPreferDiffs(config.patch_mode === 'unified_diff' || config.patch_mode === 'line-by-line' || config.patch_mode === 'intelligent');
+          // Set diff preferences based on config - fix the type comparison
+          const diffModes: Array<'unified_diff' | 'line-by-line' | 'direct' | 'intelligent'> = ['unified_diff', 'line-by-line', 'intelligent'];
+          setPreferDiffs(diffModes.includes(config.patch_mode as any));
           
           // Validate the GitHub source
           const isValid = isValidGitHubSource(source);
@@ -351,10 +352,12 @@ export function useDeveloperAgent() {
     if (options?.patchMode) {
       setPatchMode(options.patchMode);
       
-      // Update diff preferences based on patch mode
-      setPreferDiffs(options.patchMode === 'unified_diff' || options.patchMode === 'line-by-line' || options.patchMode === 'intelligent');
+      // Update diff preferences based on patch mode - fix the comparison
+      const diffModes: Array<'unified_diff' | 'line-by-line' | 'direct' | 'intelligent'> = ['unified_diff', 'line-by-line', 'intelligent'];
+      const usesDiffs = diffModes.includes(options.patchMode);
+      setPreferDiffs(usesDiffs);
       setDiagnosisLogs(prev => [...prev, `Patch mode set to: ${options.patchMode}`]);
-      setDiagnosisLogs(prev => [...prev, `Diff-first approach: ${options.patchMode === 'unified_diff' || options.patchMode === 'intelligent' ? 'Enabled' : 'Disabled'}`]);
+      setDiagnosisLogs(prev => [...prev, `Diff-first approach: ${usesDiffs ? 'Enabled' : 'Disabled'}`]);
     }
     
     // If we have expected code, validate the patch
