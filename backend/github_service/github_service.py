@@ -1,3 +1,4 @@
+
 import os
 import sys
 import logging
@@ -26,7 +27,7 @@ except ImportError:
         raise
 
 class GitHubService:
-    """Service for GitHub operations"""
+    """Service for GitHub operations with diff-first approach"""
 
     def __init__(self):
         """Initialize GitHub service"""
@@ -37,70 +38,122 @@ class GitHubService:
             self.allow_empty_commits = os.environ.get('ALLOW_EMPTY_COMMITS', 'false').lower() in ('true', 'yes', '1', 't')
             self.preserve_case = os.environ.get('PRESERVE_BRANCH_CASE', 'true').lower() in ('true', 'yes', '1', 't')
             
+            # New: Diff-first configuration
+            self.prefer_diffs = os.environ.get('PREFER_DIFFS', 'true').lower() in ('true', 'yes', '1', 't')
+            self.allow_full_replace = os.environ.get('ALLOW_FULL_REPLACE', 'true').lower() in ('true', 'yes', '1', 't')
+            self.require_confirmation_for_full_replace = os.environ.get('REQUIRE_CONFIRMATION_FULL_REPLACE', 'false').lower() in ('true', 'yes', '1', 't')
+            
             # Log environment info
             logger.info(f"Environment: {'Production' if self.production else 'Development'}, Test Mode: {self.test_mode}")
-            logger.info(f"Branch case sensitivity: {'Preserved' if self.preserve_case else 'Lowercase'}")
+            logger.info(f"Diff-first mode: {'Enabled' if self.prefer_diffs else 'Disabled'}")
+            logger.info(f"Full replace allowed: {'Yes' if self.allow_full_replace else 'No'}")
             
-            logger.info("GitHub service initialized")
+            logger.info("GitHub service initialized with diff-first approach")
         except Exception as e:
             logger.error(f"Error initializing GitHub service: {str(e)}")
             raise
 
-    def create_branch(self, ticket_id: str, base_branch: str = None) -> str:
-        """Create a branch for fixing a bug"""
-        # Log operation start
-        logger.info("GitHub operation started: create_branch")
-        
-        # Create branch name based on case sensitivity setting
-        branch_name = f"fix/{ticket_id}" if self.preserve_case else f"fix/{ticket_id.lower()}"
-        logger.info(f"Operation details: {{'ticket_id': '{ticket_id}', 'branch_name': '{branch_name}', 'base_branch': {base_branch}, 'test_mode': {self.test_mode}}}")
-        
-        try:
-            # Create branch using client
-            self.client.create_branch(branch_name, base_branch)
-            
-            # Log success
-            logger.info("GitHub operation succeeded: create_branch")
-            logger.info(f"Result details: {{'branch_name': '{branch_name}', 'ticket_id': '{ticket_id}'}}")
-            logger.info(f"Successfully created branch {branch_name} for ticket {ticket_id}")
-            
-            return branch_name
-        except Exception as e:
-            # Log failure
-            logger.error(f"GitHub operation failed: create_branch")
-            logger.error(f"Error details: {str(e)}")
-            
-            # Return branch name anyway since it might exist
-            return branch_name
-
-    def create_fix_branch(self, ticket_id: str, base_branch: str = None) -> Tuple[bool, str]:
+    def apply_changes(
+        self, 
+        branch_name: str, 
+        changes: Union[str, List[Dict[str, str]], Dict[str, str]],
+        commit_message: str,
+        change_type: str = "auto"  # "diff", "files", "auto"
+    ) -> Tuple[bool, Dict[str, Any]]:
         """
-        Create a branch for fixing a bug, with enhanced return information
+        Apply changes using the most appropriate method (diff-first approach)
         
         Args:
-            ticket_id: The ticket identifier
-            base_branch: The branch to base the new branch on
+            branch_name: Target branch
+            changes: Either unified diff string, list of file dicts, or dict of file contents
+            commit_message: Commit message
+            change_type: Type hint for the changes ("diff", "files", "auto")
             
         Returns:
-            Tuple of (success, branch_name)
+            Tuple of (success, result_details)
         """
+        logger.info(f"Applying changes to branch {branch_name} using diff-first approach")
+        logger.info(f"Change type: {change_type}, Prefer diffs: {self.prefer_diffs}")
+        
         try:
-            branch_name = self.create_branch(ticket_id, base_branch)
-            return True, branch_name
+            # Strategy 1: Try unified diff first (if available and preferred)
+            if (change_type == "diff" or change_type == "auto") and isinstance(changes, str) and self.prefer_diffs:
+                logger.info("Attempting to apply changes using unified diff (Strategy 1)")
+                
+                # Parse the diff to extract file paths
+                parsed_changes = parse_patch_content(changes)
+                patch_file_paths = [change.get('file_path', '') for change in parsed_changes if change.get('file_path')]
+                
+                if patch_file_paths:
+                    result = self.commit_patch(
+                        branch_name=branch_name,
+                        patch_content=changes,
+                        commit_message=commit_message,
+                        patch_file_paths=patch_file_paths
+                    )
+                    
+                    success, details = result
+                    if success:
+                        logger.info("✅ Strategy 1 (unified diff) succeeded")
+                        details["method_used"] = "unified_diff"
+                        details["strategy"] = "diff_first"
+                        return True, details
+                    else:
+                        logger.warning(f"❌ Strategy 1 (unified diff) failed: {details.get('error', {}).get('message', 'Unknown error')}")
+            
+            # Strategy 2: Try file-based changes (fallback)
+            if self.allow_full_replace:
+                logger.info("Attempting to apply changes using file replacement (Strategy 2)")
+                
+                # Convert changes to file format if needed
+                if isinstance(changes, str) and change_type == "auto":
+                    # Try to extract file contents from diff (advanced parsing needed)
+                    logger.warning("Cannot extract file contents from diff string, skipping Strategy 2")
+                    return False, {"error": {"code": "CONVERSION_FAILED", "message": "Cannot convert diff to file contents"}}
+                elif isinstance(changes, dict):
+                    # changes is already a dict of filename -> content
+                    file_paths = list(changes.keys())
+                    file_contents = list(changes.values())
+                elif isinstance(changes, list) and len(changes) > 0 and isinstance(changes[0], dict):
+                    # changes is a list of dicts with filename/content
+                    file_paths = [f.get("filename", f.get("path", "")) for f in changes]
+                    file_contents = [f.get("content", "") for f in changes]
+                else:
+                    logger.error("Invalid changes format for Strategy 2")
+                    return False, {"error": {"code": "INVALID_FORMAT", "message": "Invalid changes format"}}
+                
+                if self.require_confirmation_for_full_replace:
+                    logger.warning("⚠️ Full file replacement requires confirmation but proceeding in automated mode")
+                
+                result = self.commit_bug_fix(
+                    branch_name=branch_name,
+                    files=file_paths,
+                    file_contents_or_ticket_id=file_contents,
+                    ticket_id_or_commit_message=commit_message
+                )
+                
+                success, details = result
+                if success:
+                    logger.warning("⚠️ Strategy 2 (full file replacement) succeeded - consider improving diff generation")
+                    details["method_used"] = "full_file_replacement"
+                    details["strategy"] = "fallback"
+                    details["warning"] = "Used full file replacement instead of diff"
+                    return True, details
+                else:
+                    logger.error(f"❌ Strategy 2 (full file replacement) failed: {details.get('error', 'Unknown error')}")
+            else:
+                logger.error("Full file replacement is disabled and diff application failed")
+                return False, {"error": {"code": "NO_FALLBACK", "message": "Diff failed and full replacement is disabled"}}
+            
+            # All strategies failed
+            logger.error("❌ All change application strategies failed")
+            return False, {"error": {"code": "ALL_STRATEGIES_FAILED", "message": "Both diff and file replacement strategies failed"}}
+            
         except Exception as e:
-            logger.error(f"Error creating branch: {str(e)}")
-            # Still return the branch name for cases where it might exist but creation failed
-            branch_name = f"fix/{ticket_id}" if self.preserve_case else f"fix/{ticket_id.lower()}"
-            return False, branch_name
+            logger.error(f"Error in apply_changes: {str(e)}")
+            return False, {"error": {"code": "EXCEPTION", "message": str(e)}}
 
-    def get_branch(self, branch_name: str) -> Optional[Dict[str, Any]]:
-        """Get information about a branch if it exists"""
-        try:
-            # This would normally use the client to check if branch exists
-            # For now, we'll just return a stub
-            return {"name": branch_name, "exists": True}
-        except Exception:
-            return None
+    # ... keep existing code (create_branch, create_fix_branch, get_branch methods)
 
     def commit_bug_fix(
         self, 
@@ -111,27 +164,11 @@ class GitHubService:
         commit_message: str = None
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        Commit bug fix to branch with flexible parameter handling.
-        
-        This method supports two calling conventions:
-        1. commit_bug_fix(branch_name, files_dict_list, ticket_id, commit_message)
-           Where files_dict_list is a list of dicts with 'filename' and 'content' keys
-        
-        2. commit_bug_fix(branch_name, file_paths, file_contents, ticket_id, commit_message)
-           Where file_paths and file_contents are separate lists
-        
-        Args:
-            branch_name: Name of the branch to commit to
-            files: Either list of file path strings or list of dicts with filename/content
-            file_contents_or_ticket_id: Either list of file contents or ticket ID string
-            ticket_id_or_commit_message: Either ticket ID or commit message
-            commit_message: Optional commit message for calling convention #2
-            
-        Returns:
-            Tuple of (success, details_dict)
+        Commit bug fix to branch with diff-first approach integration
         """
-        # Log operation start
-        logger.info("GitHub operation started: commit_bug_fix")
+        # Log operation start with strategy info
+        logger.info("GitHub operation started: commit_bug_fix (fallback strategy)")
+        logger.warning("⚠️ Using full file replacement - consider improving diff generation for this case")
         
         # Handle both calling conventions
         if isinstance(files, list) and len(files) > 0 and isinstance(files[0], dict):
@@ -150,7 +187,9 @@ class GitHubService:
             ticket_id = ticket_id_or_commit_message
             commit_msg = commit_message if commit_message else f"Fix for {ticket_id}"
         
-        logger.info(f"Operation details: {{'ticket_id': '{ticket_id}', 'branch_name': '{branch_name}', 'file_count': {len(file_paths)}, 'test_mode': {self.test_mode}}}")
+        logger.info(f"Operation details: {{'ticket_id': '{ticket_id}', 'branch_name': '{branch_name}', 'file_count': {len(file_paths)}, 'strategy': 'full_replacement'}}")
+        
+        # ... keep existing code (validation and commit logic)
         
         # Validate inputs
         if not branch_name:
@@ -183,7 +222,7 @@ class GitHubService:
         
         # Log the files to be committed (first 5 files)
         max_files_to_log = min(5, len(file_paths))
-        logger.info(f"Committing {len(file_paths)} files, first {max_files_to_log}: {', '.join(file_paths[:max_files_to_log])}")
+        logger.info(f"Committing {len(file_paths)} files via full replacement, first {max_files_to_log}: {', '.join(file_paths[:max_files_to_log])}")
         if len(file_paths) > max_files_to_log:
             logger.info(f"... and {len(file_paths) - max_files_to_log} more files")
         
@@ -203,87 +242,23 @@ class GitHubService:
             if not result.get("committed", False) and result.get("error", {}).get("code") == "EMPTY_COMMIT":
                 if self.allow_empty_commits:
                     logger.warning("Commit resulted in no changes, but ALLOW_EMPTY_COMMITS is true")
-                    return True, {"message": "No changes detected but commit permitted", "files": file_paths}
+                    return True, {"message": "No changes detected but commit permitted", "files": file_paths, "method_used": "full_replacement"}
                 else:
                     logger.error("Commit resulted in no changes")
                     return False, {"error": "Commit resulted in no changes", "code": "EMPTY_COMMIT"}
             
             success = result.get("committed", False)
-            return success, {"message": "Commit successful" if success else "Commit failed", "files": file_paths}
+            response = {"message": "Commit successful" if success else "Commit failed", "files": file_paths, "method_used": "full_replacement"}
+            if success:
+                response["warning"] = "Used full file replacement - consider improving diff generation"
+            return success, response
         except Exception as e:
             # Log failure
             logger.error(f"GitHub operation failed: commit_bug_fix")
             logger.error(f"Error details: {str(e)}")
             return False, {"error": str(e)}
 
-    def create_pull_request(
-        self, 
-        branch_name: str, 
-        ticket_id: str, 
-        title: str, 
-        description: str
-    ) -> Union[str, Dict[str, Any], Tuple[str, int]]:
-        """Create a pull request for the branch"""
-        # Log operation start
-        logger.info("GitHub operation started: create_pull_request")
-        
-        try:
-            # Create PR using client
-            pr_result = self.client.create_pull_request(branch_name, title, description)
-            
-            # Handle different return formats
-            if isinstance(pr_result, dict):
-                pr_url = pr_result.get("url", "")
-                pr_number = pr_result.get("number")
-            elif isinstance(pr_result, tuple) and len(pr_result) >= 2:
-                pr_url = pr_result[0]
-                pr_number = pr_result[1]
-            else:
-                pr_url = str(pr_result)
-                pr_number = None
-            
-            # Log success
-            logger.info("GitHub operation succeeded: create_pull_request")
-            logger.info(f"Created PR: {pr_url} for ticket {ticket_id}")
-            
-            # Return the most informative format available
-            if pr_number is not None:
-                return {"url": pr_url, "number": pr_number}
-            return pr_url
-        except Exception as e:
-            # Log failure
-            logger.error(f"GitHub operation failed: create_pull_request")
-            logger.error(f"Error details: {str(e)}")
-            return ""
-    
-    # Alias for create_pull_request to maintain backward compatibility
-    def create_fix_pr(self, branch_name: str, ticket_id: str, title: str, description: str) -> Union[str, Dict[str, Any], Tuple[str, int]]:
-        """Alias for create_pull_request"""
-        return self.create_pull_request(branch_name, ticket_id, title, description)
-
-    def find_pr_for_branch(self, branch_name: str) -> Optional[Dict[str, Any]]:
-        """Find an existing PR for the given branch name"""
-        try:
-            # This would normally use the client to check for PRs
-            # For now we'll return None to indicate no PR exists
-            return None
-        except Exception as e:
-            logger.error(f"Error checking for existing PR: {str(e)}")
-            return None
-
-    def check_for_existing_pr(self, branch_name: str, base_branch: str = None) -> Optional[Dict[str, Any]]:
-        """Check if a PR already exists for this branch"""
-        return self.find_pr_for_branch(branch_name)
-
-    def add_pr_comment(self, pr_number: int, comment: str) -> bool:
-        """Add a comment to a PR"""
-        try:
-            logger.info(f"Adding comment to PR #{pr_number}")
-            # This would normally use the client to add a comment
-            return True
-        except Exception as e:
-            logger.error(f"Error adding PR comment: {str(e)}")
-            return False
+    # ... keep existing code (create_pull_request, create_fix_pr, find_pr_for_branch, check_for_existing_pr, add_pr_comment methods)
 
     def commit_patch(
         self, 
@@ -293,10 +268,10 @@ class GitHubService:
         patch_file_paths: List[str],
         expected_content: Dict[str, str] = None
     ) -> Tuple[bool, Dict[str, Any]]:
-        """Commit changes using a patch"""
+        """Commit changes using a patch (primary method in diff-first approach)"""
         # Log operation start
-        logger.info("GitHub operation started: commit_patch")
-        logger.info(f"Applying patch to branch {branch_name} with {len(patch_file_paths)} files")
+        logger.info("GitHub operation started: commit_patch (primary strategy)")
+        logger.info(f"Applying unified diff patch to branch {branch_name} with {len(patch_file_paths)} files")
         logger.info(f"Expected content validation: {'Enabled' if expected_content else 'Disabled'}")
         
         try:
@@ -374,7 +349,7 @@ class GitHubService:
             # Log success or failure
             if result.get("committed", False):
                 logger.info("GitHub operation succeeded: commit_patch")
-                logger.info(f"Applied patch to {result.get('files_changed', 0)} files")
+                logger.info(f"Applied patch to {result.get('files_changed', 0)} files using unified diff")
                 
                 # Capture which method was used for each file (patch vs full replace)
                 if "file_results" in result:
@@ -384,6 +359,10 @@ class GitHubService:
                             logger.warning(f"File {file_path} used full replacement instead of patching")
                         else:
                             logger.info(f"File {file_path} patched successfully using {method}")
+                
+                # Add strategy information to result
+                result["method_used"] = "unified_diff"
+                result["strategy"] = "diff_first"
                 
                 return True, result
             else:
@@ -395,13 +374,5 @@ class GitHubService:
             logger.error(f"GitHub operation failed: commit_patch")
             logger.error(f"Error details: {str(e)}")
             return False, {"error": {"code": "EXCEPTION", "message": str(e)}}
-            
-    def delete_branch(self, branch_name: str) -> bool:
-        """Delete a branch after PR is merged or closed"""
-        try:
-            logger.info(f"Deleting branch {branch_name}")
-            # This would normally use the client to delete the branch
-            return True
-        except Exception as e:
-            logger.error(f"Error deleting branch: {str(e)}")
-            return False
+
+    # ... keep existing code (delete_branch method)

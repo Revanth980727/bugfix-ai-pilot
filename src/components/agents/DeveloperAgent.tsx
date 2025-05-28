@@ -7,7 +7,7 @@ import { Separator } from '../ui/separator';
 import { Button } from '../ui/button';
 import { useDeveloperAgent } from '../../hooks/useDeveloperAgent';
 import GitHubSourceInfo from './GitHubSourceInfo';
-import { AlertCircle, File, FileX } from 'lucide-react';
+import { AlertCircle, File, FileX, GitDiff, Eye, AlertTriangle } from 'lucide-react';
 import { Alert, AlertDescription } from '../ui/alert';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
 
@@ -38,6 +38,7 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
   const [specificFile, setSpecificFile] = useState('');
   const [fileAccessResult, setFileAccessResult] = useState<{success: boolean, content?: string, error?: string} | null>(null);
   const [isTestingFile, setIsTestingFile] = useState(false);
+  const [showDiffDetails, setShowDiffDetails] = useState(false);
 
   // For demonstration purposes, simulate work when status is idle and component mounts
   React.useEffect(() => {
@@ -50,7 +51,9 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
         [
           { 
             filename: 'src/components/BuggyComponent.js', 
-            diff: `@@ -1,7 +1,7 @@
+            diff: `--- a/src/components/BuggyComponent.js
++++ b/src/components/BuggyComponent.js
+@@ -1,7 +1,7 @@
  const BuggyComponent = () => {
 -  const handleClick = () => {
 -    console.log("This has a bug");
@@ -81,7 +84,7 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
         },
         {
           responseQuality: 'good',
-          patchMode: patchMode
+          patchMode: 'unified_diff'
         }
       );
     }
@@ -125,20 +128,45 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
     }
   };
 
+  // Check if current mode uses full file replacement
+  const isUsingFullReplacement = patchMode !== 'unified_diff' && patchMode !== 'line-by-line';
+
   return (
     <Card className="w-full">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg font-medium">Developer Agent</CardTitle>
-          {getStatusDisplay()}
+          <div className="flex items-center gap-2">
+            {getStatusDisplay()}
+            {patchMode === 'unified_diff' && (
+              <Badge variant="outline" className="text-xs">
+                <GitDiff className="w-3 h-3 mr-1" />
+                Diff Mode
+              </Badge>
+            )}
+          </div>
         </div>
         <CardDescription>
-          Generates code fixes for identified bugs
+          Generates minimal code fixes using unified diffs
         </CardDescription>
       </CardHeader>
       <CardContent>
         {/* GitHub Source Information */}
         <GitHubSourceInfo source={gitHubSource} fileErrors={fileRetrievalErrors} />
+
+        {/* Diff-first approach warning */}
+        {isUsingFullReplacement && (
+          <Alert className="mb-4 bg-amber-50 border-amber-300">
+            <AlertTriangle className="h-4 w-4 text-amber-600" />
+            <AlertDescription className="text-xs text-amber-800">
+              <div className="font-medium">Using full file replacement mode</div>
+              <div className="mt-1">
+                Consider switching to unified diff mode for safer, more precise changes.
+                Current mode: {patchMode}
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* File Access Diagnostics */}
         {(errorCount > 0 || fileCount === 0) && (
@@ -207,34 +235,75 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
               </div>
               <Progress value={progress} className="h-2" />
               <div className="text-xs text-muted-foreground">
-                Attempt {attempt} of {maxAttempts}
+                Attempt {attempt} of {maxAttempts} • Mode: {patchMode}
               </div>
             </>
           )}
 
           {status === 'success' && diffs && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span>Fix Generated</span>
-                {confidenceScore !== undefined && (
-                  <Badge variant={confidenceScore > 75 ? "success" : "default"}>
-                    {confidenceScore}% Confidence
-                  </Badge>
-                )}
-              </div>
-              <Separator />
-              <div className="text-sm">
-                <div className="font-medium mb-1">Patch Mode: {patchMode}</div>
-                <div className="bg-muted p-2 rounded-md text-xs font-mono overflow-auto max-h-48">
-                  {diffs.map((diff, index) => (
-                    <div key={index} className="mb-2">
-                      <div className="text-xs text-muted-foreground mb-1">
-                        {diff.filename}
-                      </div>
-                      <pre className="whitespace-pre-wrap">{diff.diff}</pre>
-                    </div>
-                  ))}
+                <span className="font-medium">Fix Generated</span>
+                <div className="flex items-center gap-2">
+                  {confidenceScore !== undefined && (
+                    <Badge variant={confidenceScore > 75 ? "success" : "default"}>
+                      {confidenceScore}% Confidence
+                    </Badge>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowDiffDetails(!showDiffDetails)}
+                    className="h-8 px-2 text-xs"
+                  >
+                    <Eye className="w-3 h-3 mr-1" />
+                    {showDiffDetails ? 'Hide' : 'View'} Diff
+                  </Button>
                 </div>
+              </div>
+              
+              <Separator />
+              
+              {/* Diff Summary */}
+              <div className="text-sm space-y-2">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Mode: {patchMode}</span>
+                  <span>{diffs.length} file{diffs.length !== 1 ? 's' : ''} changed</span>
+                </div>
+                
+                {/* Diff Details */}
+                {showDiffDetails && (
+                  <div className="bg-muted p-3 rounded-md">
+                    {diffs.map((diff, index) => (
+                      <div key={index} className="mb-4 last:mb-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <GitDiff className="w-4 h-4 text-muted-foreground" />
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {diff.filename}
+                          </span>
+                          <div className="flex gap-1">
+                            <Badge variant="outline" className="text-xs px-1 py-0">
+                              +{diff.linesAdded}
+                            </Badge>
+                            <Badge variant="outline" className="text-xs px-1 py-0">
+                              -{diff.linesRemoved}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div className="bg-black/90 p-2 rounded text-xs font-mono overflow-auto max-h-48">
+                          <pre className="text-green-400 whitespace-pre-wrap">{diff.diff}</pre>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
+                {/* Simplified view when collapsed */}
+                {!showDiffDetails && (
+                  <div className="text-xs text-muted-foreground">
+                    Files: {diffs.map(d => d.filename).join(', ')}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -259,6 +328,9 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
               <CollapsibleContent className="mt-2 space-y-2 bg-muted p-2 rounded-md text-xs">
                 <div>
                   <strong>File Access:</strong> {fileCount} files retrieved, {errorCount} errors
+                </div>
+                <div>
+                  <strong>Patch Mode:</strong> {patchMode}
                 </div>
                 <div>
                   <strong>Files:</strong> {Object.keys(fileContext).join(', ') || 'None'}
