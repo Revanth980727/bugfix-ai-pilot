@@ -16,34 +16,26 @@ interface PlannerAgentProps {
     affected_files?: Array<string | AffectedFile>;
     error_type?: string;
     using_fallback?: boolean;
-    affectedFiles?: string[];  // For backward compatibility
-    rootCause?: string;        // For backward compatibility
-    suggestedApproach?: string; // For backward compatibility
+    ticket_id?: string;
+    repository_info?: {
+      total_files: number;
+      analyzed_files: number;
+      file_types: string[];
+    };
   };
 }
 
-// Helper function to determine if an item is an AffectedFile
 const isAffectedFile = (item: any): item is AffectedFile => {
   return typeof item === 'object' && 'file' in item && 'valid' in item;
 };
 
 export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) {
-  // Handle both new and old format
-  const bugSummary = analysis?.bug_summary || analysis?.rootCause;
-  
-  // Handle different formats of affected files
-  let affectedFiles: Array<string | AffectedFile> = [];
-  
-  if (analysis?.affected_files) {
-    affectedFiles = analysis.affected_files;
-  } else if (analysis?.affectedFiles) {
-    affectedFiles = analysis.affectedFiles;
-  }
-  
+  const bugSummary = analysis?.bug_summary;
+  const affectedFiles = analysis?.affected_files || [];
   const errorType = analysis?.error_type;
   const usingFallback = analysis?.using_fallback;
+  const repositoryInfo = analysis?.repository_info;
   
-  // Check if analysis is incomplete
   const isIncomplete = analysis && (!bugSummary || !errorType || affectedFiles.length === 0);
   
   return (
@@ -56,7 +48,12 @@ export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) 
       
       {(status === 'working' || status === 'waiting') && !analysis && (
         <div className="space-y-2">
-          <p>Analyzing ticket information and identifying affected code...</p>
+          <p>Analyzing repository and identifying affected code...</p>
+          {repositoryInfo && (
+            <div className="text-xs text-muted-foreground">
+              Repository: {repositoryInfo.total_files} files, {repositoryInfo.file_types.join(', ')}
+            </div>
+          )}
           <div className="h-4 w-full bg-muted overflow-hidden rounded">
             <div 
               className="h-full bg-agent-planner transition-all duration-300" 
@@ -88,8 +85,8 @@ export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) 
               {errorType && (
                 <TabsTrigger value="error" className="flex-1">Error Type</TabsTrigger>
               )}
-              {analysis.suggestedApproach && (
-                <TabsTrigger value="approach" className="flex-1">Approach</TabsTrigger>
+              {repositoryInfo && (
+                <TabsTrigger value="repo" className="flex-1">Repository</TabsTrigger>
               )}
             </TabsList>
             
@@ -119,7 +116,7 @@ export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) 
                             <code className={file.valid ? "" : "text-red-500"}>{file.file}</code>
                             {!file.valid && (
                               <Badge variant="outline" className="ml-1 bg-red-50 border-red-200 text-red-600 text-xs">
-                                Invalid Path
+                                Not Found
                               </Badge>
                             )}
                           </>
@@ -130,7 +127,7 @@ export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) 
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-muted-foreground">No files have been identified yet.</p>
+                  <p className="text-muted-foreground">No files identified in repository analysis.</p>
                 )}
               </ScrollArea>
             </TabsContent>
@@ -143,10 +140,14 @@ export function PlannerAgent({ status, progress, analysis }: PlannerAgentProps) 
               </TabsContent>
             )}
             
-            {analysis.suggestedApproach && (
-              <TabsContent value="approach">
+            {repositoryInfo && (
+              <TabsContent value="repo">
                 <ScrollArea className="h-[200px]">
-                  <div className="text-sm whitespace-pre-line">{analysis.suggestedApproach}</div>
+                  <div className="space-y-2 text-sm">
+                    <div>Total files in repository: {repositoryInfo.total_files}</div>
+                    <div>Files analyzed: {repositoryInfo.analyzed_files}</div>
+                    <div>File types: {repositoryInfo.file_types.join(', ')}</div>
+                  </div>
                 </ScrollArea>
               </TabsContent>
             )}

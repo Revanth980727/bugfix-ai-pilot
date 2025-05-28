@@ -17,8 +17,8 @@ interface QAAgentProps {
     failed: number;
     duration: number;
   };
-  projectType?: string; // Add projectType prop
-  activeOrchestrator?: string | null; // Add orchestrator ID
+  patchedFiles?: string[];
+  activeOrchestrator?: string | null;
 }
 
 export function QAAgent({ 
@@ -26,15 +26,9 @@ export function QAAgent({
   progress, 
   testResults, 
   summary, 
-  projectType = 'python',
+  patchedFiles = [],
   activeOrchestrator = null
 }: QAAgentProps) {
-  // Always use pytest for this project
-  const getTestCommand = () => {
-    // Always return pytest for this project
-    return 'python -m pytest';
-  };
-
   return (
     <AgentCard title="QA" type="qa" status={status} progress={progress}>
       {status === 'idle' && (
@@ -45,11 +39,16 @@ export function QAAgent({
       
       {status === 'working' && !testResults && (
         <div className="space-y-2">
-          <p>Running tests to validate the fix using {getTestCommand()}...
+          <p>Testing patched files using pytest...
             {activeOrchestrator && (
               <span className="text-xs text-muted-foreground ml-2">(Orchestrator: {activeOrchestrator})</span>
             )}
           </p>
+          {patchedFiles.length > 0 && (
+            <div className="text-xs text-muted-foreground">
+              Files being tested: {patchedFiles.join(', ')}
+            </div>
+          )}
           <div className="h-4 w-full bg-muted overflow-hidden rounded">
             <div 
               className="h-full bg-agent-qa transition-all duration-300" 
