@@ -3,16 +3,10 @@ import React from 'react';
 import { Alert, AlertDescription } from '../ui/alert';
 import { Badge } from '../ui/badge';
 import { Github, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
+import { GitHubSource } from '../../utils/developerSourceLogger';
 
 interface GitHubSourceInfoProps {
-  source?: {
-    repo: string;
-    branch: string;
-    commit: string;
-    filesRetrieved: number;
-    totalFiles: number;
-    lastSync: string;
-  };
+  source?: GitHubSource;
   fileErrors?: Record<string, string>;
 }
 
@@ -33,30 +27,47 @@ const GitHubSourceInfo: React.FC<GitHubSourceInfoProps> = ({ source, fileErrors 
 
   const errorCount = Object.keys(fileErrors || {}).length;
   const hasErrors = errorCount > 0;
-  const retrievalRate = source.totalFiles > 0 ? (source.filesRetrieved / source.totalFiles) * 100 : 0;
+  
+  // Create repo string from owner and name
+  const repoString = source.repo_owner && source.repo_name 
+    ? `${source.repo_owner}/${source.repo_name}` 
+    : 'Unknown repository';
+  
+  // Use branch or default_branch
+  const branchName = source.branch || source.default_branch || 'main';
+  
+  // Show commit SHA if available
+  const commitSha = source.commit_sha;
 
   return (
     <Alert className={`mb-4 ${hasErrors ? 'bg-amber-50 border-amber-300' : 'bg-green-50 border-green-300'}`}>
       <Github className={`h-4 w-4 ${hasErrors ? 'text-amber-600' : 'text-green-600'}`} />
       <AlertDescription className={`text-xs ${hasErrors ? 'text-amber-800' : 'text-green-800'}`}>
         <div className="flex items-center justify-between">
-          <div className="font-medium">Repository: {source.repo}</div>
+          <div className="font-medium">Repository: {repoString}</div>
           <div className="flex gap-1">
             <Badge variant="outline" className="text-xs">
-              {source.branch}
+              {branchName}
             </Badge>
-            <Badge variant="outline" className="text-xs">
-              {source.commit.substring(0, 7)}
-            </Badge>
+            {commitSha && (
+              <Badge variant="outline" className="text-xs">
+                {commitSha.substring(0, 7)}
+              </Badge>
+            )}
+            {source.patch_mode && (
+              <Badge variant="outline" className="text-xs">
+                {source.patch_mode}
+              </Badge>
+            )}
           </div>
         </div>
         
         <div className="mt-1 flex items-center justify-between">
           <div>
-            Files: {source.filesRetrieved}/{source.totalFiles} ({retrievalRate.toFixed(0)}%)
+            Repository configured and accessible
           </div>
           <div className="text-xs text-gray-600">
-            Last sync: {new Date(source.lastSync).toLocaleTimeString()}
+            Mode: {source.patch_mode || 'unified_diff'}
           </div>
         </div>
 
@@ -84,7 +95,7 @@ const GitHubSourceInfo: React.FC<GitHubSourceInfoProps> = ({ source, fileErrors 
         {!hasErrors && (
           <div className="mt-1 flex items-center gap-1 text-green-700">
             <CheckCircle className="h-3 w-3" />
-            <span className="text-xs">All repository files accessible</span>
+            <span className="text-xs">Repository accessible</span>
           </div>
         )}
       </AlertDescription>
