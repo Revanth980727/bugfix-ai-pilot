@@ -7,7 +7,7 @@ import { Separator } from '../ui/separator';
 import { Button } from '../ui/button';
 import { useDeveloperAgent } from '../../hooks/useDeveloperAgent';
 import GitHubSourceInfo from './GitHubSourceInfo';
-import { AlertCircle, File, FileX, GitDiff, Eye, AlertTriangle } from 'lucide-react';
+import { AlertCircle, File, FileX, GitBranch, Eye, AlertTriangle } from 'lucide-react';
 import { Alert, AlertDescription } from '../ui/alert';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
 
@@ -140,7 +140,7 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
             {getStatusDisplay()}
             {patchMode === 'unified_diff' && (
               <Badge variant="outline" className="text-xs">
-                <GitDiff className="w-3 h-3 mr-1" />
+                <GitBranch className="w-3 h-3 mr-1" />
                 Diff Mode
               </Badge>
             )}
@@ -277,7 +277,7 @@ const DeveloperAgent = ({ onStart, onComplete }: DeveloperAgentProps) => {
                     {diffs.map((diff, index) => (
                       <div key={index} className="mb-4 last:mb-0">
                         <div className="flex items-center gap-2 mb-2">
-                          <GitDiff className="w-4 h-4 text-muted-foreground" />
+                          <GitBranch className="w-4 h-4 text-muted-foreground" />
                           <span className="text-xs font-medium text-muted-foreground">
                             {diff.filename}
                           </span>

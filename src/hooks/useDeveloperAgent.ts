@@ -15,7 +15,7 @@ export function useDeveloperAgent() {
   const [patchAnalytics, setPatchAnalytics] = useState<any>(null);
   const [rawOpenAIResponse, setRawOpenAIResponse] = useState<string | null>(null);
   const [responseQuality, setResponseQuality] = useState<'good' | 'generic' | 'invalid' | undefined>(undefined);
-  const [patchMode, setPatchMode] = useState<'unified_diff' | 'line-by-line' | 'direct'>('unified_diff'); // Changed default
+  const [patchMode, setPatchMode] = useState<'unified_diff' | 'line-by-line' | 'direct' | 'intelligent'>('unified_diff');
   const [gitHubSource, setGitHubSource] = useState<GitHubSource | null>(null);
   const [fileContext, setFileContext] = useState<Record<string, string>>({});
   const [fileRetrievalErrors, setFileRetrievalErrors] = useState<Record<string, string>>({});
@@ -26,8 +26,8 @@ export function useDeveloperAgent() {
     valid: false,
     errors: []
   });
-  const [preferDiffs, setPreferDiffs] = useState(true); // New: diff-first preference
-  const [allowFullReplace, setAllowFullReplace] = useState(true); // New: fallback option
+  const [preferDiffs, setPreferDiffs] = useState(true);
+  const [allowFullReplace, setAllowFullReplace] = useState(true);
   const maxAttempts = 4;
 
   // Get GitHub configuration on component mount
@@ -42,14 +42,14 @@ export function useDeveloperAgent() {
             repo_name: config.repo_name,
             branch: config.branch,
             default_branch: config.default_branch || 'main',
-            patch_mode: config.patch_mode || 'unified_diff' // Changed default to unified_diff
+            patch_mode: config.patch_mode || 'unified_diff'
           };
           
           setGitHubSource(source);
-          setPatchMode(config.patch_mode || 'unified_diff');
+          setPatchMode(config.patch_mode as 'unified_diff' | 'line-by-line' | 'direct' | 'intelligent' || 'unified_diff');
           
           // Set diff preferences based on config
-          setPreferDiffs(config.patch_mode === 'unified_diff' || config.patch_mode === 'line-by-line');
+          setPreferDiffs(config.patch_mode === 'unified_diff' || config.patch_mode === 'line-by-line' || config.patch_mode === 'intelligent');
           
           // Validate the GitHub source
           const isValid = isValidGitHubSource(source);
@@ -69,7 +69,7 @@ export function useDeveloperAgent() {
             
             if (envValid) {
               setGitHubSource(envSource);
-              setPatchMode(envSource.patch_mode as 'unified_diff' | 'line-by-line' | 'direct' || 'unified_diff');
+              setPatchMode(envSource.patch_mode as 'unified_diff' | 'line-by-line' | 'direct' | 'intelligent' || 'unified_diff');
               await testRepositoryAccess(envSource);
             } else {
               setDiagnosisLogs(prev => [...prev, "Neither config nor env provides valid GitHub source information"]);
@@ -84,7 +84,7 @@ export function useDeveloperAgent() {
           
           if (isValid) {
             setGitHubSource(envSource);
-            setPatchMode(envSource.patch_mode as 'unified_diff' | 'line-by-line' | 'direct' || 'unified_diff');
+            setPatchMode(envSource.patch_mode as 'unified_diff' | 'line-by-line' | 'direct' | 'intelligent' || 'unified_diff');
             await testRepositoryAccess(envSource);
           } else {
             setDiagnosisLogs(prev => [...prev, "Environment variables do not provide valid GitHub source information"]);
@@ -322,7 +322,7 @@ export function useDeveloperAgent() {
     options?: {
       responseQuality?: 'good' | 'generic' | 'invalid';
       rawResponse?: string;
-      patchMode?: 'unified_diff' | 'line-by-line' | 'direct';
+      patchMode?: 'unified_diff' | 'line-by-line' | 'direct' | 'intelligent';
       expectedCode?: Record<string, string>;
     }
   ) => {
@@ -352,9 +352,9 @@ export function useDeveloperAgent() {
       setPatchMode(options.patchMode);
       
       // Update diff preferences based on patch mode
-      setPreferDiffs(options.patchMode === 'unified_diff' || options.patchMode === 'line-by-line');
+      setPreferDiffs(options.patchMode === 'unified_diff' || options.patchMode === 'line-by-line' || options.patchMode === 'intelligent');
       setDiagnosisLogs(prev => [...prev, `Patch mode set to: ${options.patchMode}`]);
-      setDiagnosisLogs(prev => [...prev, `Diff-first approach: ${options.patchMode === 'unified_diff' ? 'Enabled' : 'Disabled'}`]);
+      setDiagnosisLogs(prev => [...prev, `Diff-first approach: ${options.patchMode === 'unified_diff' || options.patchMode === 'intelligent' ? 'Enabled' : 'Disabled'}`]);
     }
     
     // If we have expected code, validate the patch
@@ -436,7 +436,7 @@ export function useDeveloperAgent() {
     });
     setGitHubSource(null);
     setFileContext({});
-    setPatchMode('unified_diff'); // Reset to diff-first default
+    setPatchMode('unified_diff');
     setPreferDiffs(true);
     setAllowFullReplace(true);
   };
@@ -460,8 +460,8 @@ export function useDeveloperAgent() {
     diagnosisLogs,
     fileAccessAttempts,
     patchValidation,
-    preferDiffs, // New: expose diff preference
-    allowFullReplace, // New: expose fallback option
+    preferDiffs,
+    allowFullReplace,
     simulateWork,
     tryAccessFile,
     validatePatch,
