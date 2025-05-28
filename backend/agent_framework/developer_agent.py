@@ -157,9 +157,184 @@ class DeveloperAgent(Agent):
             
         return True
     
+    def _read_original_file(self, file_path: str) -> str:
+        """
+        Read the original file content if it exists
+        
+        Args:
+            file_path: Path to the file to read
+            
+        Returns:
+            File content as string, or empty string if file doesn't exist
+        """
+        try:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    logger.info(f"Read original file {file_path} ({len(content)} bytes)")
+                    return content
+            else:
+                logger.warning(f"Original file {file_path} does not exist, will create new file")
+                return ""
+        except Exception as e:
+            logger.error(f"Error reading original file {file_path}: {str(e)}")
+            return ""
+    
+    def _apply_unified_diff(self, original_content: str, unified_diff: str, file_path: str) -> str:
+        """
+        Apply a unified diff to original content to produce patched content
+        
+        Args:
+            original_content: Original file content
+            unified_diff: Unified diff to apply
+            file_path: Path to the file being patched
+            
+        Returns:
+            Patched content as string
+        """
+        try:
+            import tempfile
+            import subprocess
+            
+            # If original content is empty, extract the new content from the diff
+            if not original_content.strip():
+                logger.info(f"Original file {file_path} is empty, extracting content from diff")
+                return self._extract_content_from_diff(unified_diff)
+            
+            # Create temporary files for patch application
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.original', delete=False) as orig_file:
+                orig_file.write(original_content)
+                orig_file_path = orig_file.name
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False) as patch_file:
+                patch_file.write(unified_diff)
+                patch_file_path = patch_file.name
+            
+            try:
+                # Apply the patch using the patch command
+                result = subprocess.run(
+                    ['patch', '-o', '-', orig_file_path],
+                    input=unified_diff,
+                    text=True,
+                    capture_output=True,
+                    timeout=30
+                )
+                
+                if result.returncode == 0:
+                    patched_content = result.stdout
+                    logger.info(f"Successfully applied patch to {file_path}")
+                    return patched_content
+                else:
+                    logger.warning(f"Patch command failed for {file_path}, using manual application")
+                    return self._manual_patch_application(original_content, unified_diff)
+                    
+            finally:
+                # Clean up temporary files
+                try:
+                    os.unlink(orig_file_path)
+                    os.unlink(patch_file_path)
+                except:
+                    pass
+                    
+        except Exception as e:
+            logger.warning(f"Error applying unified diff to {file_path}: {str(e)}, trying manual application")
+            return self._manual_patch_application(original_content, unified_diff)
+    
+    def _manual_patch_application(self, original_content: str, unified_diff: str) -> str:
+        """
+        Manually apply a unified diff when patch command fails
+        
+        Args:
+            original_content: Original file content
+            unified_diff: Unified diff to apply
+            
+        Returns:
+            Patched content as string
+        """
+        try:
+            lines = original_content.split('\n')
+            diff_lines = unified_diff.split('\n')
+            
+            # Parse the diff to find changes
+            current_line = 0
+            result_lines = []
+            
+            i = 0
+            while i < len(diff_lines):
+                line = diff_lines[i]
+                
+                # Look for hunk headers
+                if line.startswith('@@'):
+                    # Parse hunk header: @@ -start,count +start,count @@
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        old_start = int(parts[1].split(',')[0][1:]) - 1  # Convert to 0-based index
+                        
+                        # Copy lines before the hunk
+                        while current_line < old_start and current_line < len(lines):
+                            result_lines.append(lines[current_line])
+                            current_line += 1
+                        
+                        # Process the hunk
+                        i += 1
+                        while i < len(diff_lines) and not diff_lines[i].startswith('@@'):
+                            hunk_line = diff_lines[i]
+                            if hunk_line.startswith('+') and not hunk_line.startswith('+++'):
+                                # Add line
+                                result_lines.append(hunk_line[1:])
+                            elif hunk_line.startswith('-') and not hunk_line.startswith('---'):
+                                # Remove line (skip it and advance current_line)
+                                current_line += 1
+                            elif hunk_line.startswith(' '):
+                                # Context line (keep it)
+                                result_lines.append(hunk_line[1:])
+                                current_line += 1
+                            i += 1
+                        continue
+                
+                i += 1
+            
+            # Add remaining lines
+            while current_line < len(lines):
+                result_lines.append(lines[current_line])
+                current_line += 1
+            
+            return '\n'.join(result_lines)
+            
+        except Exception as e:
+            logger.error(f"Manual patch application failed: {str(e)}")
+            # Fallback: try to extract content from diff
+            return self._extract_content_from_diff(unified_diff)
+    
+    def _extract_content_from_diff(self, unified_diff: str) -> str:
+        """
+        Extract content from a unified diff (for new files)
+        
+        Args:
+            unified_diff: Unified diff content
+            
+        Returns:
+            Extracted content as string
+        """
+        try:
+            lines = unified_diff.split('\n')
+            content_lines = []
+            
+            for line in lines:
+                if line.startswith('+') and not line.startswith('+++'):
+                    content_lines.append(line[1:])
+                elif line.startswith(' '):
+                    content_lines.append(line[1:])
+            
+            return '\n'.join(content_lines)
+            
+        except Exception as e:
+            logger.error(f"Error extracting content from diff: {str(e)}")
+            return ""
+    
     def _generate_unified_diffs(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> bool:
         """
-        Generate unified diffs for minimal code changes
+        Generate unified diffs for minimal code changes and apply them to produce patched content
         
         Args:
             input_data: Dictionary with data from planner agent
@@ -200,14 +375,24 @@ class DeveloperAgent(Agent):
             # Generate minimal unified diffs for each file
             unified_diffs = []
             patch_contents = []
+            patched_code = {}
             
             for file_path in affected_files:
+                # Read the original file content
+                original_content = self._read_original_file(file_path)
+                
                 # Generate specific unified diff for this file
                 unified_diff = self._create_unified_diff_for_file(
                     file_path, ticket_id, bug_summary, error_type
                 )
                 
                 if unified_diff:
+                    # Apply the diff to produce the patched content
+                    patched_content = self._apply_unified_diff(original_content, unified_diff, file_path)
+                    
+                    # Store the patched content
+                    patched_code[file_path] = patched_content
+                    
                     unified_diffs.append({
                         "filename": file_path,
                         "unified_diff": unified_diff,
@@ -217,7 +402,8 @@ class DeveloperAgent(Agent):
                     })
                     
                     patch_contents.append(unified_diff)
-                    logger.info(f"Generated unified diff for file: {file_path}")
+                    logger.info(f"Generated unified diff and patched content for file: {file_path}")
+                    logger.info(f"Patched content length: {len(patched_content)} bytes")
                 else:
                     logger.warning(f"Failed to generate unified diff for file: {file_path}")
             
@@ -225,9 +411,10 @@ class DeveloperAgent(Agent):
                 logger.error("No unified diffs could be generated")
                 return False
             
-            # Store the unified diffs
+            # Store the unified diffs and patched code
             result["unified_diffs"] = unified_diffs
             result["patch_content"] = "\n\n".join(patch_contents)
+            result["patched_code"] = patched_code  # This is crucial for QA agent
             
             # Also store in legacy format for backwards compatibility
             result["diff"] = result["patch_content"]
@@ -239,11 +426,14 @@ class DeveloperAgent(Agent):
             # Generate commit message based on actual changes
             result["commit_message"] = self._generate_commit_message(ticket_id, bug_summary, affected_files, "unified_diff")
             
+            logger.info(f"Successfully generated {len(unified_diffs)} diffs and patched {len(patched_code)} files")
             return True
                 
         except Exception as e:
             logger.error(f"Error generating unified diffs: {str(e)}")
             return False
+
+    # ... keep existing code (all other methods remain the same)
     
     def _create_unified_diff_for_file(self, file_path: str, ticket_id: str, bug_summary: str, error_type: str) -> str:
         """
@@ -771,6 +961,11 @@ export default {base_name.title()};
             
         if not result.get("commit_message"):
             logger.error("Output missing commit message")
+            return False
+            
+        # Ensure patched_code is populated
+        if not result.get("patched_code"):
+            logger.error("Output missing patched_code - QA agent requires this field")
             return False
             
         return True
